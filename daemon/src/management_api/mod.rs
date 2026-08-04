@@ -65,6 +65,8 @@ pub enum Request {
     ResolveIdentity { pid: u32 },
     /// Trust database contents.
     ListTrust,
+    /// Loaded DPI signatures, and any the policy names but nobody defines.
+    ListSignatures,
     /// Ask the daemon to exit.
     Shutdown,
     /// Liveness probe.
@@ -83,6 +85,7 @@ impl Request {
             | Request::DiffPolicy
             | Request::Stats
             | Request::ListTrust
+            | Request::ListSignatures
             | Request::Ping => Authority::ReadOnly,
 
             Request::ReloadPolicy
@@ -109,6 +112,7 @@ impl Request {
             Request::Stats => "stats",
             Request::ResolveIdentity { .. } => "resolve-identity",
             Request::ListTrust => "list-trust",
+            Request::ListSignatures => "list-signatures",
             Request::Shutdown => "shutdown",
             Request::Ping => "ping",
         }
@@ -151,6 +155,7 @@ impl Request {
                 pid: num("pid").ok_or_else(|| ApiError::bad_request("missing `pid`"))? as u32,
             },
             "list-trust" => Request::ListTrust,
+            "list-signatures" => Request::ListSignatures,
             "shutdown" => Request::Shutdown,
             "ping" => Request::Ping,
             other => return Err(ApiError::not_found(format!("unknown operation `{other}`"))),
@@ -274,6 +279,7 @@ impl Router {
             Request::GetRule { key } => self.rule_json(&key).map(Response::ok),
             Request::ListRevisions => Ok(Response::ok(self.revisions_json())),
             Request::ListTrust => Ok(Response::ok(self.trust_json())),
+            Request::ListSignatures => Ok(Response::ok(self.signatures_json())),
             Request::ResolveIdentity { pid } => Ok(Response::ok(self.identity_json(pid))),
             Request::ReloadPolicy => self.control.reload_policy().map(Response::ok),
             Request::ValidatePolicy => self.control.validate_policy().map(Response::ok),
@@ -286,6 +292,36 @@ impl Router {
                 Ok(Response::ok(simple("shutting down")))
             }
         }
+    }
+
+    /// The loaded signature set, plus the references the active policy makes
+    /// that nothing defines. The dangling list is the part worth reading: a
+    /// DPI rule naming a signature nobody shipped installs cleanly and never
+    /// fires, so nothing else in the system would ever complain about it.
+    fn signatures_json(&self) -> String {
+        let set = self.state.signatures();
+        let dangling = self.state.dangling_signature_refs();
+
+        let mut w = JsonWriter::with_capacity(4096);
+        w.begin_object();
+        w.bool_field("ok", true);
+        w.u64_field("count", set.len() as u64);
+        w.begin_array_field("signatures");
+        for sig in set.signatures.values() {
+            sig.write_json(&mut w);
+        }
+        w.end_array();
+        // Ids rather than names, because by definition there is no name to
+        // report: nothing defines them. `ufwctl` cross-references these
+        // against the policy's own rule list to say which rule is affected.
+        w.begin_array_field("dangling_references");
+        for id in &dangling {
+            w.u64_element(*id as u64);
+        }
+        w.end_array();
+        w.bool_field("complete", dangling.is_empty());
+        w.end_object();
+        w.finish()
     }
 
     fn rules_json(&self, filter: Option<&str>) -> String {

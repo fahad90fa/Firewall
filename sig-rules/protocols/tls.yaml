@@ -1,0 +1,98 @@
+# TLS signatures.
+#
+# What is inspectable in TLS is the handshake, and only the handshake. Once
+# the session key is established there is nothing to look at, and no
+# signature in this file pretends otherwise. This engine does not intercept
+# TLS: terminating the session to inspect it means holding every private key
+# on every host and becoming the most valuable target on the network.
+#
+# So the questions these signatures can answer are narrow ones about how the
+# session was set up: which version, which extensions, what the client
+# claimed it was. That is less than an intercepting proxy sees, and it is
+# available without any of the trust that a proxy demands.
+#
+# `tls.version` values are the wire encoding: 0x0301 TLS 1.0, 0x0302 TLS 1.1,
+# 0x0303 TLS 1.2, 0x0304 TLS 1.3.
+
+version: 1
+
+metadata:
+  name: tls-protocol-signatures
+  description: "Handshake-visible weaknesses and anomalies in TLS"
+  revision: 3
+  author: security-engineering
+
+signatures:
+  # A client offering TLS 1.0 or 1.1 in 2020s infrastructure is either very
+  # old software or an attacker probing for a downgrade. Both are worth a
+  # log line; the shipped policies alert rather than deny because the very
+  # old software is sometimes a medical device nobody can patch.
+  - id: tls-downgrade-attempt
+    description: "A handshake offering a TLS version below 1.2"
+    protocol: tls
+    severity: high
+    conditions:
+      - field: tls.handshake_type == 1
+      - field: tls.version <= 0x0302
+    references: ["CVE-2014-3566", "MITRE T1562.010"]
+
+  # A ClientHello offering an implausible number of cipher suites is a
+  # scanner enumerating what the server accepts. Ordinary clients offer
+  # between 10 and 30.
+  - id: tls-cipher-enumeration
+    description: "A ClientHello offering far more cipher suites than any real client"
+    protocol: tls
+    severity: medium
+    conditions:
+      - field: tls.handshake_type == 1
+      - field: tls.cipher_count >= 80
+    references: ["MITRE T1046"]
+
+  # No SNI on an outbound connection to a shared-hosting address means the
+  # client already knows the certificate it expects — which is normal for
+  # pinned agents and abnormal for anything user-facing. Length zero is the
+  # decoder's encoding for "no SNI extension present".
+  - id: tls-absent-sni
+    description: "An outbound handshake with no server name, bypassing name-based inspection"
+    protocol: tls
+    severity: low
+    conditions:
+      - field: tls.handshake_type == 1
+      - field: tls.sni_length == 0
+    references: ["MITRE T1090"]
+
+  # An SNI long enough to be carrying data. The field is attacker-controlled
+  # and sent in the clear before any key is agreed, which makes it the one
+  # reliable place to smuggle bytes out of a TLS handshake.
+  - id: tls-sni-oversized
+    description: "A server name long enough to be a covert channel"
+    protocol: tls
+    severity: high
+    conditions:
+      - field: tls.handshake_type == 1
+      - field: tls.sni_length >= 100
+    references: ["MITRE T1071.001"]
+
+  # A handshake with almost no extensions is characteristic of hand-rolled
+  # TLS stacks: implants, scanners, and embedded tooling. Every mainstream
+  # client sends at least SNI, ALPN, supported_groups and signature_algorithms.
+  - id: tls-minimal-client
+    description: "A ClientHello with too few extensions to be a mainstream stack"
+    protocol: tls
+    severity: medium
+    conditions:
+      - field: tls.handshake_type == 1
+      - field: tls.extension_count <= 2
+    references: ["MITRE T1095"]
+
+  # The record-layer prefix of a TLS 1.0 handshake, matched positionally.
+  # This one is a content condition rather than a field condition on purpose:
+  # it is the check that decides whether the decoder should have run at all,
+  # so it cannot depend on the decoder's output.
+  - id: tls-legacy-record-version
+    description: "A record-layer header announcing SSL 3.0 or TLS 1.0"
+    protocol: tls
+    severity: medium
+    conditions:
+      - content: |16 03 00|, offset: 0, depth: 3
+    references: ["CVE-2014-3566"]

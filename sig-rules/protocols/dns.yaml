@@ -1,0 +1,93 @@
+# DNS signatures.
+#
+# DNS is the most-abused covert channel in this file's scope, for a simple
+# structural reason: it is the one protocol almost every network permits
+# outbound without inspection, and it carries attacker-controlled bytes in
+# both directions by design. Every technique below is a way of noticing that
+# a query is carrying data rather than asking a question.
+#
+# None of these are precise on their own. A long label is a CDN hash; high
+# entropy is a DNSSEC record; a large answer count is a legitimate round
+# robin. That is why they are written as conjunctions of weak indicators and
+# why the shipped policies wire them to `alert` more often than to `deny`.
+# A DNS signature tuned to zero false positives is a signature that catches
+# nothing, because the adversary's job is to look like a CDN.
+
+version: 1
+
+metadata:
+  name: dns-protocol-signatures
+  description: "Covert channels and abuse patterns in DNS"
+  revision: 4
+  author: security-engineering
+
+signatures:
+  # Encoding data in a label costs length: base32 of N bytes is 8N/5
+  # characters, and the label limit is 63. A tunnel therefore lives close to
+  # that limit, while ordinary names sit far below it.
+  - id: dns-tunnel-long-label
+    description: "A DNS label long enough to be carrying encoded data rather than a name"
+    protocol: dns
+    severity: high
+    conditions:
+      - field: dns.max_label_length >= 40
+      - field: dns.label_count >= 3
+    references: ["MITRE T1071.004", "MITRE T1048.003"]
+
+  # Entropy catches the encoding itself rather than its length, which is what
+  # makes it complementary: a tunnel that stays under the length threshold by
+  # splitting across labels still has to encode, and encoded bytes do not
+  # look like words. 4.2 bits/byte is well above English text and below
+  # base64 of compressed data.
+  - id: dns-tunnel-high-entropy
+    description: "Query name whose character distribution looks encoded, not linguistic"
+    protocol: dns
+    severity: high
+    conditions:
+      - entropy: dns.name_length, min: 4.2
+      - field: dns.name_length >= 50
+    references: ["MITRE T1071.004"]
+
+  # TXT is the widest field in DNS and the natural choice for a tunnel that
+  # needs to carry data inbound. Legitimate TXT lookups exist — SPF, DKIM,
+  # domain verification — and are short and infrequent, which is the
+  # distinction the length condition draws. Query type 16 is TXT.
+  - id: dns-txt-oversized
+    description: "An unusually long TXT query, the inbound half of a tunnel"
+    protocol: dns
+    severity: medium
+    conditions:
+      - field: dns.query_type == 16
+      - field: dns.name_length >= 64
+    references: ["MITRE T1071.004"]
+
+  # NULL (10) and unassigned types are what tools reach for when TXT is
+  # being watched. Almost nothing legitimate queries them.
+  - id: dns-null-record-query
+    description: "A NULL-record query, which has no ordinary use"
+    protocol: dns
+    severity: high
+    conditions:
+      - field: dns.query_type == 10
+    references: ["MITRE T1071.004"]
+
+  # A response carrying far more records than a query could reasonably want
+  # is either an amplification attempt or a channel returning data.
+  - id: dns-answer-flood
+    description: "A response with an implausible number of answer records"
+    protocol: dns
+    severity: medium
+    conditions:
+      - field: dns.answer_count >= 40
+    references: ["MITRE T1498.002"]
+
+  # Very deep names are how some tunnels stay under the per-label limit while
+  # still moving useful volume: 20 labels of 30 characters is 600 bytes.
+  - id: dns-excessive-label-depth
+    description: "A name split into far more labels than a hierarchy needs"
+    protocol: dns
+    severity: medium
+    conditions:
+      - field: dns.label_count >= 12
+      - field: dns.name_length >= 100
+    references: ["MITRE T1071.004"]

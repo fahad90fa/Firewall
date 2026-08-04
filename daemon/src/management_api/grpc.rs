@@ -47,6 +47,7 @@ service Firewall {
   rpc GetRule         (RuleKey)        returns (JsonReply);
   rpc ListRevisions   (Empty)          returns (JsonReply);
   rpc ListTrust       (Empty)          returns (JsonReply);
+  rpc ListSignatures  (Empty)          returns (JsonReply);
   rpc ResolveIdentity (Pid)            returns (JsonReply);
   rpc ReloadPolicy    (Empty)          returns (JsonReply);
   rpc ValidatePolicy  (Empty)          returns (JsonReply);
@@ -304,6 +305,7 @@ pub fn route(path: &str, message: &Fields) -> Result<Request, ApiError> {
         },
         "ListRevisions" => Request::ListRevisions,
         "ListTrust" => Request::ListTrust,
+        "ListSignatures" => Request::ListSignatures,
         "ResolveIdentity" => Request::ResolveIdentity {
             pid: message
                 .number(1)
@@ -635,6 +637,7 @@ mod tests {
             "GetRule",
             "ListRevisions",
             "ListTrust",
+            "ListSignatures",
             "ResolveIdentity",
             "ReloadPolicy",
             "ValidatePolicy",

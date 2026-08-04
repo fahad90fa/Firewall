@@ -1,0 +1,120 @@
+# HTTP signatures.
+#
+# HTTP is the protocol where a signature engine is most tempted to overreach.
+# The payload is readable, the structure is familiar, and it is easy to write
+# a hundred rules matching strings that appear in attack tools. Most of those
+# rules catch last year's tooling and nothing else, while costing a scan of
+# every byte of every stream.
+#
+# The rules here are limited to structural anomalies — shapes a request has
+# because of what it is doing, not because of what tool produced it. A
+# request smuggling attempt has conflicting length framing whatever library
+# sent it. A tool that changes its User-Agent does not stop needing that.
+#
+# `http.method` is the decoder's method enum, not a string:
+#   1 GET  2 POST  3 PUT  4 DELETE  5 HEAD  6 OPTIONS  7 PATCH  8 CONNECT
+#   9 TRACE  0 anything unrecognized
+
+version: 1
+
+metadata:
+  name: http-protocol-signatures
+  description: "Structural anomalies in HTTP requests and responses"
+  revision: 5
+  author: security-engineering
+
+signatures:
+  # A POST body far larger than any form submission, to a path a browser
+  # would not post to. This is the shape of staged exfiltration, and it is
+  # deliberately paired with a size threshold rather than a path pattern:
+  # the path is the attacker's choice, the volume is not.
+  - id: http-exploit-post
+    description: "A POST carrying a body large enough to be a data transfer"
+    protocol: http
+    severity: high
+    conditions:
+      - field: http.method == 2
+      - field: http.body_length >= 1048576
+    references: ["MITRE T1041"]
+
+  # TRACE reflects the request back, including headers a browser would not
+  # otherwise expose. It has no legitimate use in production and is disabled
+  # by default in every modern server, so a request for it is a probe.
+  - id: http-trace-method
+    description: "A TRACE request, which exists only to reflect headers back"
+    protocol: http
+    severity: medium
+    conditions:
+      - field: http.method == 9
+    references: ["CVE-2005-3398", "MITRE T1190"]
+
+  # CONNECT to anything other than a configured proxy is a tunnel. Where a
+  # proxy is expected, scope the rule to it in policy rather than removing
+  # this signature.
+  - id: http-connect-tunnel
+    description: "A CONNECT request, which turns HTTP into a transport"
+    protocol: http
+    severity: high
+    conditions:
+      - field: http.method == 8
+    references: ["MITRE T1090.001"]
+
+  # A URI long enough to be carrying a payload rather than addressing a
+  # resource. Path-based exfiltration and buffer-overflow probes both look
+  # like this, and both are worth catching.
+  - id: http-oversized-uri
+    description: "A request URI long enough to be a payload"
+    protocol: http
+    severity: medium
+    conditions:
+      - field: http.uri_length >= 2048
+    references: ["MITRE T1190"]
+
+  # Header count is the cheapest proxy for a header-smuggling attempt: the
+  # techniques all involve stacking duplicate or malformed headers, and no
+  # ordinary client sends fifty of them.
+  - id: http-header-flood
+    description: "An implausible number of headers, the shape of a smuggling attempt"
+    protocol: http
+    severity: high
+    conditions:
+      - field: http.header_count >= 50
+    references: ["CVE-2019-9516", "MITRE T1499.002"]
+
+  # Chunked framing declared alongside a content length is the classic
+  # request-smuggling primitive: two parsers disagree about where the request
+  # ends, and the disagreement becomes a second request the front end never
+  # saw. The two content conditions look for both framing headers in the
+  # same header block.
+  - id: http-conflicting-framing
+    description: "Both Transfer-Encoding and Content-Length, which is request smuggling"
+    protocol: http
+    severity: critical
+    conditions:
+      - content: "Transfer-Encoding:", depth: 8192, nocase: true
+      - content: "Content-Length:", depth: 8192, nocase: true
+    references: ["CVE-2019-20372", "MITRE T1190"]
+
+  # Directory traversal, in the one encoding that survives every normalizer
+  # worth the name. Matched as content because it can appear anywhere in the
+  # request line, not at a fixed field boundary.
+  - id: http-path-traversal
+    description: "A parent-directory sequence in a request path"
+    protocol: http
+    severity: high
+    conditions:
+      - content: "../", depth: 4096
+    references: ["MITRE T1083"]
+
+  # A response body that is almost entirely non-printable on a connection the
+  # decoder identified as HTTP: either a binary download, or a channel using
+  # HTTP framing to carry something else. Policy decides which by scoping to
+  # the applications allowed to download binaries.
+  - id: http-binary-body
+    description: "An HTTP body with almost no printable content"
+    protocol: http
+    severity: low
+    conditions:
+      - field: payload.printable_ratio <= 20
+      - field: http.body_length >= 4096
+    references: ["MITRE T1071.001"]

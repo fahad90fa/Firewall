@@ -1,0 +1,81 @@
+# SSH signatures.
+#
+# The only part of an SSH session this engine can see is the version banner
+# and the sizes of what follows. That is a genuinely small surface, and it
+# is worth being explicit that these signatures are weak: they identify
+# software and shapes, not intent.
+#
+# The reason to ship them anyway is that SSH is the protocol where knowing
+# *which client* matters most. An SSH connection from a workstation is
+# routine; an SSH connection from a workstation whose banner says it came
+# from a Go or Python library is a tool, and tools that speak SSH from a
+# user's machine are usually moving laterally. That distinction is visible in
+# the banner and nowhere else, which is why the banner is worth parsing.
+#
+# `ssh.protocol_version` is 20 for SSH-2.0 and 19 for the obsolete SSH-1.99
+# compatibility announcement.
+
+version: 1
+
+metadata:
+  name: ssh-protocol-signatures
+  description: "Client identification and legacy protocol use in SSH"
+  revision: 2
+  author: security-engineering
+
+signatures:
+  # SSH-1.x is cryptographically broken and has been removed from every
+  # maintained implementation. An endpoint offering it is either ancient or
+  # deliberately negotiating down.
+  - id: ssh-legacy-protocol
+    description: "An SSH-1.x or 1.99 version announcement"
+    protocol: ssh
+    severity: high
+    conditions:
+      - field: ssh.protocol_version <= 19
+    references: ["CVE-2001-1473", "MITRE T1562.010"]
+
+  # Library-based clients. These are what automation and lateral-movement
+  # tooling use; a human at a terminal produces an OpenSSH banner. Matched as
+  # content because the banner is free text, and anchored to the first bytes
+  # of the stream because that is where the identification string is required
+  # to be.
+  - id: ssh-library-client
+    description: "A banner identifying a programmatic SSH client rather than a terminal"
+    protocol: ssh
+    severity: medium
+    conditions:
+      - content: "paramiko", offset: 0, depth: 64, nocase: true
+    references: ["MITRE T1021.004"]
+
+  - id: ssh-go-client
+    description: "A Go crypto/ssh banner, characteristic of tooling rather than a user"
+    protocol: ssh
+    severity: medium
+    conditions:
+      - content: "Go", offset: 0, depth: 64
+      - field: ssh.banner_length <= 32
+    references: ["MITRE T1021.004"]
+
+  # An unusually short banner. Every real implementation names itself and its
+  # version; implants often send the minimum the RFC allows in order to avoid
+  # identifying themselves.
+  - id: ssh-anonymous-banner
+    description: "A version string too short to identify any implementation"
+    protocol: ssh
+    severity: medium
+    conditions:
+      - field: ssh.banner_length <= 12
+      - field: ssh.protocol_version == 20
+    references: ["MITRE T1095"]
+
+  # A banner long enough to be carrying something. The identification string
+  # is attacker-controlled, sent before any authentication, and read by the
+  # peer — which makes it a serviceable one-way channel.
+  - id: ssh-oversized-banner
+    description: "A version string long enough to be carrying data"
+    protocol: ssh
+    severity: high
+    conditions:
+      - field: ssh.banner_length >= 200
+    references: ["MITRE T1071"]

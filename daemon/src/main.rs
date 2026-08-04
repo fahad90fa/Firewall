@@ -41,6 +41,7 @@ use ufw_daemon::config::Config;
 use ufw_daemon::identity::TrustDatabase;
 use ufw_daemon::ipc::{self, KernelChannel, KernelEvent};
 use ufw_daemon::logging::{Enrichment, Logger};
+use ufw_daemon::signatures;
 use ufw_daemon::management_api::{cli, rest, ApiError, ControlPlane, Router};
 use ufw_daemon::policy_loader;
 use ufw_daemon::policy_store::describe;
@@ -207,6 +208,42 @@ fn run() -> Result<(), String> {
         logs.clone(),
     ));
 
+    // --- signatures ------------------------------------------------------
+    //
+    // Before the policy, so the policy load can report DPI rules that name a
+    // signature nothing defines. A malformed signature file is logged and
+    // skipped rather than fatal: the alternative is that one bad entry in a
+    // threat-intel drop takes the whole firewall down, which trades a partial
+    // inspection capability for no filtering at all.
+    {
+        let (signatures, problems) = signatures::load_dir(&config.policy.signature_dir);
+        for problem in &problems {
+            logs.note(
+                &config.daemon.host_id,
+                Severity::Error,
+                EventKind::SystemFault,
+                format!("signature: {problem}"),
+            );
+            eprintln!("ufwd: signature: {problem}");
+        }
+        logs.note(
+            &config.daemon.host_id,
+            Severity::Notice,
+            EventKind::PolicyChange,
+            format!(
+                "loaded {} signature(s) from {}{}",
+                signatures.len(),
+                config.policy.signature_dir.display(),
+                if problems.is_empty() {
+                    String::new()
+                } else {
+                    format!(", {} skipped", problems.len())
+                }
+            ),
+        );
+        daemon.set_signatures(signatures);
+    }
+
     // --- kernel ----------------------------------------------------------
     let connection = ipc::establish(
         &config.ipc.endpoint,
@@ -291,6 +328,27 @@ fn run() -> Result<(), String> {
                 return Err(message);
             }
         }
+    }
+
+    // A DPI rule naming a signature nobody shipped installs cleanly and never
+    // fires, while the operator who wrote it believes the traffic is being
+    // inspected. Nothing else in the system would ever complain, so this is
+    // the only place it gets said.
+    let dangling = daemon.dangling_signature_refs();
+    if !dangling.is_empty() {
+        let message = format!(
+            "{} DPI signature reference(s) in the installed policy match no loaded \
+             signature, so those rules can never fire; run `ufwctl debug signatures` \
+             to see which",
+            dangling.len()
+        );
+        logs.note(
+            &config.daemon.host_id,
+            Severity::Warning,
+            EventKind::PolicyChange,
+            message.clone(),
+        );
+        eprintln!("ufwd: {message}");
     }
 
     // --- management APIs -------------------------------------------------

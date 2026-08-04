@@ -22,6 +22,7 @@ use ufw_shared::protocol::{Capabilities, EnforcementMode, KernelStats};
 use crate::identity::IdentityService;
 use crate::logging::LogHandle;
 use crate::policy_store::PolicyStore;
+use crate::signatures::SignatureSet;
 
 /// What the daemon is currently able to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +77,10 @@ pub struct DaemonState {
 
     pub identity: Arc<IdentityService>,
     pub logs: LogHandle,
+    /// The loaded DPI signatures. Held here rather than in the policy store
+    /// because signatures outlive any one policy revision: a threat-intel
+    /// update replaces these without touching the installed rules.
+    signatures: RwLock<Arc<SignatureSet>>,
 
     shutdown: AtomicBool,
     policy_reloads: AtomicU64,
@@ -112,6 +117,7 @@ impl DaemonState {
             kernel_stats: RwLock::new(KernelStats::default()),
             identity,
             logs,
+            signatures: RwLock::new(Arc::new(SignatureSet::default())),
             shutdown: AtomicBool::new(false),
             policy_reloads: AtomicU64::new(0),
             failed_reloads: AtomicU64::new(0),
@@ -250,6 +256,37 @@ impl DaemonState {
             failed_reloads: self.failed_reloads.load(Ordering::Relaxed),
             identity_queries: self.identity_queries.load(Ordering::Relaxed),
         }
+    }
+
+    // --- signatures -----------------------------------------------------
+
+    pub fn signatures(&self) -> Arc<SignatureSet> {
+        Arc::clone(&self.signatures.read().unwrap())
+    }
+
+    pub fn set_signatures(&self, set: SignatureSet) {
+        *self.signatures.write().unwrap() = Arc::new(set);
+    }
+
+    /// Signatures the active policy names that no loaded file defines.
+    ///
+    /// A DPI rule referencing a signature nobody shipped compiles, installs,
+    /// and never fires — while the operator who wrote it believes the traffic
+    /// is being inspected. Surfacing it is the point of deriving signature ids
+    /// from names rather than letting each file assign its own.
+    pub fn dangling_signature_refs(&self) -> Vec<u32> {
+        let Some(policy) = self.active_policy() else {
+            return Vec::new();
+        };
+        let mut referenced: Vec<u32> = policy
+            .rules
+            .iter()
+            .filter_map(|r| r.dpi.as_ref())
+            .flat_map(|d| d.signatures.iter().copied())
+            .collect();
+        referenced.sort_unstable();
+        referenced.dedup();
+        self.signatures().missing(&referenced)
     }
 
     // --- reporting ------------------------------------------------------

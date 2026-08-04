@@ -221,6 +221,7 @@ pub fn route(request: &HttpRequest) -> Result<Request, ApiError> {
         ("GET", "/v1/rules") => Ok(Request::ListRules { filter: request.param("filter") }),
         ("GET", "/v1/revisions") => Ok(Request::ListRevisions),
         ("GET", "/v1/trust") => Ok(Request::ListTrust),
+        ("GET", "/v1/signatures") => Ok(Request::ListSignatures),
         ("GET", p) if p.starts_with("/v1/rules/") => Ok(Request::GetRule {
             key: percent_decode(&p["/v1/rules/".len()..]),
         }),

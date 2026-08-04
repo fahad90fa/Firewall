@@ -5,4 +5,5 @@ pub mod logging;
 pub mod management_api;
 pub mod policy_loader;
 pub mod policy_store;
+pub mod signatures;
 pub mod state;

@@ -17,6 +17,7 @@ ufwctl debug <SUBCOMMAND>
 
 SUBCOMMANDS:
     stats               Kernel module counters
+    signatures          Loaded DPI signatures, and any the policy names in vain
     dump                Everything the daemon knows, for a bug report
     mode <MODE>         Change enforcement: enforce | monitor | emergency-allow
 
@@ -33,10 +34,68 @@ pub fn run(args: &[String], options: &GlobalOptions, transport: &mut dyn Transpo
     match sub {
         "-h" | "--help" | "help" => Ok(HELP.to_string()),
         "stats" => stats(options, transport),
+        "signatures" => signatures(rest, options, transport),
         "dump" => dump(options, transport),
         "mode" => mode(rest, options, transport),
         other => Err(CliError::Usage(format!("unknown debug subcommand `{other}`"))),
     }
+}
+
+/// The signature set, and the references that resolve to nothing.
+///
+/// The dangling list is the reason this command exists. A DPI rule naming a
+/// signature no file defines compiles, installs and never fires, so the only
+/// symptom is traffic that was supposed to be inspected and silently was not.
+fn signatures(
+    args: &[String],
+    options: &GlobalOptions,
+    transport: &mut dyn Transport,
+) -> CliResult {
+    let raw = client::call(transport, RequestBuilder::new("list-signatures").finish())?;
+    let validate_only = super::has_flag(args, "--validate");
+
+    Ok(emit(options.format, &raw, |v| {
+        let dangling = v
+            .get("dangling_references")
+            .and_then(|d| d.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+
+        let mut out = String::new();
+        if !validate_only {
+            let mut t = Table::new(["SIGNATURE", "PROTOCOL", "SEVERITY", "CONDITIONS"]);
+            if let Some(list) = v.get("signatures").and_then(|s| s.as_array()) {
+                for sig in list {
+                    t.push([
+                        text(sig, "name"),
+                        text(sig, "protocol"),
+                        text(sig, "severity"),
+                        sig.get("conditions")
+                            .and_then(|c| c.as_array())
+                            .map(|c| c.len())
+                            .unwrap_or(0)
+                            .to_string(),
+                    ]);
+                }
+            }
+            out.push_str(&t.render());
+            out.push('\n');
+        }
+
+        out.push_str(&format!(
+            "{} signature(s) loaded\n",
+            number(v, "count")
+        ));
+        if dangling > 0 {
+            out.push_str(&format!(
+                "\nwarning: {dangling} DPI reference(s) in the installed policy match no \
+                 loaded signature.\nThose rules can never fire. Either the signature file \
+                 was not deployed, or the\nname in the policy is misspelled — ids are \
+                 derived from the name, so the two\nmust match exactly.\n"
+            ));
+        }
+        out
+    }))
 }
 
 fn stats(options: &GlobalOptions, transport: &mut dyn Transport) -> CliResult {
@@ -191,6 +250,52 @@ mod tests {
       "identity_cache_misses":20,"identity_queries_timed_out":0,"dpi_scans":10,"dpi_hits":1,
       "reassembly_contexts":3,"reassembly_truncated":0,"conntrack_entries":40,
       "log_events_dropped":0,"ebpf_fastpath_decisions":70,"rule_hits":[]}"#;
+
+    #[test]
+    fn signatures_lists_what_is_loaded() {
+        let response = r#"{"ok":true,"count":2,"complete":true,
+          "signatures":[
+            {"name":"dns-tunnel-long-label","protocol":"dns","severity":"high",
+             "conditions":[{"kind":"field"},{"kind":"field"}]},
+            {"name":"http-exploit-post","protocol":"http","severity":"high",
+             "conditions":[{"kind":"field"}]}],
+          "dangling_references":[]}"#;
+        let mut t = ScriptedTransport::new([response]);
+        let out = run(&args(&["signatures"]), &options(Format::Table), &mut t).unwrap();
+        assert!(out.contains("dns-tunnel-long-label"), "{out}");
+        assert!(out.contains("2 signature(s) loaded"), "{out}");
+        assert!(!out.contains("warning"), "{out}");
+        assert_eq!(t.last_request(), Some(r#"{"op":"list-signatures"}"#));
+    }
+
+    #[test]
+    fn a_dangling_reference_is_called_out_because_nothing_else_would() {
+        // A DPI rule naming a signature nobody shipped installs cleanly and
+        // never fires. This message is the only symptom an operator gets.
+        let response = r#"{"ok":true,"count":1,"complete":false,
+          "signatures":[{"name":"a","protocol":"dns","severity":"low","conditions":[]}],
+          "dangling_references":[4242,9999]}"#;
+        let mut t = ScriptedTransport::new([response]);
+        let out = run(&args(&["signatures"]), &options(Format::Table), &mut t).unwrap();
+        assert!(out.contains("2 DPI reference(s)"), "{out}");
+        assert!(out.contains("can never fire"), "{out}");
+    }
+
+    #[test]
+    fn validate_reports_without_listing() {
+        let response = r#"{"ok":true,"count":9,"complete":true,
+          "signatures":[{"name":"a","protocol":"dns","severity":"low","conditions":[]}],
+          "dangling_references":[]}"#;
+        let mut t = ScriptedTransport::new([response]);
+        let out = run(
+            &args(&["signatures", "--validate"]),
+            &options(Format::Table),
+            &mut t,
+        )
+        .unwrap();
+        assert!(!out.contains("SIGNATURE"), "the table is suppressed: {out}");
+        assert!(out.contains("9 signature(s) loaded"), "{out}");
+    }
 
     #[test]
     fn stats_render_every_counter() {
