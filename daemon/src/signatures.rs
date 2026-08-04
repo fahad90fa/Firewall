@@ -56,6 +56,8 @@ use ufw_shared::json::JsonWriter;
 use ufw_shared::policy_types::L7Protocol;
 use ufw_shared::protocol::Writer;
 
+use crate::automaton::{self, Automaton, MatchTable, Pattern, NO_PATTERN};
+
 /// How bad a match is. Carried into the log event so a SIEM can triage
 /// without a lookup table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -404,8 +406,70 @@ impl SignatureSet {
             .collect()
     }
 
+    /// Every distinct `(bytes, nocase)` pattern named by a content condition,
+    /// in a deterministic order. Index in this list is the pattern id the
+    /// wire encoding carries and the kernels index their scan results by.
+    ///
+    /// Deduplicated because a signature set typically names the same handful
+    /// of strings from many rules, and the automaton should pay for each
+    /// string once.
+    pub fn patterns(&self) -> Vec<Pattern> {
+        let mut out: Vec<Pattern> = Vec::new();
+        for sig in self.signatures.values() {
+            for c in &sig.conditions {
+                if let Condition::Content { pattern, nocase, .. } = c {
+                    let candidate = Pattern { bytes: pattern.clone(), nocase: *nocase };
+                    if !out.contains(&candidate) {
+                        out.push(candidate);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The multi-pattern automaton for this set, or `None` when there is
+    /// nothing to search for or the set exceeds the shipped table limits.
+    ///
+    /// `None` is not a failure: the kernels fall back to searching per
+    /// signature, which is slower and decides exactly the same conditions.
+    pub fn automaton(&self) -> Option<Automaton> {
+        Automaton::build(&self.patterns())
+    }
+
+    /// One pass over `data` for every content pattern in the set.
+    ///
+    /// This and [`content_holds`] are the reference the three kernel
+    /// implementations mirror; `daemon/tests/dpi_automaton_tests.rs` compiles
+    /// the two C traversals and checks them against this one.
+    pub fn scan_content(&self, data: &[u8]) -> Option<MatchTable> {
+        self.automaton().map(|a| a.scan(data))
+    }
+
     /// Wire encoding for the kernel modules.
+    ///
+    /// Two sections: the signatures, then the automaton. A content condition
+    /// carries both its pattern *and* the pattern's automaton id, because the
+    /// fallback path in [`automaton::content_matches`] needs the bytes and
+    /// because a set with no automaton needs them for every match.
     pub fn encode(&self) -> Vec<u8> {
+        let patterns = self.patterns();
+        let automaton = Automaton::build(&patterns);
+        // Ids are only meaningful when an automaton shipped. Without one every
+        // content condition is marked as having no entry, which is what makes
+        // a kernel take the naive path without needing a second flag to
+        // disagree with.
+        let id_of = |bytes: &[u8], nocase: bool| -> u32 {
+            if automaton.is_none() {
+                return NO_PATTERN;
+            }
+            patterns
+                .iter()
+                .position(|p| p.bytes == bytes && p.nocase == nocase)
+                .map(|i| i as u32)
+                .unwrap_or(NO_PATTERN)
+        };
+
         let mut w = Writer::new();
         w.u32(self.signatures.len() as u32);
         for sig in self.signatures.values() {
@@ -425,6 +489,7 @@ impl SignatureSet {
                         w.u32(*offset);
                         w.u32(*depth);
                         w.u8(u8::from(*nocase));
+                        w.u32(id_of(pattern, *nocase));
                         w.bytes(pattern);
                     }
                     Condition::Entropy { field, min_centibits } => {
@@ -433,6 +498,14 @@ impl SignatureSet {
                     }
                 }
             }
+        }
+
+        match &automaton {
+            Some(a) => {
+                w.u8(1);
+                a.encode(&mut w);
+            }
+            None => w.u8(0),
         }
         w.finish()
     }
@@ -448,6 +521,30 @@ impl SignatureSet {
         w.end_array();
         w.end_object();
         w.finish()
+    }
+}
+
+/// Decide one content condition the way the kernels do.
+///
+/// `table` is the result of a single automaton pass over `data` and
+/// `pattern_id` is the id the wire encoding gave this condition. Either being
+/// absent means the set shipped without an automaton, in which case this is
+/// the bounded naive search — the same search, decided the same way, without
+/// the shared pass.
+pub fn content_holds(
+    condition: &Condition,
+    table: Option<&MatchTable>,
+    pattern_id: u32,
+    data: &[u8],
+) -> bool {
+    let Condition::Content { pattern, offset, depth, nocase } = condition else {
+        return false;
+    };
+    match table {
+        Some(t) if pattern_id != NO_PATTERN => {
+            automaton::content_matches(pattern, *nocase, *offset, *depth, t.hit(pattern_id), data)
+        }
+        _ => automaton::naive_contains(pattern, *nocase, data, *offset, *depth),
     }
 }
 

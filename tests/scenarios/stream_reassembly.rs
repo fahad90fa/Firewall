@@ -22,7 +22,7 @@ use ufw_daemon::ipc::loopback::{self, MockKernelModule};
 use ufw_daemon::ipc::KernelChannel;
 use ufw_shared::constants;
 use ufw_shared::policy_types::{DpiScan, L7Protocol};
-use ufw_shared::protocol::{Message, MessageType, Reader, Writer};
+use ufw_shared::protocol::{MessageType, Reader, Writer};
 
 #[test]
 fn the_reassembly_budget_is_one_number_shared_by_every_implementation() {
@@ -107,7 +107,7 @@ fn a_module_reporting_stream_statistics_is_understood_by_the_daemon() {
     // "inspection is silently not running": a reassembly context count of zero
     // on a busy host means the stream path never engaged.
     let (daemon_side, module_side) = loopback::pair();
-    let mut module = MockKernelModule::spawn(module_side);
+    let module = MockKernelModule::spawn(module_side);
     let (tx, _events) = channel();
 
     let (mut kernel, _handshake) =
@@ -135,7 +135,7 @@ fn a_module_reporting_the_wrong_abi_is_refused_rather_than_trusted() {
     // the handshake is the only safe reading, and it has to happen there
     // because by the time a rule is misparsed there is no way to tell.
     let (daemon_side, module_side) = loopback::pair();
-    let mut module = MockKernelModule::spawn_with(module_side, |behaviour| {
+    let module = MockKernelModule::spawn_with(module_side, |behaviour| {
         behaviour.abi_revision = constants::ABI_REVISION + 1;
     });
     let (tx, _events) = channel();
@@ -156,7 +156,7 @@ fn a_module_that_never_answers_produces_a_timeout_rather_than_a_hang() {
     // kernel module that stopped answering takes the management plane with it,
     // which is exactly when an operator needs `ufwctl status` to work.
     let (daemon_side, module_side) = loopback::pair();
-    let mut module = MockKernelModule::spawn_with(module_side, |behaviour| {
+    let module = MockKernelModule::spawn_with(module_side, |behaviour| {
         behaviour.ignore_stats = true;
     });
     let (tx, _events) = channel();

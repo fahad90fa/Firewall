@@ -306,3 +306,45 @@ fn a_default_allow_policy_is_expressible() {
     );
     assert_eq!(policy.evaluate(&ctx).decision, Decision::Deny);
 }
+
+#[test]
+fn a_header_only_rule_can_be_pinned_to_the_perimeter_stage() {
+    // The perimeter stage is Layer 1 and the evaluation order starts there,
+    // but a rule only lands in it if it says so: header-only rules default to
+    // `packet`, because a default that put every address rule ahead of every
+    // zone rule would leave the perimeter stage with nothing in it.
+    //
+    // Writing `layer: perimeter` is how a zone-scoped deny is made to run
+    // before every address rule, and for a while the compiler rejected it —
+    // with a message about `application:` selectors, on a rule that had none.
+    let result = compile_str(
+        "perimeter",
+        "version: 1\ndefaults:\n  action: deny\nrules:\n  \
+         - id: no-external-egress\n    layer: perimeter\n    priority: 10\n    \
+         action: deny\n    protocol: tcp\n    destination:\n      zone: external\n",
+        &CompileOptions::default(),
+    );
+    assert!(result.is_ok(), "{}", result.render());
+    let policy = result.policy.as_ref().expect("compiled");
+    assert_eq!(policy.rules[0].layer, ufw_shared::policy_types::Layer::Perimeter);
+}
+
+#[test]
+fn an_identity_rule_still_cannot_be_pinned_below_the_identity_stage() {
+    // The other half of the same check. Identity is not resolved at the
+    // perimeter stage, so such a rule could only ever fail to match — which
+    // is worse than an error, because it installs and silently never fires.
+    for layer in ["perimeter", "packet"] {
+        let source = format!(
+            "version: 1\napplications:\n  agent:\n    platforms:\n      linux:\n        \
+             paths: [/usr/bin/agent]\nrules:\n  - id: a\n    action: allow\n    \
+             layer: {layer}\n    application: agent\n"
+        );
+        let result = compile_str("identity", &source, &CompileOptions::default());
+        assert!(
+            result.diagnostics.iter().any(|d| d.code == codes::LAYER_MISMATCH),
+            "`layer: {layer}` on an identity rule should be refused:\n{}",
+            result.render()
+        );
+    }
+}

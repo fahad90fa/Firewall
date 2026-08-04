@@ -10,6 +10,7 @@ use std::time::Duration;
 use ufw_daemon::ipc::loopback::{self, MockKernelModule};
 use ufw_daemon::ipc::{KernelChannel, KernelEvent};
 use ufw_daemon::policy_store;
+use ufw_daemon::signatures::{self, SignatureSet};
 use ufw_shared::identity_types::AppIdentity;
 use ufw_shared::policy_types::{Action, CompiledPolicy, CompiledRule, Decision, Layer, Protocol};
 use ufw_shared::protocol::{Capabilities, EnforcementMode};
@@ -290,4 +291,92 @@ fn concurrent_requests_do_not_cross_their_replies() {
         h.join().expect("worker");
     }
     c.module.stop();
+}
+
+// --- signature install ------------------------------------------------------
+
+#[test]
+fn a_signature_set_reaches_the_module_byte_for_byte() {
+    // The kernel engines decode this payload with hand-written cursors. If the
+    // daemon and the module disagree about a single field the module either
+    // rejects the whole set or, worse, reads a pattern id as a length. So the
+    // assertion is on the bytes, not on the count.
+    let harness = connect();
+    let channel = &harness.channel;
+
+    let mut set = SignatureSet::default();
+    let mut errors = Vec::new();
+    signatures::parse_into(
+        &mut set,
+        "version: 1\nsignatures:\n  - id: http-admin\n    protocol: http\n    \
+         conditions:\n      - content: \"POST /admin\", depth: 64, nocase: true\n  \
+         - id: tls-hello\n    protocol: tls\n    conditions:\n      \
+         - content: |16 03 01|, offset: 0, depth: 8\n",
+        std::path::Path::new("test.yaml"),
+        &mut errors,
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+
+    let payload = set.encode();
+    let ack = channel
+        .install_signatures(&payload, TIMEOUT)
+        .expect("the module accepted the set");
+
+    assert_eq!(ack.signatures_installed, 2);
+    assert_eq!(
+        harness.module.installed_signatures(),
+        payload,
+        "the module received something other than what the daemon sent"
+    );
+}
+
+#[test]
+fn a_module_that_acknowledges_the_wrong_payload_is_not_believed() {
+    // A module that decoded half the set and stopped would otherwise report
+    // success, and the operator would believe traffic was being inspected
+    // against signatures it never loaded.
+    let (daemon_side, module_side) = loopback::pair();
+    let module = MockKernelModule::spawn_with(module_side, |behaviour| {
+        behaviour.corrupt_signature_hash = true;
+    });
+    let (tx, _events) = channel();
+    let (channel, _handshake) =
+        KernelChannel::open(daemon_side, tx, "integration-host", TIMEOUT).expect("handshake");
+
+    let mut set = SignatureSet::default();
+    let mut errors = Vec::new();
+    signatures::parse_into(
+        &mut set,
+        "version: 1\nsignatures:\n  - id: a\n    protocol: dns\n    \
+         conditions:\n      - field: dns.label_count > 1\n",
+        std::path::Path::new("test.yaml"),
+        &mut errors,
+    );
+
+    let err = channel
+        .install_signatures(&set.encode(), TIMEOUT)
+        .expect_err("a hash mismatch must not read as success");
+    assert!(
+        err.to_string().contains("hash mismatch"),
+        "the error should name the mismatch: {err}"
+    );
+    module.stop();
+}
+
+#[test]
+fn a_set_with_no_content_conditions_ships_without_an_automaton() {
+    // Nothing to search for, so there is nothing to build. The kernels must
+    // still accept the payload; the trailing byte says "no table follows".
+    let mut set = SignatureSet::default();
+    let mut errors = Vec::new();
+    signatures::parse_into(
+        &mut set,
+        "version: 1\nsignatures:\n  - id: a\n    protocol: dns\n    \
+         conditions:\n      - field: dns.label_count > 1\n",
+        std::path::Path::new("test.yaml"),
+        &mut errors,
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(set.automaton().is_none());
+    assert_eq!(*set.encode().last().unwrap(), 0, "the automaton flag should be clear");
 }

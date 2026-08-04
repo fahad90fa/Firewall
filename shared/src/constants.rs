@@ -15,7 +15,12 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// ABI revision of the kernel/user shared structures. Reported in `Hello`
 /// and rejected by the peer on mismatch.
-pub const ABI_REVISION: u32 = 1;
+///
+/// 2: a content condition carries its automaton pattern id, the signature
+/// payload gained a trailing multi-pattern table, and `SignatureInstall`
+/// exists as a message type. A revision-1 module decoding a revision-2
+/// signature payload would read the pattern id as the pattern length.
+pub const ABI_REVISION: u32 = 2;
 
 /// Product name used in logs, syslog tags and User-Agent strings.
 pub const PRODUCT_NAME: &str = "unified-firewall";
@@ -65,6 +70,14 @@ pub const MAX_APP_PATTERNS_PER_RULE: usize = 64;
 
 /// Maximum DPI signature references per rule.
 pub const MAX_SIGNATURES_PER_RULE: usize = 256;
+
+/// Ceiling on one signature-install payload.
+///
+/// The set itself is bounded by the module's own limits (1024 signatures, and
+/// an automaton of at most 16384 states), and 4 MiB is comfortably above what
+/// those produce. The bound exists so a malformed length prefix cannot make a
+/// kernel module try to allocate whatever a `u32` can express.
+pub const MAX_SIGNATURE_PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
 
 /// Maximum length of any single string field on the wire.
 pub const MAX_STRING_LEN: usize = 4096;

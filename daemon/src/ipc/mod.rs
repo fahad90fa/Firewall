@@ -484,6 +484,49 @@ impl KernelChannel {
         }
     }
 
+    /// Ship the DPI signature set.
+    ///
+    /// Separate from the policy install because the two change on different
+    /// schedules: a policy is revised when the deployment changes, a signature
+    /// set when the threat intelligence does. Coupling them would make every
+    /// signature drop a policy revision.
+    ///
+    /// The ack carries a hash of what the module decoded. A module that read
+    /// half the set and stopped would otherwise report success, and the
+    /// operator would believe traffic was being inspected against signatures
+    /// it never loaded.
+    pub fn install_signatures(
+        &self,
+        payload: &[u8],
+        timeout: Duration,
+    ) -> io::Result<ufw_shared::protocol::SignatureInstallAck> {
+        let expected = ufw_shared::hash::sha256(payload);
+        let message = Message::SignatureInstall(Box::new(
+            ufw_shared::protocol::SignatureInstall { payload: payload.to_vec() },
+        ));
+        match self.request(message, timeout)? {
+            Message::SignatureInstallAck(ack) => {
+                if ack.payload_hash != expected {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "signature payload hash mismatch: daemon sent {}, module \
+                             reports {}",
+                            ufw_shared::hash::hex(&expected),
+                            ufw_shared::hash::hex(&ack.payload_hash)
+                        ),
+                    ));
+                }
+                Ok(ack)
+            }
+            Message::Error(e) => Err(io::Error::other(format!(
+                "signature install failed: {}",
+                e.detail
+            ))),
+            other => Err(unexpected(other)),
+        }
+    }
+
     /// A module whose recomputed hash differs from ours has ended up with a
     /// different rule set than we think it has. That is unrecoverable at this
     /// level, so it is surfaced as an error and the supervisor falls back to a

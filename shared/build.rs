@@ -18,7 +18,7 @@ use std::env;
 /// Bumped whenever the binary layout in `policy_types.rs` or `protocol.rs`
 /// changes in a way that is not backward compatible. Must be kept in lockstep
 /// with `UFW_ABI_REVISION` in `kernel/*/inc/policy_structs.h`.
-const ABI_REVISION: u32 = 1;
+const ABI_REVISION: u32 = 2;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");

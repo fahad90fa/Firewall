@@ -587,7 +587,11 @@ impl Analyzer {
         has_app: bool,
         has_dpi: bool,
     ) -> Layer {
-        // The layer the rule's predicates actually require.
+        // The stage a rule lands in when it does not say. Header-only rules
+        // default to `packet` rather than `perimeter` because that is where
+        // the overwhelming majority of them belong, and a default that put
+        // every address rule ahead of every zone rule would make the zone
+        // stage useless.
         let required = if has_dpi && has_app {
             Layer::Stream
         } else if has_dpi {
@@ -596,6 +600,22 @@ impl Analyzer {
             Layer::Identity
         } else {
             Layer::Packet
+        };
+
+        // The earliest stage the rule's predicates *could* be evaluated at,
+        // which is not the same thing. A header-only rule can legitimately be
+        // pinned to `perimeter` — that is how a zone-scoped deny is written so
+        // it runs before every address rule — while an identity rule cannot go
+        // below `identity` no matter what the author writes, because identity
+        // is not resolved yet and the rule could only ever fail to match.
+        let earliest = if has_dpi && has_app {
+            Layer::Stream
+        } else if has_dpi {
+            Layer::AppDpi
+        } else if has_app {
+            Layer::Identity
+        } else {
+            Layer::Perimeter
         };
 
         let explicit = rule.layer.as_ref().and_then(|l| self.parse_layer(l));
@@ -607,7 +627,7 @@ impl Analyzer {
         // one the predicates need. Downgrading would mean evaluating an
         // identity rule where identity is not yet known, which can only ever
         // produce a non-match.
-        if explicit.stage_index() < required.stage_index() {
+        if explicit.stage_index() < earliest.stage_index() {
             let span = rule
                 .layer
                 .as_ref()

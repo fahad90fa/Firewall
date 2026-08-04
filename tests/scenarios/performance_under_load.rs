@@ -15,6 +15,15 @@
 //!   - The stage index actually bounds the scan. A flow decided at the packet
 //!     stage must not pay for the identity and stream rules below it.
 //!   - The optimizer's output is not slower than its input.
+//!   - The latency *distribution* has a bounded tail. A mean says nothing
+//!     about a firewall: what matters is the flow that took longest, because
+//!     that is the one an attacker will aim for and the one that misses a
+//!     verdict deadline.
+//!
+//! The percentile tests print p50, p99 and p99.9 and assert only the ratio
+//! between them. An absolute number would be a threshold by another name; a
+//! ratio catches the thing that actually matters, which is a cost that depends
+//! on input rather than on rule count.
 //!
 //! Real throughput numbers belong to `tests/docker/`, where there is a kernel
 //! module and a packet generator, and to a benchmark run on known hardware.
@@ -48,6 +57,65 @@ fn policy_with_rules(n: usize) -> CompiledPolicy {
          action: allow\n    protocol: tcp\n    destination:\n      ports: [443]\n",
     );
     policy(&source)
+}
+
+/// A latency distribution, in nanoseconds.
+///
+/// Percentiles rather than a mean, because the interesting question about a
+/// filtering decision is never "what does it usually cost" — it is "what does
+/// the worst one cost", and a mean hides exactly that.
+struct Latencies {
+    samples: Vec<u128>,
+}
+
+impl Latencies {
+    /// Time `iterations` individual calls. Each is timed separately rather
+    /// than as a batch: a batch measures throughput, and a tail is invisible
+    /// in a throughput number.
+    fn measure(mut f: impl FnMut(), warmup: u32, iterations: u32) -> Self {
+        for _ in 0..warmup {
+            f();
+        }
+        let mut samples = Vec::with_capacity(iterations as usize);
+        for _ in 0..iterations {
+            let start = Instant::now();
+            f();
+            samples.push(start.elapsed().as_nanos());
+        }
+        samples.sort_unstable();
+        Latencies { samples }
+    }
+
+    /// Nearest-rank percentile. No interpolation: with a sorted sample the
+    /// rank *is* an observed measurement, and an interpolated p99.9 is a
+    /// number nothing actually took.
+    fn percentile(&self, p: f64) -> u128 {
+        assert!(!self.samples.is_empty());
+        let rank = ((p / 100.0) * self.samples.len() as f64).ceil() as usize;
+        self.samples[rank.clamp(1, self.samples.len()) - 1]
+    }
+
+    fn p50(&self) -> u128 {
+        self.percentile(50.0)
+    }
+
+    fn p99(&self) -> u128 {
+        self.percentile(99.0)
+    }
+
+    fn p999(&self) -> u128 {
+        self.percentile(99.9)
+    }
+
+    fn report(&self, label: &str) {
+        println!(
+            "{label}: p50 {}ns  p99 {}ns  p99.9 {}ns  (n={})",
+            self.p50(),
+            self.p99(),
+            self.p999(),
+            self.samples.len()
+        );
+    }
 }
 
 fn time_evaluations(policy: &CompiledPolicy, flow: &Flow, iterations: u32) -> f64 {
@@ -211,5 +279,90 @@ fn a_policy_at_the_documented_ceiling_still_compiles_and_evaluates() {
         cost < 0.01,
         "a single decision against 5000 rules took {cost:.6}s, which is far \
          beyond a linear scan of a table this size"
+    );
+}
+
+#[test]
+fn the_latency_tail_is_bounded_rather_than_open_ended() {
+    // Part Eight of the architecture asks for p50, p99 and p99.9. Absolute
+    // numbers here would be a threshold that gets raised until it stops
+    // failing, so the assertion is on the *ratio*: a classifier whose cost
+    // depends on the flow rather than on the rule table shows up as a tail
+    // that runs away from the median, and nothing else here would catch it.
+    let policy = policy_with_rules(500);
+    let flow = Flow::tcp("203.0.113.10", 443);
+    let ctx = flow.context(&policy.network_profile);
+
+    let latencies = Latencies::measure(
+        || {
+            std::hint::black_box(policy.evaluate(&ctx));
+        },
+        512,
+        20_000,
+    );
+    latencies.report("evaluate (500 rules)");
+
+    let p50 = latencies.p50().max(1);
+    let p999 = latencies.p999();
+
+    // Generous, and deliberately so: this runs on shared CI hardware where a
+    // scheduler preemption inside a 20,000-sample run is expected and shows up
+    // exactly at p99.9. What it still catches is an evaluation whose worst
+    // case is orders of magnitude off its median, which is what a
+    // data-dependent scan looks like.
+    assert!(
+        p999 <= p50 * 200,
+        "the tail is not bounded by the median: p50 {p50}ns, p99 {}ns, p99.9 {p999}ns. \
+         Either the classifier's cost depends on the flow, or this machine descheduled \
+         the test — rerun before believing it.",
+        latencies.p99()
+    );
+}
+
+#[test]
+fn a_flow_decided_early_has_a_shorter_tail_than_one_that_falls_through() {
+    // The stage index bounds the scan, and it must bound the *tail* and not
+    // just the mean: a firewall that usually decides quickly but occasionally
+    // walks the whole table is a firewall with a latency spike an attacker can
+    // trigger on demand.
+    let policy = policy(
+        "version: 1\ndefaults:\n  action: deny\nrules:\n\
+         \x20 - id: early\n    priority: 10\n    layer: perimeter\n    action: deny\n    \
+         protocol: tcp\n    destination:\n      addresses: [198.51.100.0/24]\n\
+         \x20 - id: late\n    priority: 20000\n    layer: stream\n    action: allow\n    \
+         protocol: tcp\n    destination:\n      ports: [443]\n",
+    );
+
+    let early = Flow::tcp("198.51.100.7", 443);
+    let late = Flow::tcp("203.0.113.7", 443);
+    let early_ctx = early.context(&policy.network_profile);
+    let late_ctx = late.context(&policy.network_profile);
+
+    let decided_early = Latencies::measure(
+        || {
+            std::hint::black_box(policy.evaluate(&early_ctx));
+        },
+        512,
+        10_000,
+    );
+    let falls_through = Latencies::measure(
+        || {
+            std::hint::black_box(policy.evaluate(&late_ctx));
+        },
+        512,
+        10_000,
+    );
+    decided_early.report("decided at the perimeter stage");
+    falls_through.report("falls through to the stream stage");
+
+    // Not "faster on average" — faster at the median, where scheduler noise
+    // has not yet taken over. Asserting on p99.9 here would be asserting on
+    // the CI runner's mood.
+    assert!(
+        decided_early.p50() <= falls_through.p50(),
+        "a flow decided at the first stage cost more than one that walked every stage: \
+         {}ns vs {}ns",
+        decided_early.p50(),
+        falls_through.p50()
     );
 }

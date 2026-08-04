@@ -44,7 +44,11 @@ to be in.
 
 **Equivalence is checked, not asserted.** Three kernel implementations in two
 languages will drift. The verifier is what turns "they should behave the same"
-into a build failure with a specific diverging input.
+into a build failure with a specific diverging input. Where an algorithm is too
+subtle to write three times — the multi-pattern automaton the DPI engine scans
+with — it is built once in the daemon and shipped as a table, so all three
+kernels run the same short traversal instead of three implementations of the
+same idea.
 
 ## Try it in two minutes
 
@@ -192,7 +196,7 @@ port configured as encrypted.
 
 ## Status
 
-Every layer above the kernel boundary is implemented and tested: 687 tests
+Every layer above the kernel boundary is implemented and tested: 712 tests
 covering the compiler, the daemon, the CLI, the wire protocol and end-to-end
 scenarios, plus ABI checks that compile the generated C against the kernel's own
 headers.

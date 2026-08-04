@@ -362,6 +362,8 @@ pub enum MessageType {
     StatsResponse = 41,
     SetMode = 50,
     ModeAck = 51,
+    SignatureInstall = 60,
+    SignatureInstallAck = 61,
     Error = 99,
 }
 
@@ -382,6 +384,8 @@ impl MessageType {
             41 => MessageType::StatsResponse,
             50 => MessageType::SetMode,
             51 => MessageType::ModeAck,
+            60 => MessageType::SignatureInstall,
+            61 => MessageType::SignatureInstallAck,
             99 => MessageType::Error,
             _ => return None,
         })
@@ -403,6 +407,8 @@ impl MessageType {
             MessageType::StatsResponse => "stats-response",
             MessageType::SetMode => "set-mode",
             MessageType::ModeAck => "mode-ack",
+            MessageType::SignatureInstall => "signature-install",
+            MessageType::SignatureInstallAck => "signature-install-ack",
             MessageType::Error => "error",
         }
     }
@@ -602,7 +608,35 @@ pub enum Message {
     StatsResponse(Box<KernelStats>),
     SetMode(EnforcementMode),
     ModeAck(EnforcementMode),
+    /// The DPI signature set, in the flat encoding
+    /// `ufw_daemon::signatures::SignatureSet::encode` produces and all three
+    /// kernel engines decode. Opaque here on purpose: the wire protocol
+    /// carries it, it does not interpret it.
+    SignatureInstall(Box<SignatureInstall>),
+    SignatureInstallAck(SignatureInstallAck),
     Error(ErrorMessage),
+}
+
+/// A signature set on its way to a kernel module.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignatureInstall {
+    pub payload: Vec<u8>,
+}
+
+/// What the module made of it.
+///
+/// `payload_hash` is what turns "the module acknowledged" into "the module has
+/// what we sent". Without it a module that decoded half the set and stopped
+/// would report success, and the operator would believe traffic was being
+/// inspected against signatures the module never loaded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SignatureInstallAck {
+    pub signatures_installed: u32,
+    /// Distinct content patterns in the shipped automaton, or zero when the
+    /// set had none or exceeded the module's table limits and every content
+    /// condition fell back to the per-signature search.
+    pub patterns_installed: u32,
+    pub payload_hash: [u8; 32],
 }
 
 impl Message {
@@ -622,6 +656,8 @@ impl Message {
             Message::StatsResponse(_) => MessageType::StatsResponse,
             Message::SetMode(_) => MessageType::SetMode,
             Message::ModeAck(_) => MessageType::ModeAck,
+            Message::SignatureInstall(_) => MessageType::SignatureInstall,
+            Message::SignatureInstallAck(_) => MessageType::SignatureInstallAck,
             Message::Error(_) => MessageType::Error,
         }
     }
@@ -729,6 +765,12 @@ impl Message {
                 }
             }
             Message::SetMode(m) | Message::ModeAck(m) => w.u8(*m as u8),
+            Message::SignatureInstall(s) => w.bytes(&s.payload),
+            Message::SignatureInstallAck(a) => {
+                w.u32(a.signatures_installed);
+                w.u32(a.patterns_installed);
+                w.raw(&a.payload_hash);
+            }
             Message::Error(e) => {
                 w.u32(e.code);
                 w.string(&e.detail);
@@ -888,6 +930,26 @@ impl Message {
             MessageType::ModeAck => Message::ModeAck(
                 EnforcementMode::from_u8(r.u8()?).ok_or(ProtoError::Malformed("bad mode"))?,
             ),
+            MessageType::SignatureInstall => {
+                let payload = r.bytes()?;
+                if payload.len() > constants::MAX_SIGNATURE_PAYLOAD_BYTES {
+                    return Err(ProtoError::TooLarge(payload.len()));
+                }
+                Message::SignatureInstall(Box::new(SignatureInstall {
+                    payload: payload.to_vec(),
+                }))
+            }
+            MessageType::SignatureInstallAck => {
+                let signatures_installed = r.u32()?;
+                let patterns_installed = r.u32()?;
+                let mut payload_hash = [0u8; 32];
+                payload_hash.copy_from_slice(r.raw(32)?);
+                Message::SignatureInstallAck(SignatureInstallAck {
+                    signatures_installed,
+                    patterns_installed,
+                    payload_hash,
+                })
+            }
             MessageType::Error => Message::Error(ErrorMessage {
                 code: r.u32()?,
                 detail: r.string()?,

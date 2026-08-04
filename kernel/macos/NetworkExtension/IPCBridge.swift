@@ -40,6 +40,19 @@ import os.log
 @objc protocol UFWDaemonProtocol {
     func reportEvent(_ payload: Data)
     func requestPolicy(withReply reply: @escaping (Data?) -> Void)
+    func requestSignatures(withReply reply: @escaping (Data?) -> Void)
+}
+
+/// Counters the daemon can ask the extension for.
+///
+/// Deliberately small, and served from a snapshot rather than from the live
+/// rule engine: the extension is on the verdict path, and a statistics call
+/// must not contend with a classification.
+struct UFWExtensionStatistics: Codable {
+    let policyRevision: UInt64
+    let ruleCount: Int
+    let signatureCount: Int
+    let logEventsDropped: UInt64
 }
 
 final class UFWIPCBridge: NSObject {
@@ -54,7 +67,10 @@ final class UFWIPCBridge: NSObject {
     static let expectedTeamID = "ABCDE12345"
 
     var onPolicy: ((UFWRuleEngine) -> Void)?
-    var onSignatures: (([UFWSignature]) -> Void)?
+    var onSignatures: ((UFWSignatureSet) -> Void)?
+    /// Set by the provider. Returns what is installed, from a snapshot it
+    /// updates on install rather than from the engine the classifier owns.
+    var statisticsSource: (() -> (revision: UInt64, rules: Int, signatures: Int))?
 
     private var connection: NSXPCConnection?
     private let queue = DispatchQueue(label: "com.unifiedfirewall.ipc")
@@ -67,6 +83,15 @@ final class UFWIPCBridge: NSObject {
     private var pending: [Data] = []
     private var dropped: UInt64 = 0
 
+    /// The revision the last accepted policy carried, so `installPolicy` can
+    /// tell "applied" from "rejected" without duplicating the decode.
+    private(set) var installedRevision: UInt64 = 0
+
+    /// Read by the statistics call. Not a precise count under concurrency and
+    /// does not need to be: it answers "is this host losing log lines", and a
+    /// lock on the report path to make it exact would cost the verdict.
+    var droppedEventCount: UInt64 { dropped }
+
     // MARK: Connection
 
     func connect() {
@@ -76,6 +101,11 @@ final class UFWIPCBridge: NSObject {
             let connection = NSXPCConnection(machServiceName: Self.machServiceName,
                                              options: [.privileged])
             connection.remoteObjectInterface = NSXPCInterface(with: UFWDaemonProtocol.self)
+            // The daemon pushes policy and signatures; without an exported
+            // object those calls reach nothing and fail silently on its side,
+            // which reads as "the extension accepted it".
+            connection.exportedInterface = NSXPCInterface(with: UFWExtensionProtocol.self)
+            connection.exportedObject = self
             connection.invalidationHandler = { [weak self] in
                 self?.log.notice("daemon connection invalidated")
                 self?.connection = nil
@@ -112,6 +142,13 @@ final class UFWIPCBridge: NSObject {
             guard let self, let payload else { return }
             self.applyPolicy(payload)
         }
+        // Signatures are pulled alongside, not pushed afterwards. A daemon
+        // restart would otherwise leave the extension enforcing the policy it
+        // re-fetched against whatever signature set it happened to be holding.
+        proxy.requestSignatures { [weak self] payload in
+            guard let self, let payload else { return }
+            self.applySignatures(payload)
+        }
     }
 
     // MARK: Inbound
@@ -131,10 +168,29 @@ final class UFWIPCBridge: NSObject {
                 perimeterNetworks: document.perimeterNetworks,
                 revision: document.revision,
                 rulesetSHA256: document.rulesetSHA256)
+            installedRevision = document.revision
             onPolicy?(engine)
         } catch {
             log.error("rejecting malformed policy: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    /// Decode a signature payload and hand it to the provider.
+    ///
+    /// Rejected wholesale on any error, for the same reason a policy is: half
+    /// a signature set is a set nobody wrote, and while it is live the
+    /// extension reports clean scans for signatures it silently dropped.
+    ///
+    /// The encoding is the one `ufw_daemon::signatures::SignatureSet::encode`
+    /// produces and both kernel modules decode — flat and little-endian
+    /// rather than JSON, because the same bytes have to be read by two C
+    /// decoders that have no JSON parser and are not getting one.
+    func applySignatures(_ payload: Data) {
+        guard let set = UFWSignatureSet.decode(payload) else {
+            log.error("rejecting malformed signature payload (\(payload.count, privacy: .public) bytes)")
+            return
+        }
+        onSignatures?(set)
     }
 
     // MARK: Outbound
@@ -270,5 +326,70 @@ extension UFWAddress: CustomStringConvertible {
             return groups.joined(separator: ":")
         }
         return bytes.map(String.init).joined(separator: ".")
+    }
+}
+
+// MARK: - What the daemon can call
+
+/// The push half of the connection.
+///
+/// The extension also *pulls* policy and signatures when it connects, which is
+/// what covers a daemon restart. These exist for the other direction: an
+/// operator edits a policy, the daemon recompiles, and the new rules should
+/// reach the extension without waiting for a reconnect that may never come.
+///
+/// Every method replies. An XPC method with a reply block that is never
+/// invoked leaves the caller waiting until its own timeout, and the daemon
+/// would report that as "the extension did not answer" rather than as the
+/// specific thing that went wrong.
+extension UFWIPCBridge: UFWExtensionProtocol {
+    func installPolicy(_ payload: Data, withReply reply: @escaping (Bool, String?) -> Void) {
+        let before = installedRevision
+        applyPolicy(payload)
+        if installedRevision != before {
+            reply(true, nil)
+        } else {
+            reply(false, "the policy payload was rejected; see the extension log")
+        }
+    }
+
+    func installSignatures(_ payload: Data, withReply reply: @escaping (Bool, String?) -> Void) {
+        guard let set = UFWSignatureSet.decode(payload) else {
+            reply(false, "the signature payload was malformed and was rejected wholesale")
+            return
+        }
+        onSignatures?(set)
+        reply(true, nil)
+    }
+
+    func setEnforcementMode(_ mode: UInt8, withReply reply: @escaping (Bool) -> Void) {
+        guard let mode = UFWEnforcement(rawValue: mode) else {
+            log.error("refusing unknown enforcement mode \(mode, privacy: .public)")
+            reply(false)
+            return
+        }
+        UFWEnforcement.current = mode
+        // Recorded at notice or higher because emergency-allow means this host
+        // has stopped filtering, and that must be visible in the unified log
+        // even if the daemon's own sinks are unreachable.
+        if mode == .emergencyAllow {
+            log.critical("enforcement is OFF: every flow will be permitted")
+        } else {
+            log.notice("enforcement mode is now \(mode.rawValue, privacy: .public)")
+        }
+        reply(true)
+    }
+
+    func statistics(withReply reply: @escaping (Data?) -> Void) {
+        guard let source = statisticsSource else {
+            reply(nil)
+            return
+        }
+        let snapshot = source()
+        let stats = UFWExtensionStatistics(policyRevision: snapshot.revision,
+                                           ruleCount: snapshot.rules,
+                                           signatureCount: snapshot.signatures,
+                                           logEventsDropped: droppedEventCount)
+        reply(try? JSONEncoder().encode(stats))
     }
 }

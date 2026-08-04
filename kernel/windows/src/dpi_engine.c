@@ -19,6 +19,7 @@
  */
 
 #include "../inc/driver.h"
+#include "../inc/dpi_automaton.h"
 
 #define UFW_COND_FIELD   1
 #define UFW_COND_CONTENT 2
@@ -55,6 +56,10 @@
 #define UFW_MAX_PATTERN 64
 #define UFW_MAX_LOADED_SIGNATURES 1024
 
+#if UFW_MAX_PATTERN != UFW_AC_MAX_PATTERN
+#error "the condition pattern ceiling and the automaton's have drifted apart"
+#endif
+
 typedef struct _UFW_CONDITION {
 	UINT8  kind;
 	UINT8  op;
@@ -64,6 +69,11 @@ typedef struct _UFW_CONDITION {
 	UINT8  nocase;
 	UINT8  patternLength;
 	UINT8  pattern[UFW_MAX_PATTERN];
+	/* Index into the shipped automaton's pattern table, or
+	 * UFW_AC_NO_PATTERN when the set arrived without one. The pattern
+	 * bytes above are kept either way: the automaton's fallback arm needs
+	 * them, and so does every match when there is no automaton. */
+	UINT32 patternId;
 	UINT64 value;
 } UFW_CONDITION;
 
@@ -78,11 +88,32 @@ typedef struct _UFW_SIGNATURE {
 
 typedef struct _UFW_SIGNATURE_SET {
 	UINT32 count;
+	/* Whether `ac` below was populated. A set can legitimately arrive
+	 * without an automaton — no content conditions at all, or a pattern
+	 * set past the shipped table limits — and then every content condition
+	 * takes the bounded search it always took. */
+	UINT8  hasAutomaton;
+	UFW_AC ac;
 	UFW_SIGNATURE signatures[1];
 } UFW_SIGNATURE_SET;
 
 static UFW_SIGNATURE_SET *g_signatures;
 static EX_SPIN_LOCK g_signatureLock;
+
+/*
+ * Scan results, one entry per pattern, one buffer per processor.
+ *
+ * Not on the stack: 512 entries is 4 KiB and a DISPATCH_LEVEL stack has no
+ * room for it. Not one shared buffer either, because two processors scan two
+ * flows against the same signature set at the same time. The scan runs inside
+ * the shared spin lock, which holds IRQL at DISPATCH_LEVEL, so the processor
+ * index cannot change underneath it.
+ *
+ * UfwAcScan zeroes the entries it will use before writing any, so the
+ * previous flow's matches cannot leak into this one.
+ */
+static UFW_AC_HIT *g_acScratch;
+static ULONG g_acScratchProcessors;
 
 typedef struct _UFW_DECODED {
 	UINT32 values[128];
@@ -373,53 +404,37 @@ static BOOLEAN UfwCompare(_In_ UINT8 op, _In_ UINT64 left, _In_ UINT64 right)
 }
 
 /*
- * Naive bounded search, matching the Linux implementation.
+ * Content matching, matching the Linux implementation.
  *
- * The window is at most 32 KiB and patterns at most 64 bytes, so the worst
- * case is bounded and reached only by a pattern of repeated bytes a signature
- * author would have to write deliberately. A skip-table algorithm needs state
- * built per scan or cached per signature, and cached state is state an
- * attacker influences the use of. This loop has none.
+ * The search itself lives in inc/dpi_automaton.h, in two forms: a shared
+ * Aho-Corasick pass that finds every pattern in the set at once, and the
+ * bounded naive search it replaces. This function only chooses between them.
+ *
+ * The naive search is still the definition. It runs when a set ships without
+ * an automaton, and it is the fallback for the one case a scan result cannot
+ * decide. Keeping it means the fast path has something to be equivalent *to*,
+ * which is what daemon/tests/dpi_automaton_tests.rs checks on every build.
  */
 static BOOLEAN UfwContentMatch(_In_ const UFW_CONDITION *c,
+			       _In_ const UFW_SIGNATURE_SET *set,
+			       _In_opt_ const UFW_AC_HIT *hits,
 			       _In_reads_bytes_(len) const UINT8 *data,
 			       _In_ UINT32 len)
 {
-	UINT32 start, end, i, j;
+	if (hits && c->patternId != UFW_AC_NO_PATTERN &&
+	    c->patternId < set->ac.patternCount)
+		return UfwAcContentMatches(c->pattern, c->patternLength,
+					   c->nocase, c->offset, c->depth,
+					   hits[c->patternId], data, len);
 
-	if (c->patternLength == 0 || c->patternLength > UFW_MAX_PATTERN)
-		return FALSE;
-
-	start = c->offset;
-	if (start >= len)
-		return FALSE;
-
-	end = c->depth ? start + c->depth : len;
-	if (end > len)
-		end = len;
-	if (end < start + c->patternLength)
-		return FALSE;
-
-	for (i = start; i + c->patternLength <= end; i++) {
-		for (j = 0; j < c->patternLength; j++) {
-			UINT8 a = data[i + j];
-			UINT8 b = c->pattern[j];
-
-			if (c->nocase) {
-				if (a >= 'A' && a <= 'Z') a = (UINT8)(a + 32);
-				if (b >= 'A' && b <= 'Z') b = (UINT8)(b + 32);
-			}
-			if (a != b)
-				break;
-		}
-		if (j == c->patternLength)
-			return TRUE;
-	}
-	return FALSE;
+	return UfwAcNaiveContains(c->pattern, c->patternLength, c->nocase, data,
+				  len, c->offset, c->depth);
 }
 
 static BOOLEAN UfwConditionHolds(_In_ const UFW_CONDITION *c,
 				 _In_ const UFW_DECODED *decoded,
+				 _In_ const UFW_SIGNATURE_SET *set,
+				 _In_opt_ const UFW_AC_HIT *hits,
 				 _In_reads_bytes_(len) const UINT8 *data,
 				 _In_ UINT32 len)
 {
@@ -435,7 +450,7 @@ static BOOLEAN UfwConditionHolds(_In_ const UFW_CONDITION *c,
 		return UfwCompare(c->op, decoded->values[c->field], c->value);
 
 	case UFW_COND_CONTENT:
-		return UfwContentMatch(c, data, len);
+		return UfwContentMatch(c, set, hits, data, len);
 
 	case UFW_COND_ENTROPY:
 		return UfwEntropyCentibits(data, len) >= (UINT32)c->value;
@@ -451,6 +466,7 @@ UINT8 UfwDpiScan(_In_ UINT8 l7,
 		 _Inout_ UINT8 *truncated)
 {
 	UFW_SIGNATURE_SET *set;
+	UFW_AC_HIT *patternHits = NULL;
 	UFW_DECODED decoded;
 	KIRQL irql;
 	UINT32 i;
@@ -477,6 +493,25 @@ UINT8 UfwDpiScan(_In_ UINT8 l7,
 		return 0;
 	}
 
+	/*
+	 * One pass over the payload for every content pattern in the set,
+	 * before any signature is considered. The loop below then costs a
+	 * table lookup per content condition instead of a search over the
+	 * window.
+	 *
+	 * IRQL is DISPATCH_LEVEL inside the lock, so this thread cannot
+	 * migrate and the processor index below stays valid for the scan.
+	 */
+	if (set->hasAutomaton && g_acScratch) {
+		ULONG processor = KeGetCurrentProcessorIndex();
+
+		if (processor < g_acScratchProcessors) {
+			patternHits = &g_acScratch[(SIZE_T)processor *
+						   UFW_AC_MAX_PATTERNS];
+			UfwAcScan(&set->ac, data, (UINT32)length, patternHits);
+		}
+	}
+
 	for (i = 0; i < set->count && hits < maxMatches; i++) {
 		const UFW_SIGNATURE *sig = &set->signatures[i];
 		BOOLEAN all = TRUE;
@@ -489,8 +524,9 @@ UINT8 UfwDpiScan(_In_ UINT8 l7,
 			continue;
 
 		for (c = 0; c < sig->conditionCount && c < UFW_MAX_CONDITIONS; c++) {
-			if (!UfwConditionHolds(&sig->conditions[c], &decoded,
-					       data, (UINT32)length)) {
+			if (!UfwConditionHolds(&sig->conditions[c], &decoded, set,
+					       patternHits, data,
+					       (UINT32)length)) {
 				all = FALSE;
 				break;
 			}
@@ -522,6 +558,23 @@ static BOOLEAN UfwTake(_Inout_ UFW_CURSOR *c, _Out_writes_bytes_(n) VOID *out,
 	return TRUE;
 }
 
+/* Frees a set and whatever automaton arrays it owns. Tolerates NULL and a
+ * half-built set, which is what makes it usable from the malformed path. */
+static VOID UfwSignatureSetFree(_In_opt_ UFW_SIGNATURE_SET *set)
+{
+	if (!set)
+		return;
+	if (set->ac.patterns)
+		ExFreePoolWithTag(set->ac.patterns, UFW_POOL_TAG);
+	if (set->ac.states)
+		ExFreePoolWithTag(set->ac.states, UFW_POOL_TAG);
+	if (set->ac.transitions)
+		ExFreePoolWithTag(set->ac.transitions, UFW_POOL_TAG);
+	if (set->ac.outputs)
+		ExFreePoolWithTag(set->ac.outputs, UFW_POOL_TAG);
+	ExFreePoolWithTag(set, UFW_POOL_TAG);
+}
+
 NTSTATUS UfwDpiInstall(_In_reads_bytes_(length) const UINT8 *encoded,
 		       _In_ SIZE_T length)
 {
@@ -530,6 +583,7 @@ NTSTATUS UfwDpiInstall(_In_reads_bytes_(length) const UINT8 *encoded,
 	KIRQL irql;
 	UINT32 count, i;
 	SIZE_T bytes;
+	UINT8 hasAutomaton;
 
 	if (!UfwTake(&cur, &count, sizeof(count)))
 		return STATUS_INVALID_PARAMETER;
@@ -576,6 +630,7 @@ NTSTATUS UfwDpiInstall(_In_reads_bytes_(length) const UINT8 *encoded,
 				if (!UfwTake(&cur, &cond->offset, 4) ||
 				    !UfwTake(&cur, &cond->depth, 4) ||
 				    !UfwTake(&cur, &cond->nocase, 1) ||
+				    !UfwTake(&cur, &cond->patternId, 4) ||
 				    !UfwTake(&cur, &patternLength, 4))
 					goto malformed;
 				if (patternLength > UFW_MAX_PATTERN)
@@ -599,24 +654,93 @@ NTSTATUS UfwDpiInstall(_In_reads_bytes_(length) const UINT8 *encoded,
 		}
 	}
 
+	/*
+	 * The automaton section, if the daemon shipped one. It is absent when
+	 * no signature has a content condition, and when the pattern set
+	 * exceeds the table limits — in which case every content condition
+	 * carries UFW_AC_NO_PATTERN and takes the bounded search. That is a
+	 * performance cliff and never a behavioural one, which is the right
+	 * way round: a table that silently stopped covering some patterns
+	 * would report a clean scan of a stream it never searched.
+	 */
+	if (!UfwTake(&cur, &hasAutomaton, 1))
+		goto malformed;
+	if (hasAutomaton) {
+		UFW_AC_CURSOR acCur;
+		UFW_AC_SIZES sizes;
+
+		acCur.data = cur.data;
+		acCur.length = cur.length;
+		acCur.position = cur.position;
+
+		if (!UfwAcSizesOf(&acCur, &sizes))
+			goto malformed;
+
+		set->ac.patterns = (UFW_AC_PATTERN *)ExAllocatePool2(
+			POOL_FLAG_NON_PAGED,
+			(SIZE_T)sizes.patterns * sizeof(UFW_AC_PATTERN),
+			UFW_POOL_TAG);
+		set->ac.states = (UFW_AC_STATE *)ExAllocatePool2(
+			POOL_FLAG_NON_PAGED,
+			(SIZE_T)sizes.states * sizeof(UFW_AC_STATE),
+			UFW_POOL_TAG);
+		set->ac.transitions = (UFW_AC_TRANSITION *)ExAllocatePool2(
+			POOL_FLAG_NON_PAGED,
+			(SIZE_T)sizes.transitions * sizeof(UFW_AC_TRANSITION),
+			UFW_POOL_TAG);
+		set->ac.outputs = (UINT16 *)ExAllocatePool2(
+			POOL_FLAG_NON_PAGED,
+			(SIZE_T)sizes.outputs * sizeof(UINT16), UFW_POOL_TAG);
+		if (!set->ac.patterns || !set->ac.states ||
+		    !set->ac.transitions || !set->ac.outputs) {
+			UfwSignatureSetFree(set);
+			return STATUS_INSUFFICIENT_RESOURCES;
+		}
+
+		if (!UfwAcLoad(&acCur, &set->ac))
+			goto malformed;
+		set->hasAutomaton = 1;
+		cur.position = acCur.position;
+	}
+
 	irql = ExAcquireSpinLockExclusive(&g_signatureLock);
 	old = g_signatures;
 	g_signatures = set;
 	ExReleaseSpinLockExclusive(&g_signatureLock, irql);
 
 	/* The exclusive acquire drained every reader of the old set. */
-	if (old)
-		ExFreePoolWithTag(old, UFW_POOL_TAG);
+	UfwSignatureSetFree(old);
 	return STATUS_SUCCESS;
 
 malformed:
-	ExFreePoolWithTag(set, UFW_POOL_TAG);
+	UfwSignatureSetFree(set);
 	return STATUS_INVALID_PARAMETER;
 }
 
 NTSTATUS UfwDpiInitialize(VOID)
 {
+	SIZE_T bytes;
+
 	g_signatures = NULL;
+
+	/*
+	 * One scan-result buffer per processor, allocated once. Allocating in
+	 * the scan path is not an option: it runs at DISPATCH_LEVEL on the
+	 * packet path, where a pool allocation that fails is a verdict that
+	 * does not happen.
+	 */
+	g_acScratchProcessors = KeQueryActiveProcessorCountEx(ALL_PROCESSOR_GROUPS);
+	if (g_acScratchProcessors == 0)
+		g_acScratchProcessors = 1;
+	bytes = (SIZE_T)g_acScratchProcessors * UFW_AC_MAX_PATTERNS *
+		sizeof(UFW_AC_HIT);
+	g_acScratch = (UFW_AC_HIT *)ExAllocatePool2(POOL_FLAG_NON_PAGED, bytes,
+						    UFW_POOL_TAG);
+	if (!g_acScratch) {
+		/* Not fatal. Without scratch the scan takes the per-signature
+		 * search, which is slower and decides the same conditions. */
+		g_acScratchProcessors = 0;
+	}
 	return STATUS_SUCCESS;
 }
 
@@ -630,6 +754,11 @@ VOID UfwDpiShutdown(VOID)
 	g_signatures = NULL;
 	ExReleaseSpinLockExclusive(&g_signatureLock, irql);
 
-	if (old)
-		ExFreePoolWithTag(old, UFW_POOL_TAG);
+	UfwSignatureSetFree(old);
+
+	if (g_acScratch) {
+		ExFreePoolWithTag(g_acScratch, UFW_POOL_TAG);
+		g_acScratch = NULL;
+	}
+	g_acScratchProcessors = 0;
 }

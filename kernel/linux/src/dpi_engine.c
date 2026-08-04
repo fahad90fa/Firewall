@@ -36,10 +36,12 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/string.h>
+#include <linux/percpu.h>
 #include <linux/rcupdate.h>
 #include <linux/spinlock.h>
 
 #include "../inc/module.h"
+#include "../inc/dpi_automaton.h"
 
 /* Condition kinds, matching daemon/src/signatures.rs. */
 #define UFW_COND_FIELD   1
@@ -82,6 +84,10 @@
 #define UFW_MAX_PATTERN 64
 #define UFW_MAX_LOADED_SIGNATURES 1024
 
+#if UFW_MAX_PATTERN != UFW_AC_MAX_PATTERN
+#error "the condition pattern ceiling and the automaton's have drifted apart"
+#endif
+
 struct ufw_condition {
 	__u8  kind;
 	__u8  op;
@@ -91,6 +97,11 @@ struct ufw_condition {
 	__u8  nocase;
 	__u8  pattern_len;
 	__u8  pattern[UFW_MAX_PATTERN];
+	/* Index into the shipped automaton's pattern table, or
+	 * UFW_AC_NO_PATTERN when the set arrived without one. The pattern
+	 * bytes above are kept either way: the automaton's fallback arm needs
+	 * them, and so does every match when there is no automaton. */
+	__u32 pattern_id;
 	__u64 value;
 };
 
@@ -104,11 +115,29 @@ struct ufw_signature {
 
 struct ufw_signature_set {
 	__u32 count;
+	/* Whether `ac` below was populated. A set can legitimately arrive
+	 * without an automaton — no content conditions at all, or a pattern
+	 * set past the shipped table limits — and then every content
+	 * condition takes the bounded search it always took. */
+	__u8  has_automaton;
+	struct ufw_ac ac;
 	struct ufw_signature signatures[];
 };
 
 static struct ufw_signature_set __rcu *ufw_signatures;
 static DEFINE_SPINLOCK(ufw_signature_lock);
+
+/*
+ * Scan results, one entry per pattern, reused across scans.
+ *
+ * Per-CPU rather than on the stack: 512 entries is 4 KiB, and a kernel stack
+ * is 16. Per-CPU rather than per-set, because two CPUs scan two flows against
+ * the same signature set at the same time.
+ *
+ * `ufw_ac_scan` zeroes the entries it will use before writing any, so the
+ * previous flow's matches cannot leak into this one.
+ */
+static DEFINE_PER_CPU(struct ufw_ac_hit, ufw_ac_scratch[UFW_AC_MAX_PATTERNS]);
 
 /* --- decoded protocol facts --------------------------------------------- */
 
@@ -452,57 +481,39 @@ static bool compare(__u8 op, __u64 left, __u64 right)
 }
 
 /*
- * Bounded substring search.
+ * Content matching.
  *
- * Naive rather than Boyer-Moore, and that is a considered choice: the window
- * is at most 32 KiB and patterns are at most 64 bytes, so the worst case is
- * two million byte comparisons — measurable but bounded, and reached only by
- * a pattern of repeated bytes that a signature author would have to write
- * deliberately. A skip-table algorithm would need the table built per scan or
- * cached per signature, and the cached form is state an attacker influences
- * the use of. The simple loop has no state at all.
+ * The search itself lives in inc/dpi_automaton.h, in two forms: a shared
+ * Aho-Corasick pass that finds every pattern in the set at once, and the
+ * bounded naive search it replaces. This function only chooses between them.
+ *
+ * The naive search is still here, and is still the definition. It is what
+ * runs when a set ships without an automaton — no content conditions, or a
+ * pattern set past the shipped table limits — and it is the fallback for the
+ * one case a scan result cannot decide. Keeping it means the fast path has
+ * something to be equivalent *to*, which is what
+ * `daemon/tests/dpi_automaton_tests.rs` checks on every build.
  */
-static bool content_match(const struct ufw_condition *c, const __u8 *data,
+static bool content_match(const struct ufw_condition *c,
+			  const struct ufw_signature_set *set,
+			  const struct ufw_ac_hit *hits, const __u8 *data,
 			  __u32 len)
 {
-	__u32 start, end, i, j;
+	if (hits && c->pattern_id != UFW_AC_NO_PATTERN &&
+	    c->pattern_id < set->ac.pattern_count)
+		return ufw_ac_content_matches(c->pattern, c->pattern_len,
+					      c->nocase, c->offset, c->depth,
+					      hits[c->pattern_id], data, len) != 0;
 
-	if (c->pattern_len == 0 || c->pattern_len > UFW_MAX_PATTERN)
-		return false;
-
-	start = c->offset;
-	if (start >= len)
-		return false;
-
-	end = c->depth ? start + c->depth : len;
-	if (end > len)
-		end = len;
-	if (end < start + c->pattern_len)
-		return false;
-
-	for (i = start; i + c->pattern_len <= end; i++) {
-		for (j = 0; j < c->pattern_len; j++) {
-			__u8 a = data[i + j];
-			__u8 b = c->pattern[j];
-
-			if (c->nocase) {
-				if (a >= 'A' && a <= 'Z')
-					a = (__u8)(a + 32);
-				if (b >= 'A' && b <= 'Z')
-					b = (__u8)(b + 32);
-			}
-			if (a != b)
-				break;
-		}
-		if (j == c->pattern_len)
-			return true;
-	}
-	return false;
+	return ufw_ac_naive_contains(c->pattern, c->pattern_len, c->nocase,
+				     data, len, c->offset, c->depth) != 0;
 }
 
 static bool condition_holds(const struct ufw_condition *c,
 			    const struct ufw_decoded *decoded,
-			    const __u8 *data, __u32 len)
+			    const struct ufw_signature_set *set,
+			    const struct ufw_ac_hit *hits, const __u8 *data,
+			    __u32 len)
 {
 	switch (c->kind) {
 	case UFW_COND_FIELD:
@@ -517,7 +528,7 @@ static bool condition_holds(const struct ufw_condition *c,
 		return compare(c->op, decoded->values[c->field], c->value);
 
 	case UFW_COND_CONTENT:
-		return content_match(c, data, len);
+		return content_match(c, set, hits, data, len);
 
 	case UFW_COND_ENTROPY:
 		return entropy_centibits(data, len) >= (__u32)c->value;
@@ -531,6 +542,7 @@ int ufw_dpi_scan(__u8 l7, const __u8 *data, size_t len,
 		 __u32 *matched, __u8 max_matches, __u8 *truncated)
 {
 	const struct ufw_signature_set *set;
+	struct ufw_ac_hit *pattern_hits = NULL;
 	struct ufw_decoded decoded;
 	__u32 i;
 	int hits = 0;
@@ -556,6 +568,21 @@ int ufw_dpi_scan(__u8 l7, const __u8 *data, size_t len,
 		return 0;
 	}
 
+	/*
+	 * One pass over the payload for every content pattern in the set,
+	 * before any signature is considered. This is the whole point of the
+	 * automaton: the loop below then costs a table lookup per content
+	 * condition instead of a search over the window.
+	 *
+	 * get_cpu_ptr disables preemption for the duration, which bounds how
+	 * long the scratch is held to the length of this scan — and the scan
+	 * is bounded by the reassembly budget.
+	 */
+	if (set->has_automaton) {
+		pattern_hits = get_cpu_ptr(ufw_ac_scratch);
+		ufw_ac_scan(&set->ac, data, (__u32)len, pattern_hits);
+	}
+
 	for (i = 0; i < set->count && hits < max_matches; i++) {
 		const struct ufw_signature *sig = &set->signatures[i];
 		bool all = true;
@@ -569,8 +596,8 @@ int ufw_dpi_scan(__u8 l7, const __u8 *data, size_t len,
 			continue;
 
 		for (c = 0; c < sig->condition_count && c < UFW_MAX_CONDITIONS; c++) {
-			if (!condition_holds(&sig->conditions[c], &decoded,
-					     data, (__u32)len)) {
+			if (!condition_holds(&sig->conditions[c], &decoded, set,
+					     pattern_hits, data, (__u32)len)) {
 				all = false;
 				break;
 			}
@@ -578,6 +605,9 @@ int ufw_dpi_scan(__u8 l7, const __u8 *data, size_t len,
 		if (all)
 			matched[hits++] = sig->id;
 	}
+
+	if (pattern_hits)
+		put_cpu_ptr(ufw_ac_scratch);
 	rcu_read_unlock();
 
 	/* A truncated stream that produced no match is not evidence of
@@ -613,12 +643,26 @@ static bool take_u16(struct cursor *c, __u16 *v) { return take(c, v, 2); }
 static bool take_u32(struct cursor *c, __u32 *v) { return take(c, v, 4); }
 static bool take_u64(struct cursor *c, __u64 *v) { return take(c, v, 8); }
 
+/* Frees a set and whatever automaton arrays it owns. kvfree tolerates NULL,
+ * so this is also the cleanup path for a half-built set. */
+static void signature_set_free(struct ufw_signature_set *set)
+{
+	if (!set)
+		return;
+	kvfree(set->ac.patterns);
+	kvfree(set->ac.states);
+	kvfree(set->ac.transitions);
+	kvfree(set->ac.outputs);
+	kvfree(set);
+}
+
 int ufw_dpi_install(const __u8 *encoded, size_t len)
 {
 	struct cursor cur = { .data = encoded, .len = len, .pos = 0 };
 	struct ufw_signature_set *set, *old;
 	unsigned long flags;
 	__u32 count, i;
+	__u8 has_automaton;
 
 	if (!take_u32(&cur, &count))
 		return -EINVAL;
@@ -662,6 +706,7 @@ int ufw_dpi_install(const __u8 *encoded, size_t len)
 				if (!take_u32(&cur, &cond->offset) ||
 				    !take_u32(&cur, &cond->depth) ||
 				    !take_u8(&cur, &cond->nocase) ||
+				    !take_u32(&cur, &cond->pattern_id) ||
 				    !take_u32(&cur, &pattern_len))
 					goto malformed;
 				if (pattern_len > UFW_MAX_PATTERN)
@@ -685,6 +730,47 @@ int ufw_dpi_install(const __u8 *encoded, size_t len)
 		}
 	}
 
+	/*
+	 * The automaton section, if the daemon shipped one. It is absent when
+	 * no signature has a content condition, and when the pattern set
+	 * exceeds the table limits — in which case every content condition
+	 * carries UFW_AC_NO_PATTERN and takes the bounded search. That is a
+	 * performance cliff and never a behavioural one, which is the right
+	 * way round: a table that silently stopped covering some patterns
+	 * would report a clean scan of a stream it never searched.
+	 */
+	if (!take_u8(&cur, &has_automaton))
+		goto malformed;
+	if (has_automaton) {
+		struct ufw_ac_cursor ac_cur = {
+			.data = cur.data, .len = cur.len, .pos = cur.pos
+		};
+		struct ufw_ac_sizes sizes;
+
+		if (!ufw_ac_sizes_of(&ac_cur, &sizes))
+			goto malformed;
+
+		set->ac.patterns = kvcalloc(sizes.patterns,
+					    sizeof(*set->ac.patterns), GFP_KERNEL);
+		set->ac.states = kvcalloc(sizes.states,
+					  sizeof(*set->ac.states), GFP_KERNEL);
+		set->ac.transitions = kvcalloc(sizes.transitions,
+					       sizeof(*set->ac.transitions),
+					       GFP_KERNEL);
+		set->ac.outputs = kvcalloc(sizes.outputs,
+					   sizeof(*set->ac.outputs), GFP_KERNEL);
+		if (!set->ac.patterns || !set->ac.states ||
+		    !set->ac.transitions || !set->ac.outputs) {
+			signature_set_free(set);
+			return -ENOMEM;
+		}
+
+		if (!ufw_ac_load(&ac_cur, &set->ac))
+			goto malformed;
+		set->has_automaton = 1;
+		cur.pos = ac_cur.pos;
+	}
+
 	spin_lock_irqsave(&ufw_signature_lock, flags);
 	old = rcu_dereference_protected(ufw_signatures,
 					lockdep_is_held(&ufw_signature_lock));
@@ -693,12 +779,12 @@ int ufw_dpi_install(const __u8 *encoded, size_t len)
 
 	if (old) {
 		synchronize_rcu();
-		kvfree(old);
+		signature_set_free(old);
 	}
 	return 0;
 
 malformed:
-	kvfree(set);
+	signature_set_free(set);
 	return -EINVAL;
 }
 
@@ -721,6 +807,6 @@ void ufw_dpi_exit(void)
 
 	if (old) {
 		synchronize_rcu();
-		kvfree(old);
+		signature_set_free(old);
 	}
 }

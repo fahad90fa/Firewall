@@ -225,3 +225,105 @@ fn a_deny_at_the_stream_stage_beats_an_allow_inspect_at_the_packet_stage() {
         "an exploit inside a flow the packet stage permitted",
     );
 }
+
+// --- multi-pattern matching -------------------------------------------------
+
+#[test]
+fn the_shipped_signatures_build_one_shared_automaton() {
+    // Part Five asks for a single pass over the payload that scans every
+    // signature, rather than a search per signature. If the rules this project
+    // ships do not produce a table, every deployment takes the slow path and
+    // the claim is decoration.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("sig-rules");
+    if !root.exists() {
+        return;
+    }
+    let (set, errors) = signatures::load_dir(&root);
+    assert!(errors.is_empty(), "{errors:#?}");
+
+    let automaton = set.automaton().expect("the shipped signatures have content patterns");
+    assert!(
+        automaton.patterns().len() >= 3,
+        "only {} distinct patterns; the corpus is too thin to prove anything",
+        automaton.patterns().len()
+    );
+    // Every state costs kernel memory on three platforms, so the size of what
+    // gets shipped is worth an assertion rather than a hope.
+    assert!(
+        automaton.state_count() < 4096,
+        "the shipped table needs {} states",
+        automaton.state_count()
+    );
+}
+
+#[test]
+fn the_shared_pass_decides_content_conditions_the_way_a_direct_search_would() {
+    // The automaton exists to make scanning cheaper, not to change verdicts.
+    // This walks the shipped signature set over payloads that exercise the
+    // awkward cases — a pattern at offset zero, a pattern repeated, a pattern
+    // that is a prefix of another — and checks both paths agree on each one.
+    let mut set = SignatureSet::default();
+    let mut errors = Vec::new();
+    signatures::parse_into(
+        &mut set,
+        "version: 1\nsignatures:\n\
+         \x20 - id: post\n    protocol: http\n    conditions:\n      \
+         - content: \"POST\", offset: 0, depth: 8\n\
+         \x20 - id: post-admin\n    protocol: http\n    conditions:\n      \
+         - content: \"POST /admin\", offset: 0, depth: 64\n\
+         \x20 - id: admin-anywhere\n    protocol: http\n    conditions:\n      \
+         - content: \"/admin\", depth: 512, nocase: true\n\
+         \x20 - id: tls-record\n    protocol: tls\n    conditions:\n      \
+         - content: |16 03 01|, offset: 0, depth: 8\n",
+        std::path::Path::new("test.yaml"),
+        &mut errors,
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+
+    let automaton = set.automaton().expect("four content patterns");
+    let patterns = automaton.patterns().to_vec();
+
+    let payloads: Vec<&[u8]> = vec![
+        b"",
+        b"POST /admin HTTP/1.1\r\n",
+        b"GET /admin HTTP/1.1\r\n",
+        b"GET / HTTP/1.1\r\nReferer: /ADMIN\r\n",
+        b"POST /a HTTP/1.1\r\n\r\nPOST /admin",
+        &[0x16, 0x03, 0x01, 0x00, 0x2f],
+        b"...................../admin.................../admin",
+    ];
+
+    for payload in payloads {
+        let table = automaton.scan(payload);
+        for signature in set.signatures.values() {
+            for condition in &signature.conditions {
+                let ufw_daemon::signatures::Condition::Content {
+                    pattern, offset, depth, nocase,
+                } = condition
+                else {
+                    continue;
+                };
+                let id = patterns
+                    .iter()
+                    .position(|p| p.bytes == *pattern && p.nocase == *nocase)
+                    .expect("every content pattern has an id") as u32;
+
+                let shared = signatures::content_holds(condition, Some(&table), id, payload);
+                let direct = ufw_daemon::automaton::naive_contains(
+                    pattern, *nocase, payload, *offset, *depth,
+                );
+                assert_eq!(
+                    shared,
+                    direct,
+                    "`{}` disagrees on {:?}: shared pass says {shared}, direct search says \
+                     {direct}",
+                    signature.name,
+                    String::from_utf8_lossy(payload)
+                );
+            }
+        }
+    }
+}

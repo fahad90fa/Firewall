@@ -40,7 +40,7 @@ typedef uint64_t __u64;
  * to install into a module that reports a different revision, because a
  * mismatched rule table is worse than no rule table: it filters, but not
  * what the operator wrote. */
-#define UFW_ABI_REVISION 1
+#define UFW_ABI_REVISION 2
 
 /* --- limits ------------------------------------------------------------ */
 

@@ -43,7 +43,12 @@ import os.log
 struct UFWSignature {
     enum Condition {
         case field(id: UInt16, op: UFWCompare, value: UInt64)
-        case content(pattern: [UInt8], offset: Int, depth: Int, nocase: Bool)
+        /// `patternId` indexes the shipped automaton's pattern table, or is
+        /// `UFWAutomaton.noPattern` when the set arrived without one. The
+        /// pattern bytes are kept either way: the automaton's fallback arm
+        /// needs them, and so does every match when there is no automaton.
+        case content(pattern: [UInt8], offset: Int, depth: Int, nocase: Bool,
+                     patternId: UInt32)
         /// Entropy in hundredths of a bit per byte. Integer, because the two
         /// kernel implementations have no floating point available and a
         /// threshold that rounds differently per platform is a divergence that
@@ -99,13 +104,20 @@ final class UFWStreamHandler {
     /// boundary.
     private var contexts: [String: Context] = [:]
     private var signatures: [UFWSignature] = []
+    private var automaton: UFWAutomaton?
     private let lock = NSLock()
 
-    func installSignatures(_ set: [UFWSignature]) {
+    func installSignatures(_ set: UFWSignatureSet) {
         lock.lock()
-        signatures = set
+        signatures = set.signatures
+        automaton = set.automaton
         lock.unlock()
-        log.info("installed \(set.count, privacy: .public) signatures")
+
+        // No automaton means either nothing to search for, or a pattern set
+        // past the shipped table limits. Both mean a search per signature:
+        // slower, and the same verdicts.
+        let patterns = set.automaton?.patterns.count ?? 0
+        log.info("installed \(set.signatures.count, privacy: .public) signatures, \(patterns, privacy: .public) shared content patterns")
     }
 
     func flushAll() {
@@ -186,6 +198,12 @@ final class UFWStreamHandler {
         let decoded = UFWProtocolDecoder.decode(bytes, l7: l7)
         var hits: [UInt32] = []
 
+        // One pass over the payload for every content pattern in the set,
+        // before any signature is considered. The loop below then costs a
+        // table lookup per content condition instead of a search over the
+        // window. Same verdicts either way — see UFWAutomaton.
+        let patternHits = automaton?.scan(bytes)
+
         for signature in signatures {
             // An `unknown`-scoped signature runs against everything, which is
             // how a content match on a protocol the decoders do not know still
@@ -193,7 +211,7 @@ final class UFWStreamHandler {
             if signature.l7 != .unknown && signature.l7 != l7 { continue }
 
             let all = signature.conditions.allSatisfy { condition in
-                holds(condition, decoded: decoded, bytes: bytes)
+                holds(condition, decoded: decoded, bytes: bytes, patternHits: patternHits)
             }
             if all {
                 hits.append(signature.id)
@@ -204,7 +222,8 @@ final class UFWStreamHandler {
     }
 
     private func holds(_ condition: UFWSignature.Condition,
-                       decoded: [UInt16: UInt32], bytes: [UInt8]) -> Bool {
+                       decoded: [UInt16: UInt32], bytes: [UInt8],
+                       patternHits: [UFWAutomaton.Hit]?) -> Bool {
         switch condition {
         case let .field(id, op, value):
             if id == UFWField.payloadLength {
@@ -217,13 +236,151 @@ final class UFWStreamHandler {
             guard let actual = decoded[id] else { return false }
             return op.apply(UInt64(actual), value)
 
-        case let .content(pattern, offset, depth, nocase):
+        case let .content(pattern, offset, depth, nocase, patternId):
+            if let hits = patternHits, patternId != UFWAutomaton.noPattern,
+               Int(patternId) < hits.count {
+                return UFWContentSearch.matches(bytes, pattern: pattern, offset: offset,
+                                                depth: depth, nocase: nocase,
+                                                hit: hits[Int(patternId)])
+            }
             return UFWContentSearch.contains(bytes, pattern: pattern, offset: offset,
                                              depth: depth, nocase: nocase)
 
         case let .entropy(_, minCentibits):
             return UFWEntropy.centibits(bytes) >= minCentibits
         }
+    }
+}
+
+// MARK: - Multi-pattern search
+
+/// The multi-pattern automaton, decoded from the table the daemon shipped.
+///
+/// Mirrors `daemon/src/automaton.rs`, `kernel/linux/inc/dpi_automaton.h` and
+/// `kernel/windows/inc/dpi_automaton.h`. There is no construction here on
+/// purpose: building an Aho-Corasick automaton is the subtle part — failure
+/// links, output-set merging, the root self-loop — and doing it in three
+/// places is three chances to disagree about what a stream contains. The
+/// daemon builds it once; this walks it.
+struct UFWAutomaton {
+    struct Pattern {
+        let bytes: [UInt8]
+        let nocase: Bool
+    }
+
+    struct State {
+        let fail: Int
+        let transStart: Int
+        let transCount: Int
+        let outStart: Int
+        let outCount: Int
+    }
+
+    struct Transition {
+        let byte: UInt8
+        let next: Int
+    }
+
+    struct Trie {
+        /// Whether input bytes are ASCII-folded before traversal. Patterns in
+        /// a folded trie are stored folded, so case-insensitivity costs one
+        /// comparison per byte rather than a second pass per pattern.
+        let fold: Bool
+        let stateBase: Int
+        let stateCount: Int
+        let transBase: Int
+        let outBase: Int
+    }
+
+    /// What one pattern did in one scan. `count` saturates at 2: zero, one at
+    /// a known offset, or "more than one, ask the slow path". Storing every
+    /// offset would make the result table as long as attacker-chosen input.
+    struct Hit {
+        var firstStart: UInt32 = 0
+        var count: UInt8 = 0
+    }
+
+    /// Must equal the ceilings in the two C headers and in the Rust builder.
+    static let maxPatterns = 512
+    static let maxStates = 16384
+    static let maxOutputs = 8192
+    static let maxPatternBytes = 64
+
+    /// A content condition whose pattern has no automaton entry.
+    static let noPattern: UInt32 = 0xFFFF_FFFF
+
+    let patterns: [Pattern]
+    let states: [State]
+    let transitions: [Transition]
+    let outputs: [UInt16]
+    let tries: [Trie]
+
+    /// ASCII case folding, and only ASCII — matching the naive search, which
+    /// folds `A...Z` and nothing else. Anything more correct here would be a
+    /// divergence dressed as an improvement.
+    static func fold(_ b: UInt8) -> UInt8 {
+        (b >= 65 && b <= 90) ? b &+ 32 : b
+    }
+
+    /// Binary search rather than a scan: the root of a trie over printable
+    /// patterns can have dozens of children, and this runs once per input
+    /// byte per trie. Returns nil for "no transition".
+    private func transition(_ trie: Trie, _ state: Int, _ byte: UInt8) -> Int? {
+        let st = states[trie.stateBase + state]
+        var lo = 0
+        var hi = st.transCount
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2
+            let tr = transitions[trie.transBase + st.transStart + mid]
+            if tr.byte == byte { return tr.next }
+            if tr.byte < byte { lo = mid + 1 } else { hi = mid }
+        }
+        return nil
+    }
+
+    /// Follow one input byte, falling back along failure links until a
+    /// transition exists or the root is reached. Amortised O(1) per byte: a
+    /// fallback strictly decreases depth, and depth rises by at most one per
+    /// byte. The `state == 0` exit is what stops the root trapping on a byte
+    /// no pattern starts with.
+    private func step(_ trie: Trie, _ state: Int, _ byte: UInt8) -> Int {
+        var current = state
+        while true {
+            if let next = transition(trie, current, byte) { return next }
+            if current == 0 { return 0 }
+            current = states[trie.stateBase + current].fail
+        }
+    }
+
+    /// One pass over `data` for every pattern in the table.
+    func scan(_ data: [UInt8]) -> [Hit] {
+        var hits = [Hit](repeating: Hit(), count: patterns.count)
+        guard !data.isEmpty else { return hits }
+
+        for trie in tries {
+            var state = 0
+            for i in 0..<data.count {
+                let byte = trie.fold ? Self.fold(data[i]) : data[i]
+                state = step(trie, state, byte)
+                let st = states[trie.stateBase + state]
+                guard st.outCount > 0 else { continue }
+                for k in 0..<st.outCount {
+                    let pid = Int(outputs[trie.outBase + st.outStart + k])
+                    let plen = patterns[pid].bytes.count
+                    // `i` indexes the last byte of the match. Matches arrive
+                    // in increasing end offset and a pattern has a fixed
+                    // length, so the first one recorded is the earliest.
+                    let start = UInt32(i + 1 - plen)
+                    if hits[pid].count == 0 {
+                        hits[pid].firstStart = start
+                        hits[pid].count = 1
+                    } else if hits[pid].count == 1 {
+                        hits[pid].count = 2
+                    }
+                }
+            }
+        }
+        return hits
     }
 }
 
@@ -260,6 +417,34 @@ enum UFWContentSearch {
             i += 1
         }
         return false
+    }
+
+    /// Decide one content condition from a scan result.
+    ///
+    /// Exactly equivalent to `contains` over the same arguments. The four
+    /// arms, cheapest first:
+    ///
+    ///   1. absent from the whole buffer   => absent from any window in it
+    ///   2. first occurrence in the window => match
+    ///   3. exactly one occurrence, outside the window => no match
+    ///   4. several occurrences, none of them the first => search this one
+    ///
+    /// Arm 1 is the common case for a signature set and is why the shared
+    /// pass pays for itself. Arm 4 is reached only by a pattern that repeats
+    /// within one stream and is scoped to a window excluding its first hit.
+    static func matches(_ haystack: [UInt8], pattern: [UInt8], offset: Int,
+                        depth: Int, nocase: Bool, hit: UFWAutomaton.Hit) -> Bool {
+        guard hit.count > 0 else { return false }
+        guard !pattern.isEmpty, offset < haystack.count else { return false }
+
+        let end = depth > 0 ? min(offset + depth, haystack.count) : haystack.count
+        guard end >= offset + pattern.count else { return false }
+
+        let first = Int(hit.firstStart)
+        if first >= offset && first + pattern.count <= end { return true }
+        if hit.count == 1 { return false }
+        return contains(haystack, pattern: pattern, offset: offset, depth: depth,
+                        nocase: nocase)
     }
 }
 
@@ -517,5 +702,209 @@ enum UFWProtocolDecoder {
             bannerLength += 1
         }
         out[UFWField.sshBannerLength] = bannerLength
+    }
+}
+
+// MARK: - Signature wire decoding
+
+/// Everything one `SignatureInstall` carries: the signatures, and the
+/// multi-pattern table they share.
+struct UFWSignatureSet {
+    let signatures: [UFWSignature]
+    let automaton: UFWAutomaton?
+
+    static let empty = UFWSignatureSet(signatures: [], automaton: nil)
+}
+
+/// Little-endian reader over the daemon's flat encoding.
+///
+/// Every read is bounds-checked. The payload arrives over XPC from a peer
+/// whose Team ID was verified, which makes it the daemon — not which makes it
+/// correct, and a decoder is not the place to discover the difference.
+private struct UFWWireReader {
+    let bytes: [UInt8]
+    var position = 0
+
+    var remaining: Int { bytes.count - position }
+
+    mutating func u8() -> UInt8? {
+        guard remaining >= 1 else { return nil }
+        defer { position += 1 }
+        return bytes[position]
+    }
+
+    mutating func u16() -> UInt16? {
+        guard remaining >= 2 else { return nil }
+        defer { position += 2 }
+        return UInt16(bytes[position]) | (UInt16(bytes[position + 1]) << 8)
+    }
+
+    mutating func u32() -> UInt32? {
+        guard remaining >= 4 else { return nil }
+        defer { position += 4 }
+        return UInt32(bytes[position])
+            | (UInt32(bytes[position + 1]) << 8)
+            | (UInt32(bytes[position + 2]) << 16)
+            | (UInt32(bytes[position + 3]) << 24)
+    }
+
+    mutating func u64() -> UInt64? {
+        guard let lo = u32(), let hi = u32() else { return nil }
+        return UInt64(lo) | (UInt64(hi) << 32)
+    }
+
+    mutating func raw(_ count: Int) -> [UInt8]? {
+        guard count >= 0, remaining >= count else { return nil }
+        defer { position += count }
+        return Array(bytes[position..<(position + count)])
+    }
+}
+
+extension UFWSignatureSet {
+    /// Decode one signature payload, or return nil.
+    ///
+    /// Nil rather than a partial set on purpose. Half a signature set is a
+    /// set nobody wrote, and the window it is live for is one in which the
+    /// extension reports clean scans for signatures it silently dropped —
+    /// which is the failure mode the whole subsystem exists to avoid.
+    static func decode(_ data: Data) -> UFWSignatureSet? {
+        var r = UFWWireReader(bytes: [UInt8](data))
+
+        guard let count = r.u32(), count <= 1024 else { return nil }
+        var signatures: [UFWSignature] = []
+        signatures.reserveCapacity(Int(count))
+
+        for _ in 0..<count {
+            guard let id = r.u32(), let l7Raw = r.u8(), let severity = r.u8(),
+                  let conditionCount = r.u16(), conditionCount <= 8 else { return nil }
+
+            var conditions: [UFWSignature.Condition] = []
+            conditions.reserveCapacity(Int(conditionCount))
+
+            for _ in 0..<conditionCount {
+                guard let kind = r.u8() else { return nil }
+                switch kind {
+                case 1:
+                    guard let field = r.u16(), let opRaw = r.u8(),
+                          let op = UFWCompare(rawValue: opRaw), let value = r.u64()
+                    else { return nil }
+                    conditions.append(.field(id: field, op: op, value: value))
+                case 2:
+                    guard let offset = r.u32(), let depth = r.u32(),
+                          let nocase = r.u8(), let patternId = r.u32(),
+                          let length = r.u32(),
+                          length <= UInt32(UFWAutomaton.maxPatternBytes),
+                          let pattern = r.raw(Int(length)) else { return nil }
+                    conditions.append(.content(pattern: pattern, offset: Int(offset),
+                                               depth: Int(depth), nocase: nocase != 0,
+                                               patternId: patternId))
+                case 3:
+                    // The encoding reuses the offset slot for min_centibits on
+                    // this kind, matching both C decoders.
+                    guard let field = r.u16(), let minCentibits = r.u32() else { return nil }
+                    conditions.append(.entropy(id: field, minCentibits: minCentibits))
+                default:
+                    return nil
+                }
+            }
+
+            signatures.append(UFWSignature(id: id,
+                                           l7: UFWL7(rawValue: l7Raw) ?? .unknown,
+                                           severity: severity,
+                                           conditions: conditions))
+        }
+
+        guard let hasAutomaton = r.u8() else { return nil }
+        if hasAutomaton == 0 {
+            return UFWSignatureSet(signatures: signatures, automaton: nil)
+        }
+        guard let automaton = decodeAutomaton(&r) else { return nil }
+        return UFWSignatureSet(signatures: signatures, automaton: automaton)
+    }
+
+    /// Decode the shipped table, validating every index so the traversal
+    /// needs no checks at all.
+    private static func decodeAutomaton(_ r: inout UFWWireReader) -> UFWAutomaton? {
+        guard let patternCount = r.u32(), patternCount > 0,
+              patternCount <= UInt32(UFWAutomaton.maxPatterns) else { return nil }
+
+        var patterns: [UFWAutomaton.Pattern] = []
+        patterns.reserveCapacity(Int(patternCount))
+        for _ in 0..<patternCount {
+            guard let nocase = r.u8(), let length = r.u32(), length > 0,
+                  length <= UInt32(UFWAutomaton.maxPatternBytes),
+                  let bytes = r.raw(Int(length)) else { return nil }
+            patterns.append(UFWAutomaton.Pattern(bytes: bytes, nocase: nocase != 0))
+        }
+
+        guard let trieCount = r.u8(), trieCount > 0, trieCount <= 2 else { return nil }
+
+        var states: [UFWAutomaton.State] = []
+        var transitions: [UFWAutomaton.Transition] = []
+        var outputs: [UInt16] = []
+        var tries: [UFWAutomaton.Trie] = []
+
+        for _ in 0..<trieCount {
+            guard let fold = r.u8(), let stateCount = r.u32(), stateCount > 0,
+                  let transCount = r.u32(), let outCount = r.u32() else { return nil }
+            guard states.count + Int(stateCount) <= UFWAutomaton.maxStates,
+                  transitions.count + Int(transCount) <= UFWAutomaton.maxStates,
+                  outputs.count + Int(outCount) <= UFWAutomaton.maxOutputs
+            else { return nil }
+
+            let stateBase = states.count
+            let transBase = transitions.count
+            let outBase = outputs.count
+
+            for _ in 0..<stateCount {
+                guard let fail = r.u32(), let transStart = r.u32(),
+                      let stateTransCount = r.u16(), let outStart = r.u32(),
+                      let stateOutCount = r.u16() else { return nil }
+                guard fail < stateCount,
+                      transStart <= transCount,
+                      UInt32(stateTransCount) <= transCount - transStart,
+                      outStart <= outCount,
+                      UInt32(stateOutCount) <= outCount - outStart else { return nil }
+                states.append(UFWAutomaton.State(fail: Int(fail),
+                                                 transStart: Int(transStart),
+                                                 transCount: Int(stateTransCount),
+                                                 outStart: Int(outStart),
+                                                 outCount: Int(stateOutCount)))
+            }
+
+            for _ in 0..<transCount {
+                guard let byte = r.u8(), let next = r.u32(), next < stateCount
+                else { return nil }
+                transitions.append(UFWAutomaton.Transition(byte: byte, next: Int(next)))
+            }
+
+            // Each state's transitions must be sorted by byte, because the
+            // traversal binary-searches them. An unsorted slice would not
+            // fail — it would silently miss matches, which is an extension
+            // reporting a clean scan of a stream it mis-walked.
+            for index in stateBase..<states.count {
+                let st = states[index]
+                guard st.transCount > 1 else { continue }
+                for k in 1..<st.transCount {
+                    let prev = transitions[transBase + st.transStart + k - 1]
+                    let cur = transitions[transBase + st.transStart + k]
+                    if prev.byte >= cur.byte { return nil }
+                }
+            }
+
+            for _ in 0..<outCount {
+                guard let pid = r.u16(), UInt32(pid) < patternCount else { return nil }
+                outputs.append(pid)
+            }
+
+            tries.append(UFWAutomaton.Trie(fold: fold != 0,
+                                           stateBase: stateBase,
+                                           stateCount: Int(stateCount),
+                                           transBase: transBase,
+                                           outBase: outBase))
+        }
+
+        return UFWAutomaton(patterns: patterns, states: states,
+                            transitions: transitions, outputs: outputs, tries: tries)
     }
 }

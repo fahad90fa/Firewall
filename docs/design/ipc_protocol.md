@@ -46,6 +46,7 @@ request and its reply does not get mistaken for the reply.
 | `LogEvents` | ← | Batched decisions |
 | `StatsRequest` / `Response` | → / ← | Counters |
 | `SetMode` / `ModeAck` | → / ← | enforce / monitor / emergency-allow |
+| `SignatureInstall` / `Ack` | → / ← | DPI signature set and its shared pattern table |
 | `Error` | ← | Structured failure |
 
 ## The handshake decides everything else

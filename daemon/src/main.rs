@@ -48,7 +48,7 @@ use ufw_daemon::policy_store::describe;
 use ufw_daemon::state::{self, DaemonState, Health};
 use ufw_shared::constants;
 use ufw_shared::log_types::{EventKind, Severity};
-use ufw_shared::protocol::EnforcementMode;
+use ufw_shared::protocol::{Capabilities, EnforcementMode};
 
 fn main() -> ExitCode {
     match run() {
@@ -297,6 +297,70 @@ fn run() -> Result<(), String> {
             (None, None)
         }
     };
+
+    // --- signature install -----------------------------------------------
+    //
+    // After the handshake, before the policy. A module that receives a DPI
+    // rule before the signature it names would evaluate that rule against an
+    // empty signature set for however long the gap lasted, and report a clean
+    // scan of traffic nothing had been loaded to look for.
+    //
+    // A module without the DPI capability is skipped rather than failed: the
+    // policy may not use DPI at all, and refusing to start would turn an
+    // unused feature into an outage. A policy that *does* use DPI on such a
+    // module is reported by the dangling-reference check further down.
+    if let Some(channel) = &channel {
+        let capabilities = daemon.kernel().capabilities;
+        if capabilities.has(Capabilities::DPI) {
+            let payload = daemon.signatures().encode();
+            match channel.install_signatures(&payload, Duration::from_millis(config.ipc.connect_timeout_ms)) {
+                Ok(ack) => logs.note(
+                    &config.daemon.host_id,
+                    Severity::Notice,
+                    EventKind::PolicyChange,
+                    format!(
+                        "installed {} signature(s) into the kernel module{}",
+                        ack.signatures_installed,
+                        if ack.patterns_installed > 0 {
+                            format!(
+                                ", {} content pattern(s) in one shared automaton",
+                                ack.patterns_installed
+                            )
+                        } else {
+                            // Either nothing to search for, or a set past the
+                            // module's table limits. Both mean the module
+                            // searches per signature: slower, same verdicts.
+                            String::from(", no shared automaton (per-signature search)")
+                        }
+                    ),
+                ),
+                Err(e) => {
+                    // Not fatal. The module keeps filtering on the policy it
+                    // has; what it loses is payload inspection, and saying so
+                    // is more use than exiting.
+                    let message = format!("signature install rejected by the module: {e}");
+                    logs.note(
+                        &config.daemon.host_id,
+                        Severity::Error,
+                        EventKind::SystemFault,
+                        message.clone(),
+                    );
+                    eprintln!("ufwd: {message}");
+                }
+            }
+        } else if !daemon.signatures().is_empty() {
+            logs.note(
+                &config.daemon.host_id,
+                Severity::Warning,
+                EventKind::SystemFault,
+                format!(
+                    "{} signature(s) loaded but the kernel module does not report the dpi \
+                     capability; no payload inspection will happen",
+                    daemon.signatures().len()
+                ),
+            );
+        }
+    }
 
     // --- policy ----------------------------------------------------------
     let control = Arc::new(Supervisor {

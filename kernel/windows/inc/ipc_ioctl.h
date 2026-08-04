@@ -59,7 +59,7 @@ typedef int32_t  LONG;
 #include <fwpmu.h>
 #endif
 
-#define UFW_ABI_REVISION 1
+#define UFW_ABI_REVISION 2
 
 /* --- device and IOCTL codes --------------------------------------------- */
 

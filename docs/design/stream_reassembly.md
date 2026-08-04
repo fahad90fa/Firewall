@@ -131,6 +131,54 @@ place the three can disagree.
 Disjunction lives in `signature_groups:` instead. Two signatures, one group, one
 line.
 
+### One pass, every pattern
+
+A signature set names byte patterns; a stream has to be searched for all of
+them. Searching once per signature costs `signatures × window`. Searching once
+for all of them costs `window`.
+
+The automaton that does that — Aho-Corasick — is built **in the daemon**, once,
+and shipped as a finished table. Each kernel receives goto edges, failure links
+and merged output sets, and runs a loop with no construction in it: follow a
+transition, fall back along a failure link if there is none, record what the
+state outputs.
+
+That split is the whole point. Aho-Corasick is easy enough that writing it
+three times looks reasonable, and just subtle enough — output-set merging, the
+root self-loop, the fail-chain depth argument — that the three would not agree.
+Building it once means there is one implementation to get right and three
+traversals to check against it, which is what
+`daemon/tests/dpi_automaton_tests.rs` does: it compiles both C headers with a
+hosted compiler and runs them against the Rust builder on a shared corpus.
+
+A scan produces, per pattern, the offset of the **first** occurrence and
+whether there was more than one. Not every offset — that would be a table whose
+size an attacker chooses. A condition's `offset`/`depth` window is then decided
+from those two facts:
+
+| | |
+| --- | --- |
+| no occurrence in the buffer | no occurrence in any window inside it |
+| first occurrence inside the window | match |
+| exactly one occurrence, outside the window | no match |
+| several, none of them the first | search that one pattern directly |
+
+The last row is why this is *exactly* equivalent to the per-signature search
+rather than approximately. It is reached only by a pattern that repeats within
+one stream and is scoped to a window excluding its first hit.
+
+Case sensitivity is two automatons, not two comparisons: patterns marked
+`nocase` go into a trie over ASCII-folded bytes, the rest into a trie over raw
+bytes, and both advance in the same loop over the same input. One pass either
+way.
+
+The table is bounded — 512 distinct patterns, 16384 states, 8192 output entries.
+A set that exceeds any of them ships **without** an automaton, and every content
+condition falls back to the bounded search. That is a performance cliff and
+never a behavioural one, which is the right way round: a table that silently
+stopped covering some patterns would report a clean scan of a stream nothing
+had looked at.
+
 ### Fields, not offsets
 
 A `field:` condition names a value the decoder already extracted —

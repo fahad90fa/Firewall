@@ -53,6 +53,7 @@ final class UFWFilterDataProvider: NEFilterDataProvider {
     private let streams = UFWStreamHandler()
     private let packets = UFWPacketHandler()
     private var bridge: UFWIPCBridge?
+    private let installed = UFWInstalledSnapshot()
 
     // MARK: Lifecycle
 
@@ -68,11 +69,21 @@ final class UFWFilterDataProvider: NEFilterDataProvider {
             guard let self else { return }
             self.queue.async {
                 self.engine = engine
+                self.installed.setPolicy(revision: engine.revision, rules: engine.ruleCount)
                 self.log.info("installed policy revision \(engine.revision, privacy: .public) (\(engine.ruleCount, privacy: .public) rules)")
             }
         }
         bridge.onSignatures = { [weak self] set in
-            self?.queue.async { self?.streams.installSignatures(set) }
+            self?.queue.async {
+                self?.streams.installSignatures(set)
+                self?.installed.setSignatures(set.signatures.count)
+            }
+        }
+        // Served from a snapshot rather than from `engine`, which the
+        // classifier owns on `queue`. A statistics request must not contend
+        // with a verdict that has a deadline.
+        bridge.statisticsSource = { [weak self] in
+            self?.installed.snapshot() ?? (revision: 0, rules: 0, signatures: 0)
         }
         bridge.connect()
         self.bridge = bridge
@@ -251,5 +262,40 @@ enum UFWEnforcement: UInt8 {
     static var current: UFWEnforcement {
         get { lock.lock(); defer { lock.unlock() }; return value }
         set { lock.lock(); value = newValue; lock.unlock() }
+    }
+}
+
+
+/// What is currently installed, readable without touching the classifier's
+/// queue.
+///
+/// The rule engine is owned by `queue` and replaced there. A statistics call
+/// arriving on an XPC queue cannot read it safely, and dispatching onto
+/// `queue` to find out would put an operator's status request behind whatever
+/// flows are being decided. This is the small amount of state that answer
+/// needs, kept beside the engine and updated when it changes.
+final class UFWInstalledSnapshot {
+    private let lock = NSLock()
+    private var revision: UInt64 = 0
+    private var rules = 0
+    private var signatures = 0
+
+    func setPolicy(revision: UInt64, rules: Int) {
+        lock.lock()
+        self.revision = revision
+        self.rules = rules
+        lock.unlock()
+    }
+
+    func setSignatures(_ count: Int) {
+        lock.lock()
+        signatures = count
+        lock.unlock()
+    }
+
+    func snapshot() -> (revision: UInt64, rules: Int, signatures: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (revision, rules, signatures)
     }
 }

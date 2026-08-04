@@ -28,7 +28,7 @@ not otherwise need.
 ## First things to run
 
 ```sh
-cargo test --workspace         # 687 tests, a few seconds
+cargo test --workspace         # 712 tests, a few seconds
 make policies                  # every shipped example still compiles
 ```
 

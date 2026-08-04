@@ -42,6 +42,13 @@ A stage is inferred from a rule's predicates unless `layer:` says otherwise:
 | a `dpi:` clause with `protocols:` only | `app-dpi` |
 | a `dpi:` clause with `signatures:` | `stream` |
 
+`layer:` can move a rule **later** than the inferred stage freely, and earlier
+only as far as its predicates allow. A header-only rule may therefore be pinned
+to `perimeter`, which is how a zone-scoped deny is made to run ahead of every
+address rule. An `application:` rule pinned below `identity` is an error rather
+than a warning: identity is not resolved yet, so the rule would install cleanly
+and never match.
+
 ### The mistake this language makes easiest
 
 ```yaml

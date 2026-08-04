@@ -314,6 +314,34 @@ to another protocol's decoder, a `depth` narrower than its pattern, an entropy
 floor above 8.0 bits. A signature that can never match is worse than a missing
 one, because somebody is relying on it.
 
+### The automaton is built once and shipped
+
+Every `content:` pattern across the whole signature set goes into one
+Aho-Corasick automaton, built in the daemon and transmitted as a finished table:
+goto edges, failure links, merged output sets. A scan is then one pass over the
+payload for all patterns at once, rather than a search per signature.
+
+The construction lives in exactly one place, and that is the design decision
+rather than an implementation detail. Aho-Corasick is easy enough that writing
+it in the Linux module, the Windows driver and the Swift extension looks
+reasonable, and subtle enough — output-set merging, the root self-loop, the
+argument for why a failure chain terminates — that the three would not agree.
+Reason 2 above applies to it more sharply than to anything else in the engine.
+
+What each kernel runs instead is a loop with no construction in it, short enough
+to read side by side across three files. `daemon/tests/dpi_automaton_tests.rs`
+compiles both C headers with a hosted compiler and checks them against the Rust
+builder over a corpus, so a divergence fails a `cargo test` rather than waiting
+for a kernel.
+
+A scan records, per pattern, the first match offset and whether there was more
+than one — never every offset, which would be a table sized by attacker-chosen
+input. Those two facts decide almost every window; the case they cannot decide
+falls back to the bounded search, which is what makes the fast path *exactly*
+equivalent rather than approximately. A signature set past the shipped table
+limits (512 patterns, 16384 states) ships without an automaton and every
+condition takes that search. Performance cliff, never a behavioural one.
+
 ### Back-pressure stops at the daemon
 
 A packet never waits for a log event. Not for the daemon, not for the queue, not
@@ -450,6 +478,6 @@ worse than a smaller one:
   Throughput numbers belong to a benchmark on known hardware, not to CI, where an
   absolute threshold gets raised until it stops failing and then asserts nothing.
 
-Everything above the kernel boundary is real and tested: 687 tests across the
+Everything above the kernel boundary is real and tested: 712 tests across the
 compiler, daemon, CLI, wire protocol and end-to-end scenarios, plus ABI checks
 that compile the generated C against the kernel's own headers.

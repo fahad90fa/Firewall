@@ -121,6 +121,10 @@ pub struct MockBehaviour {
     pub corrupt_hash: bool,
     /// Never answer a stats request, so the daemon's timeout path runs.
     pub ignore_stats: bool,
+    /// Acknowledge a signature install with a hash of something else, the way
+    /// a module that decoded only part of the payload would. The daemon must
+    /// treat that as a failure rather than as "installed".
+    pub corrupt_signature_hash: bool,
 }
 
 impl Default for MockBehaviour {
@@ -139,6 +143,7 @@ impl Default for MockBehaviour {
             ),
             corrupt_hash: false,
             ignore_stats: false,
+            corrupt_signature_hash: false,
         }
     }
 }
@@ -151,6 +156,10 @@ struct MockState {
     default_action: Option<Decision>,
     mode: EnforcementMode,
     identity_answers: Vec<String>,
+    /// The last signature payload received, so a test can assert the module
+    /// got the bytes the daemon meant to send rather than only that it
+    /// answered.
+    signatures: Vec<u8>,
 }
 
 impl Default for MockState {
@@ -161,6 +170,7 @@ impl Default for MockState {
             default_action: None,
             mode: EnforcementMode::Enforce,
             identity_answers: Vec::new(),
+            signatures: Vec::new(),
         }
     }
 }
@@ -219,6 +229,11 @@ impl MockKernelModule {
 
     pub fn mode(&self) -> EnforcementMode {
         self.state.lock().unwrap().mode
+    }
+
+    /// The signature payload the module last received, byte for byte.
+    pub fn installed_signatures(&self) -> Vec<u8> {
+        self.state.lock().unwrap().signatures.clone()
     }
 
     /// Push an unsolicited log event, as the module's ring buffer drain does.
@@ -447,6 +462,29 @@ fn handle(
         Message::SetMode(mode) => {
             state.lock().unwrap().mode = mode;
             Some(Message::ModeAck(mode))
+        }
+        Message::SignatureInstall(install) => {
+            // Counting the signatures means decoding the leading u32 the way a
+            // real module does, so a payload the daemon built wrongly shows up
+            // here rather than at a kernel boundary.
+            let count = install
+                .payload
+                .get(..4)
+                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .unwrap_or(0);
+            let hash = if behaviour.corrupt_signature_hash {
+                [0xEE; 32]
+            } else {
+                ufw_shared::hash::sha256(&install.payload)
+            };
+            state.lock().unwrap().signatures = install.payload.clone();
+            Some(Message::SignatureInstallAck(
+                ufw_shared::protocol::SignatureInstallAck {
+                    signatures_installed: count,
+                    patterns_installed: 0,
+                    payload_hash: hash,
+                },
+            ))
         }
         _ => None,
     }
