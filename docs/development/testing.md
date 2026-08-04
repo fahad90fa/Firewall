@@ -1,7 +1,7 @@
 # Testing
 
 ```sh
-cargo test --workspace     # 722 tests
+cargo test --workspace     # 726 tests
 make check                 # + fmt + ABI drift + every shipped policy
 make docker-test           # + the kernel C and the real eBPF verifier
 ```
@@ -140,3 +140,18 @@ kernel/macos/NetworkExtension/RuleEngine.swift
 The equivalence verifier catches the reference-versus-model half automatically.
 The C-and-Swift half is caught by reading them side by side, which is why they are
 written to the same structure.
+
+## Fuzzing
+
+The protocol decoders are compiled with AddressSanitizer and
+UndefinedBehaviorSanitizer and fed 20,000 mutated payloads on every
+`cargo test`. That run also compares the Linux and Windows decoders field for
+field, because the equivalence claim depends on them extracting the same facts
+from the same bytes and nothing else checks it.
+
+The test includes a negative control — a deliberate heap overread that must
+fail — so a missing sanitizer runtime shows up as a failure rather than as a
+green run that proved nothing.
+
+For the coverage-guided campaign, see [`fuzz/README.md`](../../fuzz/README.md).
+It lists what is *not* fuzzed yet, which is the more useful half.

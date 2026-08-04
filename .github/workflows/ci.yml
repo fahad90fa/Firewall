@@ -1,0 +1,77 @@
+# What CI actually enforces.
+#
+# The jobs are split by what they can prove rather than by platform, because
+# the interesting failures here are cross-platform by construction: a Rust enum
+# renumbered without the Swift following, a C decoder that stops agreeing with
+# its counterpart. A single job that ran everything would report those as one
+# red X.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  # The whole workspace, zero dependencies, on the platform most contributors
+  # use. Includes the ABI drift checks and the decoder fuzz tripwire, both of
+  # which need only a C compiler.
+  workspace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test --workspace
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # The TLS feature changes which code compiles. A cfg-gated path that only
+      # builds in one configuration is a path that breaks in the other without
+      # anyone noticing until a release.
+      - run: cargo test -p ufw-daemon --features tls
+      - run: make policies
+
+  # The one thing the Rust tests cannot check: that the Swift compiles at all.
+  # Everything else in this repository is verified by a test that runs;
+  # `shared/tests/macos_wire_contract.rs` pins the values the Swift decoder
+  # mirrors, but pinning a constant is not compiling a file.
+  macos-extension:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Type-check the Network Extension
+        run: |
+          # Not a full Xcode build — that needs a signing identity and a
+          # provisioning profile, which a fork's CI does not have. Type
+          # checking catches what actually breaks: a renamed symbol, a changed
+          # signature, a decoder that no longer compiles.
+          swiftc -typecheck -sdk "$(xcrun --show-sdk-path)" \
+                 -target arm64-apple-macos13 \
+                 kernel/macos/NetworkExtension/*.swift \
+                 kernel/macos/SystemExtension/*.swift
+      - run: cargo test --workspace
+
+  # The eBPF programs, through clang's bpf target. Compilation is meaningful
+  # verification here in a way it is not for ordinary C: most of what the
+  # verifier rejects, it rejects for reasons visible at compile time.
+  #
+  # The real verifier needs privileges and a live kernel; `make -C
+  # kernel/linux/ebpf verify` runs it, and the container job below does.
+  ebpf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y clang llvm libbpf-dev
+      - run: cargo build --release
+      - run: make generate
+      - run: make -C kernel/linux/ebpf
+
+  # The kernel module compiles against real headers, and the eBPF programs go
+  # through the real verifier. This is the closest thing here to running the
+  # thing, and it is still not running it — see docs/development/testing.md.
+  kernel-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y clang llvm libbpf-dev linux-headers-$(uname -r)
+      - run: cargo build --release
+      - run: make generate
+      - run: make -C kernel/linux
+      - run: sudo make -C kernel/linux check

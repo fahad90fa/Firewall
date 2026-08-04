@@ -1,0 +1,52 @@
+# The coverage-guided campaign. Nightly rather than per-push, because it is
+# measured in hours and a pull request should not wait for it.
+#
+# The tripwire in `daemon/tests/dpi_decoder_tests.rs` runs on every push and
+# catches regressions; this is what finds the input nobody would guess.
+name: fuzz
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  decoders:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux, windows]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y clang
+
+      # A corpus that survives between runs is the whole value of a campaign.
+      # Starting cold every night means rediscovering the same shallow paths
+      # and never reaching the deep ones.
+      - uses: actions/cache@v4
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+
+      - name: Build
+        run: |
+          cd fuzz && mkdir -p corpus
+          if [ "${{ matrix.target }}" = "windows" ]; then
+            EXTRA="-DUFW_ABI_CHECK -DUFW_FUZZ_WINDOWS -I ../kernel/windows/inc"
+          else
+            EXTRA="-I ../kernel/linux/inc"
+          fi
+          clang -g -O1 -fsanitize=fuzzer,address,undefined \
+                -fno-sanitize-recover=all $EXTRA -o fuzzer decoders.c
+
+      - name: Campaign
+        run: cd fuzz && ./fuzzer corpus/ -max_len=65536 -max_total_time=1800 -print_final_stats=1
+
+      # A crash that is not kept is a crash that gets rediscovered next month.
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crash-${{ matrix.target }}
+          path: fuzz/crash-*
