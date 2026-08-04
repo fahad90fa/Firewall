@@ -63,6 +63,10 @@
     <DirectoryRef Id="DRIVERSFOLDER">
       <Component Id="DriverComponent" Guid="C1A47E3D-8B25-4E71-A0F6-3D9C2B5E7A14">
         <File Id="UfwSys" Source="ufw.sys" KeyPath="yes" />
+        <!-- The INF ships alongside the driver: the Hardware Dev Center
+             submission requires it, and `pnputil /add-driver` is the supported
+             path for an operator installing outside the MSI. -->
+        <File Id="UfwInf" Source="ufw.inf" />
         <util:EventSource Log="System" Name="ufw" EventMessageFile="[#UfwSys]" />
         <ServiceInstall Id="DriverService"
                         Type="kernelDriver"

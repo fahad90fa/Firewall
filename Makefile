@@ -9,7 +9,8 @@
 # which compiles a policy into the per-platform artifacts all three kernel
 # builds consume. Run it before building any kernel component.
 #
-#   make                 build the Rust workspace
+#   make                 build the Rust workspace (zero dependencies)
+#   make tls             build with TLS termination (pulls rustls)
 #   make generate        compile POLICY into build/generated/{windows,linux,macos}
 #   make test            the full Rust test suite
 #   make check           test + fmt + the ABI drift checks
@@ -36,7 +37,7 @@ else
     HOST_PLATFORM := windows
 endif
 
-.PHONY: all build test check fmt clippy generate clean install uninstall \
+.PHONY: all build tls test check fmt clippy generate clean install uninstall \
         kernel kernel-linux kernel-windows kernel-macos \
         docker-test policies help
 
@@ -50,6 +51,17 @@ help:
 build:
 	$(CARGO) build --workspace --release
 
+# TLS is a build-time opt-in rather than a default, because the alternative to
+# a vetted TLS library is a hand-written one, and hand-rolled crypto in a
+# security product is strictly worse than no TLS at all. An operator who needs
+# the management API on a routable address accepts rustls and its tree; one who
+# terminates at a proxy or stays on loopback pays nothing.
+#
+# A binary built without this refuses to start when the configuration asks for
+# TLS, rather than serving plaintext on a port configured as encrypted.
+tls:
+	$(CARGO) build --workspace --release --features ufw-daemon/tls
+
 test:
 	$(CARGO) test --workspace
 
@@ -59,6 +71,10 @@ test:
 check: test
 	$(CARGO) fmt --all -- --check
 	$(CARGO) test --workspace --test kernel_abi_tests
+	# The TLS feature changes which code compiles, so it needs its own run.
+	# A cfg-gated path that only builds in one configuration is a path that
+	# breaks in the other without anyone noticing until a release.
+	$(CARGO) test -p ufw-daemon --features tls
 	$(MAKE) policies
 
 fmt:

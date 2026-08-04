@@ -260,7 +260,15 @@ impl Sink for SyslogSink {
 pub struct SiemSink {
     address: String,
     format: LogFormat,
-    stream: Option<TcpStream>,
+    requires_tls: bool,
+    stream: Option<crate::tls::MaybeTls>,
+    /// Built once at construction. `None` means plaintext, which the config
+    /// layer only permits when the operator did not ask for TLS.
+    connector: Option<crate::tls::TlsConnector>,
+    /// The name the certificate must match. Derived from `address` rather than
+    /// configured separately: verifying against a name the operator typed
+    /// twice is verifying against whichever one they got right.
+    server_name: String,
     buffer: std::collections::VecDeque<String>,
     capacity: usize,
     dropped: AtomicU64,
@@ -283,10 +291,30 @@ const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
 impl SiemSink {
     pub fn new(config: &SiemSinkConfig) -> Self {
+        // A connector that fails to build is a configuration error, and the
+        // config layer has already refused it — but if one slips through, no
+        // connector means no connection at all, rather than a silent downgrade
+        // to plaintext on a channel the operator configured as encrypted.
+        let connector = if config.tls {
+            crate::tls::TlsConnector::new(config.ca_path.as_deref()).ok()
+        } else {
+            None
+        };
+        let server_name = config
+            .address
+            .rsplit_once(':')
+            .map(|(host, _)| host)
+            .unwrap_or(&config.address)
+            .trim_matches(['[', ']'])
+            .to_string();
+
         SiemSink {
             address: config.address.clone(),
             format: config.format,
             stream: None,
+            requires_tls: config.tls,
+            connector,
+            server_name,
             buffer: std::collections::VecDeque::with_capacity(config.buffer.min(4096)),
             capacity: config.buffer.max(16),
             dropped: AtomicU64::new(0),
@@ -311,11 +339,33 @@ impl SiemSink {
             return false;
         }
         self.last_attempt = Some(Instant::now());
+        // Configured for TLS but holding no connector: refuse to connect at
+        // all. Falling back to plaintext here would ship the host's entire
+        // activity record in the clear on a channel the operator believes is
+        // encrypted — the one failure mode worse than losing the events.
+        if self.requires_tls && self.connector.is_none() {
+            self.backoff = (self.backoff * 2).min(MAX_BACKOFF);
+            return false;
+        }
+
         match TcpStream::connect(&self.address) {
             Ok(s) => {
                 let _ = s.set_write_timeout(Some(Duration::from_millis(500)));
                 let _ = s.set_nodelay(true);
-                self.stream = Some(s);
+                let wrapped = match &self.connector {
+                    Some(connector) => match connector.connect(&self.server_name, s) {
+                        Ok(stream) => stream,
+                        Err(_) => {
+                            // A handshake failure is a real failure: an expired
+                            // certificate, a name mismatch, an interceptor.
+                            // Back off and retry rather than downgrade.
+                            self.backoff = (self.backoff * 2).min(MAX_BACKOFF);
+                            return false;
+                        }
+                    },
+                    None => crate::tls::MaybeTls::Plain(s),
+                };
+                self.stream = Some(wrapped);
                 self.backoff = Duration::from_millis(250);
                 true
             }
@@ -550,9 +600,51 @@ mod tests {
     }
 
     #[test]
+    fn a_siem_sink_configured_for_tls_will_not_fall_back_to_plaintext() {
+        // The one failure mode worse than losing log events: shipping the
+        // host's entire activity record in the clear on a channel the operator
+        // configured as encrypted.
+        let mut sink = SiemSink::new(&SiemSinkConfig {
+            tls: true,
+            ca_path: None,
+            // Nothing is listening, so the connect fails either way — what is
+            // asserted is that it never produces a plaintext stream.
+            address: "127.0.0.1:1".to_string(),
+            format: LogFormat::Json,
+            buffer: 16,
+        });
+        assert!(
+            !sink.ensure_connected(),
+            "a failed TLS connect must not report success"
+        );
+        assert!(
+            sink.stream.is_none(),
+            "no stream should be held after a failed TLS connect"
+        );
+    }
+
+    #[test]
+    fn the_certificate_name_is_derived_from_the_address() {
+        // Derived rather than configured separately, so there is no second
+        // place for it to be wrong — verifying against a name the operator
+        // typed twice is verifying against whichever one they got right.
+        let sink = SiemSink::new(&SiemSinkConfig {
+            tls: false,
+            ca_path: None,
+            address: "siem.example.com:6514".to_string(),
+            format: LogFormat::Json,
+            buffer: 16,
+        });
+        assert_eq!(sink.server_name, "siem.example.com");
+        assert!(sink.connector.is_none(), "plaintext means no connector");
+    }
+
+    #[test]
     fn the_siem_sink_buffers_across_an_outage_and_drops_oldest_first() {
         // Port 1 on loopback: nothing is listening, so every connect fails.
         let mut sink = SiemSink::new(&SiemSinkConfig {
+            tls: false,
+            ca_path: None,
             address: "127.0.0.1:1".into(),
             format: LogFormat::Json,
             buffer: 16,
@@ -574,6 +666,8 @@ mod tests {
         // The logging pipeline must not treat an unreachable collector as a
         // failure worth propagating: that would eventually stall the drain.
         let mut sink = SiemSink::new(&SiemSinkConfig {
+            tls: false,
+            ca_path: None,
             address: "127.0.0.1:1".into(),
             format: LogFormat::Json,
             buffer: 4,

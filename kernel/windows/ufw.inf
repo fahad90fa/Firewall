@@ -1,0 +1,132 @@
+;
+; ufw.inf — Unified Firewall WFP callout driver.
+;
+; Installs the driver as a boot-start kernel service. Consumed by SetupAPI
+; (the MSI's driver component), by `pnputil /add-driver`, and by the Hardware
+; Dev Center submission, which requires an INF alongside the .sys.
+;
+; # Why WFPCALLOUTS and not a Network class
+;
+; A WFP callout driver has no device to enumerate. It is not a NIC, not a
+; filter driver in the NDIS stack, and not something PnP discovers. Installing
+; it under a Net* class makes Windows look for hardware that does not exist and
+; leaves a phantom device in Device Manager.
+;
+; WFPCALLOUTS is the class Microsoft defines for exactly this: a driver that
+; registers callouts with the filtering engine and is started as a service
+; rather than bound to a device. Its GUID below is fixed by Windows and must
+; not be changed.
+;
+; # Why boot start
+;
+; `StartType = 0` (SERVICE_BOOT_START). The driver must be filtering before
+; anything else on the machine has a chance to talk. A demand-start or
+; auto-start driver leaves a window between boot and service start during which
+; the host is unfiltered — small, and exactly the window a machine reboots
+; into.
+;
+; The cost is real and worth stating: a boot-start driver that fails to
+; initialise can prevent the machine from booting. `ErrorControl = 1`
+; (SERVICE_ERROR_NORMAL) is what bounds that — Windows logs the failure and
+; continues to boot rather than bugchecking. Combined with the module's own
+; fail-closed default that means a machine whose driver failed comes up
+; unfiltered and loudly, rather than not coming up at all.
+;
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = WFPCALLOUTS
+ClassGuid   = {57465043-616C-6C6F-7574-5F636C617373}
+Provider    = %ManufacturerName%
+CatalogFile = ufw.cat
+DriverVer   = 01/01/2026,0.1.0.0
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 12    ; %WINDIR%\System32\drivers
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+ufw.sys = 1,,
+
+; ---------------------------------------------------------------------------
+; A non-PnP driver. There is no [Manufacturer] hardware section because there
+; is no hardware: DefaultInstall is what `pnputil` and SetupAPI invoke.
+; ---------------------------------------------------------------------------
+
+[DefaultInstall.NTamd64]
+OptionDesc  = %ServiceDesc%
+CopyFiles   = ufw.CopyFiles
+
+[DefaultInstall.NTamd64.Services]
+AddService  = %ServiceName%,0x00000002,ufw.Service    ; 0x2 = SPSVCINST_ASSOCSERVICE
+
+[DefaultInstall.NTarm64]
+OptionDesc  = %ServiceDesc%
+CopyFiles   = ufw.CopyFiles
+
+[DefaultInstall.NTarm64.Services]
+AddService  = %ServiceName%,0x00000002,ufw.Service
+
+[DefaultUninstall.NTamd64]
+LegacyUninstall = 1
+DelFiles        = ufw.CopyFiles
+
+[DefaultUninstall.NTamd64.Services]
+DelService = %ServiceName%,0x00000204   ; SPSVCINST_STOPSERVICE | SPSVCINST_DELETEEVENTLOGENTRY
+
+[DefaultUninstall.NTarm64]
+LegacyUninstall = 1
+DelFiles        = ufw.CopyFiles
+
+[DefaultUninstall.NTarm64.Services]
+DelService = %ServiceName%,0x00000204
+
+[ufw.CopyFiles]
+ufw.sys
+
+; ---------------------------------------------------------------------------
+; The service.
+; ---------------------------------------------------------------------------
+
+[ufw.Service]
+DisplayName    = %ServiceDisplayName%
+Description    = %ServiceDesc%
+ServiceType    = 1                      ; SERVICE_KERNEL_DRIVER
+StartType      = 0                      ; SERVICE_BOOT_START — see the header
+ErrorControl   = 1                      ; SERVICE_ERROR_NORMAL — log and boot on
+ServiceBinary  = %12%\ufw.sys
+LoadOrderGroup = NDIS
+; After the base filtering engine. The driver opens a WFP engine session in
+; DriverEntry; starting before BFE means that call fails and the driver
+; unloads, leaving the machine unfiltered with a single event-log entry.
+Dependencies   = BFE
+AddReg         = ufw.Service.AddReg
+
+[ufw.Service.AddReg]
+; Fail-closed unless explicitly relaxed. Mirrors the Linux module's
+; `fail_closed` parameter: the driver holds no policy until the daemon installs
+; one, and with no policy it blocks. Set to 0 only for recovery, and expect the
+; machine to be unfiltered until ufwd starts.
+HKR,Parameters,FailClosed,0x00010001,1
+; Bounded event queue depth. Full means the oldest event is dropped and
+; counted, never that a packet waits.
+HKR,Parameters,EventQueueDepth,0x00010001,1024
+
+; ---------------------------------------------------------------------------
+; The WFP callout registration hint.
+;
+; Not strictly required — the driver registers its callouts programmatically in
+; UfwWfpInitialize — but declaring the sublayer here means an operator running
+; `netsh wfp show state` before the daemon has ever started still sees who owns
+; the sublayer, rather than an unattributed GUID.
+; ---------------------------------------------------------------------------
+
+[Strings]
+ManufacturerName     = "Unified Firewall Project"
+DiskName             = "Unified Firewall Installation Disk"
+ServiceName          = "ufw"
+ServiceDisplayName   = "Unified Firewall Driver"
+ServiceDesc          = "Kernel-level packet and flow filtering compiled from unified policy"

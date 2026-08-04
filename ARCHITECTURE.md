@@ -342,9 +342,9 @@ correctly a moment later — rather than answer wrongly.
 
 ---
 
-## 5. Zero dependencies
+## 5. Zero dependencies, and the one exception
 
-The Rust workspace has no external crates.
+`cargo build` pulls no external crates.
 
 Everything in this tree lands in the trusted computing base of a kernel-mode
 filtering decision. A supply-chain compromise in a transitive dependency would be
@@ -365,6 +365,28 @@ socket instead, which is what the systemd unit's `ExecStop` invokes. The
 management API speaks gRPC-Web over HTTP/1.1 rather than gRPC over HTTP/2. The
 REST server refuses chunked transfer-encoding, header continuations, keep-alive
 and pipelining: most of the request-smuggling surface, none of it needed here.
+
+### The exception: TLS
+
+`--features tls` pulls `rustls`, and it is the only dependency in the tree.
+
+The reasoning above says a dependency is a risk to the filtering decision. It
+does not say a *hand-written* substitute is safer, and for TLS it plainly is
+not: hand-rolled crypto in a security product looks like protection and is not.
+Neither answer is unconditionally right, so the decision is the operator's and
+both are supported deployments:
+
+| | Build | What protects the API |
+| --- | --- | --- |
+| Loopback only | default | the kernel |
+| Proxy terminates TLS | default + `allow_plaintext = true` | the proxy |
+| Daemon terminates TLS | `--features tls` | rustls |
+
+The property preserved in every case is that a build which *cannot* do TLS
+refuses to start when the configuration asks for it. There is no path where the
+operator believes a port is encrypted and it is not. The same applies to the
+SIEM sink: configured for TLS and unable to establish it, it declines to connect
+rather than shipping the host's activity record in the clear.
 
 ---
 

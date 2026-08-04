@@ -431,6 +431,18 @@ pub struct SiemSinkConfig {
     /// oldest are dropped and the drop is itself logged locally: a SIEM
     /// outage must not become a packet-processing stall.
     pub buffer: usize,
+    /// Ship over TLS.
+    ///
+    /// Log events carry process paths, remote addresses and which rules fired
+    /// — a description of everything the host does. Sending that in the clear
+    /// is an inventory for whoever is on the path.
+    pub tls: bool,
+    /// A private CA for the collector's certificate.
+    ///
+    /// A SIEM inside a corporate network is usually signed by an internal
+    /// authority. Supporting that is what keeps operators from reaching for a
+    /// verification-disabling flag, which is why no such flag exists.
+    pub ca_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -474,6 +486,18 @@ pub struct ApiConfig {
     /// APIs refuse to start on a non-loopback address.
     pub auth_token: Option<String>,
     pub max_body_bytes: usize,
+    /// Serve the network-facing APIs without TLS.
+    ///
+    /// Only meaningful on a non-loopback bind, where it is refused by default.
+    /// The legitimate use is a proxy terminating TLS in front of the daemon;
+    /// the operator says so explicitly rather than the daemon guessing.
+    pub allow_plaintext: bool,
+    /// TLS termination for the network-facing APIs.
+    ///
+    /// A bearer token over plaintext protects the token from nothing: anyone
+    /// on the path reads it and then owns the machine's filtering policy. So a
+    /// non-loopback bind wants both, and `validate()` says so.
+    pub tls: crate::tls::TlsConfig,
 }
 
 impl Default for Config {
@@ -530,6 +554,8 @@ impl Default for Config {
                 allow_from: Vec::new(),
                 auth_token: None,
                 max_body_bytes: constants::MAX_API_BODY,
+                allow_plaintext: false,
+                tls: crate::tls::TlsConfig::default(),
             },
         }
     }
@@ -577,12 +603,18 @@ const KNOWN_KEYS: &[&str] = &[
     "logging.siem.address",
     "logging.siem.format",
     "logging.siem.buffer",
+    "logging.siem.tls",
+    "logging.siem.ca_path",
     "api.cli_socket",
     "api.rest_bind",
     "api.grpc_bind",
     "api.allow_from",
     "api.auth_token",
     "api.max_body_bytes",
+    "api.tls_cert",
+    "api.tls_key",
+    "api.tls_client_ca",
+    "api.allow_plaintext",
 ];
 
 impl Config {
@@ -758,6 +790,8 @@ impl Config {
                     .transpose()?
                     .unwrap_or(LogFormat::Json),
                 buffer: doc.u64("logging.siem.buffer")?.unwrap_or(10_000) as usize,
+                tls: doc.bool("logging.siem.tls")?.unwrap_or(false),
+                ca_path: doc.string("logging.siem.ca_path")?.map(PathBuf::from),
             });
         }
 
@@ -774,6 +808,12 @@ impl Config {
             })?);
         }
         c.api.auth_token = doc.string("api.auth_token")?;
+        c.api.tls.cert_path = doc.string("api.tls_cert")?.map(PathBuf::from);
+        c.api.tls.key_path = doc.string("api.tls_key")?.map(PathBuf::from);
+        c.api.tls.client_ca_path = doc.string("api.tls_client_ca")?.map(PathBuf::from);
+        if let Some(v) = doc.bool("api.allow_plaintext")? {
+            c.api.allow_plaintext = v;
+        }
         if let Some(v) = doc.u64("api.max_body_bytes")? {
             c.api.max_body_bytes = (v as usize).min(constants::MAX_API_BODY);
         }
@@ -810,7 +850,37 @@ impl Config {
                     ),
                 );
             }
+            // A token sent in the clear protects the token from nothing:
+            // anyone on the path reads it and then owns the machine's
+            // filtering policy. Terminating elsewhere is a legitimate
+            // deployment, so this is a refusal an operator can override by
+            // saying so — not a silent downgrade.
+            if !is_loopback && !self.api.tls.is_enabled() && !self.api.allow_plaintext {
+                return err(
+                    0,
+                    format!(
+                        "`api.{name}_bind` listens on {bind}, which is not loopback, but TLS \
+                         is not configured. A bearer token sent in the clear protects nothing.\n\
+                         Set `api.tls_cert` and `api.tls_key`, or set \
+                         `api.allow_plaintext = true` if TLS is terminated in front of the \
+                         daemon by a proxy."
+                    ),
+                );
+            }
         }
+
+        // The build-capability check comes first. If this binary cannot
+        // terminate TLS at all, telling the operator that a certificate file is
+        // missing sends them to fix the wrong thing — the paths are irrelevant
+        // until the build can use them.
+        if self.api.tls.is_enabled() && !crate::tls::available() {
+            return err(0, crate::tls::unavailable_message());
+        }
+
+        self.api.tls.validate().map_err(|message| ConfigError {
+            line: 0,
+            message,
+        })?;
         if let Some(token) = &self.api.auth_token {
             if token.len() < 32 {
                 return err(
@@ -820,6 +890,26 @@ impl Config {
                 );
             }
         }
+        if let Some(siem) = &self.logging.siem {
+            if siem.tls && !crate::tls::available() {
+                return err(0, crate::tls::unavailable_message());
+            }
+            if let Some(ca) = &siem.ca_path {
+                if !siem.tls {
+                    return err(
+                        0,
+                        "`logging.siem.ca_path` is set but `logging.siem.tls` is not; \
+                         a CA is only consulted when the connection is verified, so this \
+                         configuration ships log events in the clear while looking as \
+                         though it does not",
+                    );
+                }
+                if !ca.exists() {
+                    return err(0, format!("`logging.siem.ca_path`: {} does not exist", ca.display()));
+                }
+            }
+        }
+
         if self.identity.cache_capacity == 0 {
             return err(0, "`identity.cache_capacity` must be greater than zero");
         }
@@ -948,11 +1038,53 @@ cli_socket = "/run/ufw.sock"
         // Loopback needs no token.
         assert!(Config::parse("[api]\nrest_bind = \"127.0.0.1:8443\"\n").is_ok());
 
-        // With a strong token, a network bind is fine.
-        let ok = Config::parse(
+        // A strong token is necessary but no longer sufficient: a token sent
+        // in the clear protects the token from nothing.
+        let e = Config::parse(
             "[api]\nrest_bind = \"0.0.0.0:8443\"\nauth_token = \"0123456789abcdef0123456789abcdef\"\n",
-        );
+        )
+        .unwrap_err();
+        assert!(e.message.contains("TLS is not configured"), "{}", e.message);
+    }
+
+    #[test]
+    fn a_network_bind_needs_tls_or_an_explicit_acknowledgement() {
+        let token = "auth_token = \"0123456789abcdef0123456789abcdef\"\n";
+
+        // Terminating TLS in front of the daemon is a legitimate deployment,
+        // so it is available — but the operator has to say so. The daemon does
+        // not guess that a proxy exists.
+        let ok = Config::parse(&format!(
+            "[api]\nrest_bind = \"0.0.0.0:8443\"\n{token}allow_plaintext = true\n"
+        ));
         assert!(ok.is_ok(), "{:?}", ok.err());
+
+        // Loopback is unaffected: nothing crosses a network.
+        assert!(Config::parse("[api]\nrest_bind = \"127.0.0.1:8443\"\n").is_ok());
+    }
+
+    #[test]
+    fn a_certificate_without_a_key_is_rejected_before_anything_binds() {
+        // The half-configuration that a forgiving design would answer by
+        // serving plaintext on the port the operator believes is encrypted.
+        let e = Config::parse("[api]\ntls_cert = \"/tmp/cert.pem\"\n").unwrap_err();
+        assert!(e.message.contains("tls_key"), "{}", e.message);
+    }
+
+    #[test]
+    fn configuring_tls_on_a_build_without_it_refuses_rather_than_downgrading() {
+        // The files do not exist, so this fails either way — but the *reason*
+        // is what matters. On a build without the feature the operator is told
+        // about the build flag; on one with it, about the missing file.
+        let result = Config::parse(
+            "[api]\ntls_cert = \"/nonexistent/cert.pem\"\ntls_key = \"/nonexistent/key.pem\"\n",
+        );
+        let e = result.unwrap_err();
+        if crate::tls::available() {
+            assert!(e.message.contains("does not exist"), "{}", e.message);
+        } else {
+            assert!(e.message.contains("--features tls"), "{}", e.message);
+        }
     }
 
     #[test]

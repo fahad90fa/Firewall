@@ -1,17 +1,54 @@
 # REST API
 
-Off by default. When enabled, it binds loopback unless an `auth_token` of at
-least 32 characters is configured — the daemon **refuses to start** with a
-routable bind and no token, because a management API that can install policy is a
-remote code path into the kernel.
+Off by default. A routable bind needs **both** a token and TLS — the daemon
+refuses to start with either missing, because a management API that can install
+policy is a remote code path into the kernel, and a bearer token sent in the
+clear protects the token from nothing.
 
 ```toml
 [api]
-bind = "127.0.0.1:9443"
-auth_token = "..."      # required for any non-loopback bind
+rest_bind  = "0.0.0.0:9443"
+auth_token = "..."                        # >= 32 chars, required off loopback
+tls_cert   = "/etc/unified-firewall/api.crt"
+tls_key    = "/etc/unified-firewall/api.key"
+tls_client_ca = "/etc/unified-firewall/clients.crt"   # optional mTLS
 ```
 
 `Authorization: Bearer <token>`, compared in constant time.
+
+## TLS
+
+TLS is a **build-time opt-in**:
+
+```sh
+cargo build --release                              # zero dependencies
+cargo build --release --features ufw-daemon/tls    # rustls, TLS in the daemon
+```
+
+The workspace is otherwise dependency-free because everything in it lands in the
+trusted computing base of a kernel-mode filtering decision. TLS is the one place
+that reasoning does not survive contact with reality: the alternative to a vetted
+library is a hand-written one, and hand-rolled crypto in a security product is
+strictly worse than no TLS — it looks like protection and is not.
+
+So the choice is the operator's, and both answers are supported:
+
+| Deployment | Build | Config |
+| --- | --- | --- |
+| Loopback only | default | nothing |
+| TLS terminated by a proxy | default | `allow_plaintext = true` |
+| TLS in the daemon | `--features tls` | `tls_cert` + `tls_key` |
+
+What is **not** supported is configuring TLS and silently getting plaintext. A
+binary built without the feature refuses to start when the configuration asks
+for TLS, and names the build flag rather than reporting a generic failure.
+
+`allow_plaintext = true` is required for the proxy case: the daemon does not
+guess that something is terminating TLS in front of it.
+
+Client certificates (`tls_client_ca`) are optional and worth using. A bearer
+token authenticates whoever holds it; a client certificate authenticates a key
+that cannot be copied out of a log file or a shell history.
 
 ## What the server deliberately does not do
 

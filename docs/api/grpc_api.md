@@ -84,5 +84,8 @@ grpc-message: OK
 | `14 UNAVAILABLE` | No policy installed, or the kernel is unreachable |
 | `16 UNAUTHENTICATED` | Missing or bad token |
 
-Authentication and authority are identical to REST: the same `Bearer` token, the
-same `Router`, the same authority check.
+Authentication, authority and TLS are identical to REST: the same `Bearer`
+token, the same `Router`, the same authority check, and the same build-time
+`tls` feature. See [`rest_api.md`](rest_api.md#tls) — a routable `grpc_bind`
+needs both a token and TLS, or an explicit `allow_plaintext = true` saying a
+proxy is terminating it.

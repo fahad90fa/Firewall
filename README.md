@@ -167,7 +167,7 @@ misread the language, and the compiler warns about it.
 
 ## Zero dependencies
 
-The Rust workspace has none. Not "few" — none.
+`cargo build` pulls nothing. Not "few" — nothing.
 
 Everything here lands in the trusted computing base of a kernel-mode filtering
 decision, and a supply-chain compromise in a transitive dependency would be a
@@ -175,6 +175,20 @@ compromise of what the machine is allowed to talk to. The cost is a hand-written
 YAML subset, JSON codec, SHA-256, HTTP/1.1 server and protobuf framing. The
 benefit is that `cargo vendor` produces nothing and the build is reproducible
 offline.
+
+There is exactly one opt-in exception, and it is opt-in because the alternative
+is worse:
+
+```sh
+make tls    # cargo build --features ufw-daemon/tls  → rustls
+```
+
+Hand-rolled crypto in a security product is strictly worse than no TLS at all —
+it looks like protection and is not. So an operator who needs the management API
+on a routable address accepts rustls and its tree, and one who terminates at a
+proxy or stays on loopback pays nothing. A build without it **refuses to start**
+when the configuration asks for TLS, rather than quietly serving plaintext on a
+port configured as encrypted.
 
 ## Status
 

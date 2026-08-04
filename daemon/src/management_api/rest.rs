@@ -25,7 +25,7 @@
 //!   token is configured, and the source address must pass the allow-list.
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -310,16 +310,23 @@ pub fn render_response(status: u16, body: &str) -> Vec<u8> {
 }
 
 /// Handle one connection end to end.
-pub fn handle_connection(
+/// Serve one request.
+///
+/// Generic over the stream so the plaintext and TLS paths are the same code.
+/// A separate TLS request loop would be a second copy of the parsing, and the
+/// two would drift — which on an HTTP parser means two implementations
+/// disagreeing about where a request ends.
+pub fn handle_connection<S: Read + Write>(
     router: &Router,
     config: &ApiConfig,
     peer: IpAddr,
-    stream: &mut TcpStream,
+    stream: &mut S,
 ) {
-    let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
-    let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
-
-    let outcome = read_request(&*stream, config.max_body_bytes).and_then(|request| {
+    // Timeouts are set by the caller on the underlying socket, before any TLS
+    // wrapping. Setting them here would mean reaching through the wrapper for a
+    // property that belongs to the socket, and the handshake itself needs them
+    // in place before this function is reached.
+    let outcome = read_request(&mut *stream, config.max_body_bytes).and_then(|request| {
         let authority = authorize(config, peer, &request)?;
         let op = route(&request)?;
         router.dispatch(op, authority)
@@ -342,6 +349,17 @@ pub fn serve(
     let Some(bind) = config.rest_bind.clone() else {
         return Ok(());
     };
+    // Built before the listener binds. A certificate that does not load should
+    // stop the daemon at startup, not produce a port that accepts connections
+    // and fails every one of them.
+    let acceptor = if config.tls.is_enabled() {
+        Some(crate::tls::TlsAcceptor::from_config(&config.tls).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, e)
+        })?)
+    } else {
+        None
+    };
+
     let listener = TcpListener::bind(&bind)?;
     // A short accept timeout is what lets the loop notice a shutdown request
     // without a second wake-up mechanism.
@@ -349,14 +367,34 @@ pub fn serve(
 
     while !state.is_shutting_down() {
         match listener.accept() {
-            Ok((mut stream, addr)) => {
+            Ok((stream, addr)) => {
                 let _ = stream.set_nonblocking(false);
+                // On the raw socket, before any TLS wrapping: the handshake
+                // itself needs a deadline, or a client that connects and never
+                // sends a ClientHello holds a worker thread forever.
+                let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
+                let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
                 let router = Arc::clone(&router);
                 let config = config.clone();
                 let peer = normalize_peer(addr);
+                let acceptor = acceptor.clone();
                 std::thread::Builder::new()
                     .name("ufw-rest".into())
-                    .spawn(move || handle_connection(&router, &config, peer, &mut stream))
+                    .spawn(move || {
+                        // The handshake happens on the worker thread, not in
+                        // the accept loop. A client that opens a connection and
+                        // never sends a ClientHello would otherwise stall every
+                        // other caller — which is a denial of service against
+                        // the management plane costing one socket.
+                        let mut stream = match &acceptor {
+                            Some(acceptor) => match acceptor.accept(stream) {
+                                Ok(wrapped) => wrapped,
+                                Err(_) => return,
+                            },
+                            None => crate::tls::MaybeTls::Plain(stream),
+                        };
+                        handle_connection(&router, &config, peer, &mut stream);
+                    })
                     .ok();
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -391,6 +429,8 @@ mod tests {
 
     fn config() -> ApiConfig {
         ApiConfig {
+            allow_plaintext: false,
+            tls: Default::default(),
             cli_socket: "/tmp/ufw.sock".into(),
             rest_bind: Some("127.0.0.1:0".into()),
             grpc_bind: None,

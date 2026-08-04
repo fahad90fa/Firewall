@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  com.unifiedfirewall.daemon.plist — launchd job for ufwd on macOS.
+
+  Installed to /Library/LaunchDaemons, not ~/Library/LaunchAgents.
+
+  # Why a daemon and not an agent
+
+  Apple's terminology matters here. A launch *agent* runs per-user, in the
+  user's session, and dies at logout. A launch *daemon* runs once, as root,
+  from boot.
+
+  ufwd has to be a daemon. It resolves the identity of processes belonging to
+  every user on the machine, it opens a privileged XPC connection the extension
+  will only accept from a matching Team ID, and it must be running before any
+  user logs in — a firewall that starts at first login leaves the boot window
+  unfiltered, which is exactly the window a machine reboots into.
+
+  # Why RunAtLoad and KeepAlive are both set
+
+  RunAtLoad starts it at boot. KeepAlive restarts it if it exits.
+
+  The combination is what makes a daemon crash a blip rather than an outage:
+  the Network Extension keeps enforcing the policy it already holds while ufwd
+  is gone — see IPCBridge's interruptionHandler, which deliberately does *not*
+  clear the installed rules — so a restart re-synchronises rather than opening a
+  filtering gap.
+
+  SuccessfulExit=false means "restart unless it exited cleanly". A clean exit is
+  `ufwctl shutdown`, which is an operator asking it to stop; restarting then
+  would make the daemon impossible to stop.
+
+  # Loading
+
+      sudo cp build/macos/com.unifiedfirewall.daemon.plist /Library/LaunchDaemons/
+      sudo chown root:wheel /Library/LaunchDaemons/com.unifiedfirewall.daemon.plist
+      sudo chmod 644        /Library/LaunchDaemons/com.unifiedfirewall.daemon.plist
+      sudo launchctl bootstrap system /Library/LaunchDaemons/com.unifiedfirewall.daemon.plist
+
+  launchd refuses a plist that is group- or world-writable, and the failure
+  message does not mention permissions. The chown/chmod above are not optional.
+
+  # Unloading
+
+      sudo launchctl bootout system/com.unifiedfirewall.daemon
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.unifiedfirewall.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/sbin/ufwd</string>
+        <string>--config</string>
+        <string>/Library/Application Support/UnifiedFirewall/ufwd.toml</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <!-- Restart on a crash, but not after `ufwctl shutdown`. -->
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Ten seconds between restarts. Without a throttle, a daemon that fails
+         at startup — a malformed policy, an extension that has not been
+         approved — spins as fast as launchd will respawn it and fills the
+         system log with the same error a hundred times a second, burying the
+         first occurrence that actually explains it. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- The XPC service the Network Extension connects to. Declaring it here
+         is what lets launchd hand ufwd the receive right; without it the
+         extension's NSXPCConnection resumes successfully and then silently
+         delivers nothing, because XPC does not fail a connection to a name
+         nobody vends. -->
+    <key>MachServices</key>
+    <dict>
+        <key>com.unifiedfirewall.daemon</key>
+        <true/>
+    </dict>
+
+    <!-- Root. Identity resolution reads code signatures for processes owned by
+         every user on the machine, and policy installation goes through a
+         privileged XPC connection. -->
+    <key>UserName</key>
+    <string>root</string>
+    <key>GroupName</key>
+    <string>wheel</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Library/Application Support/UnifiedFirewall</string>
+
+    <!-- launchd captures stdout and stderr only as a backstop. The daemon's
+         real logging goes to its configured sinks, and everything the
+         extension emits goes to the unified log under the
+         com.unifiedfirewall.extension subsystem. These two files exist so a
+         startup failure — which happens before any sink is configured — lands
+         somewhere an operator can find it. -->
+    <key>StandardOutPath</key>
+    <string>/var/log/unified-firewall/ufwd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/unified-firewall/ufwd.err.log</string>
+
+    <!-- Not throttled by launchd's default nice value. A verdict the extension
+         is waiting on has a deadline; a daemon descheduled behind a background
+         job is a daemon whose identity answers arrive after the flow was
+         already decided without them. -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <!-- Hard limits, so a leak in the identity cache or the log queue is a
+         daemon that dies and restarts rather than a machine that swaps. -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>4096</integer>
+    </dict>
+</dict>
+</plist>
