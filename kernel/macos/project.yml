@@ -1,0 +1,56 @@
+# XcodeGen specification for the macOS build.
+#
+# See UnifiedFirewall.xcodeproj/README.md for why the project file itself is
+# generated rather than committed.
+
+name: UnifiedFirewall
+options:
+  bundleIdPrefix: com.unifiedfirewall
+  deploymentTarget:
+    macOS: "11.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    # Warnings as errors. A Network Extension's failure modes are mostly
+    # silent — a wrong class name in Info.plist, an unhandled optional on the
+    # verdict path — so the compiler's opinion is worth more here than usual.
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: true
+    GCC_TREAT_WARNINGS_AS_ERRORS: true
+    ENABLE_HARDENED_RUNTIME: true
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  UnifiedFirewall:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+    dependencies:
+      - target: UFWSystemExtension
+        embed: true
+        codeSign: true
+    settings:
+      base:
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/UnifiedFirewall.entitlements
+        # The system extension must land here. Anywhere else and
+        # OSSystemExtensionManager reports it cannot find the extension.
+        SYSTEM_EXTENSION_FOLDER_PATH: Contents/Library/SystemExtensions
+
+  UFWSystemExtension:
+    type: system-extension
+    platform: macOS
+    sources:
+      - path: NetworkExtension
+      - path: SystemExtension
+      # Compiled in, not loaded at runtime: the extension starts enforcing
+      # before the daemon connects and needs a rule table at build time.
+      - path: ../../build/generated/macos/UFWPolicy.generated.swift
+        optional: true
+    settings:
+      base:
+        INFOPLIST_FILE: SystemExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: SystemExtension/UFWSystemExtension.entitlements
+        PRODUCT_BUNDLE_IDENTIFIER: com.unifiedfirewall.extension

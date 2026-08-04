@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Unified Firewall — System Extension bundle.
+
+  The system extension is the delivery vehicle; the Network Extension inside it
+  is what filters. They are separate bundles with separate identifiers, and the
+  activation request names this one.
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>Unified Firewall</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.unifiedfirewall.systemextension</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>$(PRODUCT_NAME)</string>
+    <key>CFBundlePackageType</key>
+    <string>SYSX</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+
+    <!-- The XPC service the daemon connects to. Must match
+         UFWIPCBridge.machServiceName; a mismatch produces a connection that
+         resumes successfully and then never delivers anything, because XPC
+         does not fail a connection to a name nobody vends. -->
+    <key>XPCService</key>
+    <dict>
+        <key>ServiceType</key>
+        <string>Application</string>
+    </dict>
+    <key>MachServices</key>
+    <dict>
+        <key>com.unifiedfirewall.daemon</key>
+        <true/>
+    </dict>
+</dict>
+</plist>

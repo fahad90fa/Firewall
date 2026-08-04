@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Unified Firewall — Network Extension bundle.
+
+  Two entries here are load-bearing and easy to get wrong:
+
+  NEProviderClasses maps the provider type to the class the system should
+  instantiate. Get the class name wrong and the extension activates, appears
+  healthy in `systemextensionctl list`, and never receives a single callback —
+  a firewall that is installed and enforcing nothing, with no error anywhere.
+
+  NetworkExtension.filter-data in the entitlements (not this file) is what
+  actually grants the capability; without it activation fails at approval time
+  with a message that does not name the missing entitlement.
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>Unified Firewall Filter</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.unifiedfirewall.extension</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>$(PRODUCT_NAME)</string>
+    <key>CFBundlePackageType</key>
+    <string>SYSX</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+
+    <key>NetworkExtension</key>
+    <dict>
+        <key>NEMachServiceName</key>
+        <string>com.unifiedfirewall.daemon</string>
+        <key>NEProviderClasses</key>
+        <dict>
+            <key>com.apple.networkextension.filter-data</key>
+            <string>UFWFilterDataProvider</string>
+        </dict>
+    </dict>
+
+    <!-- The containing app. The system refuses to activate an extension whose
+         parent bundle identifier does not match the app that submitted the
+         activation request. -->
+    <key>NSExtension</key>
+    <dict>
+        <key>NSExtensionPointIdentifier</key>
+        <string>com.apple.networkextension.filter-data</string>
+        <key>NSExtensionPrincipalClass</key>
+        <string>UFWFilterDataProvider</string>
+    </dict>
+</dict>
+</plist>
