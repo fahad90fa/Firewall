@@ -1,7 +1,7 @@
 # Testing
 
 ```sh
-cargo test --workspace     # 742 tests
+cargo test --workspace     # 747 tests
 make check                 # + fmt + ABI drift + every shipped policy
 make docker-test           # + the kernel C and the real eBPF verifier
 ```

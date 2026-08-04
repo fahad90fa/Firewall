@@ -52,6 +52,7 @@ pub mod error;
 pub mod lexer;
 pub mod optimizer;
 pub mod parser;
+pub mod proof;
 pub mod semantic;
 
 use std::collections::HashSet;
