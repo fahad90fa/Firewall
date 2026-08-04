@@ -7,13 +7,20 @@ platforms give no choice; the messages do not.
 | --- | --- | --- |
 | Linux | Generic netlink (`ufw_ctrl`) | Per-message credentials, message-oriented, multicast for pushes |
 | Windows | IOCTL on `\\.\UnifiedFirewall` | Access flags enforced by the I/O manager; inverted calls for pushes |
-| macOS | XPC to `com.unifiedfirewall.daemon` | The only sanctioned channel from a sandboxed extension; carries the peer's code signature |
+| macOS | UNIX socket in the app-group container | Same framing as the other two; `LOCAL_PEERTOKEN` carries the peer's audit token |
 
 Each choice buys the same thing: the channel carries the rule table, so
 **who is on the other end** is the security boundary. Netlink supplies the
 sender's uid, IOCTL access flags are checked against the handle the caller
-opened, and XPC exposes the peer's audit token so the extension can verify the
-daemon's Team ID before accepting a policy from it.
+opened, and the macOS socket yields the connecting process's audit token, which
+the extension resolves to a code signature and checks against the daemon's Team
+ID before accepting a policy.
+
+On macOS the extension also vends an XPC service (`UFWExtensionProtocol`) for
+clients that cannot open a socket in the group container — a management tool
+running outside it. Same operations, same peer check, different door. The
+daemon uses the socket, because one framing implementation across three
+platforms is one place for a framing bug to hide rather than three.
 
 ## Framing
 

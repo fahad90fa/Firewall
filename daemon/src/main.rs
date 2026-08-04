@@ -643,10 +643,21 @@ impl Supervisor {
             ));
         };
 
-        // Check the daemon's own arithmetic before trusting the delta: if
+        // A module that does not advertise incremental updates gets the whole
+        // table. Nothing checked this before, so the capability bit was
+        // advertised, reported by `ufwctl status`, and never consulted — and a
+        // module that answered a delta with "unsupported" would have failed
+        // every reload after the first.
+        let incremental = self
+            .state
+            .kernel()
+            .capabilities
+            .has(Capabilities::INCREMENTAL_UPDATE);
+
+        // Then check the daemon's own arithmetic before trusting the delta: if
         // applying it to the installed policy does not reproduce what was
         // compiled, send the whole thing instead.
-        let use_full = staged.prefers_full_install() || {
+        let use_full = !incremental || staged.prefers_full_install() || {
             match self.state.active_policy() {
                 Some(active) => {
                     let rebuilt = ufw_daemon::policy_store::apply(&active, &staged.delta);

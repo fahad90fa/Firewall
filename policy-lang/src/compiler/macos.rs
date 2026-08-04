@@ -105,47 +105,50 @@ fn plan<'a>(policy: &'a CompiledPolicy, notes: &mut Diagnostics) -> Vec<Placemen
         if rule.dpi.is_some() {
             dpi_rules += 1;
         }
-        match rule.layer {
-            Layer::AppDpi | Layer::Stream => {
-                // Payload inspection only exists for flows.
-                out.push(Placement {
-                    rule,
-                    engine: Engine::NeFlow,
-                    scope: ProtocolScope::Only(FLOW_PROTOCOLS.to_vec()),
-                });
-            }
-            _ => {
-                if rule.protocol == Protocol::Any || FLOW_PROTOCOLS.contains(&rule.protocol) {
-                    out.push(Placement {
-                        rule,
-                        engine: Engine::NeFlow,
-                        scope: ProtocolScope::Only(FLOW_PROTOCOLS.to_vec()),
-                    });
-                }
-                if rule.protocol == Protocol::Any || !FLOW_PROTOCOLS.contains(&rule.protocol) {
-                    if rule.app.is_some() {
-                        // `handleNewPacket` has no `sourceAppAuditToken`, so an
-                        // identity predicate cannot be evaluated there. The
-                        // reference semantics agree: an identity predicate
-                        // without an identity never matches.
-                        notes.push(Diagnostic::note(
-                            codes::EBPF_OFFLOAD,
-                            Span::default(),
-                            format!(
-                                "rule `{}` is identity-scoped and is installed only on the flow \
-                                 provider; the packet provider has no audit token to match on",
-                                rule.name
-                            ),
-                        ));
-                    } else {
-                        out.push(Placement {
-                            rule,
-                            engine: Engine::NePacket,
-                            scope: ProtocolScope::Excluding(FLOW_PROTOCOLS.to_vec()),
-                        });
-                    }
-                }
-            }
+
+        // The placement rule itself lives in `ufw_shared::policy_types`,
+        // because the extension has to reach the same answer at runtime for a
+        // policy the daemon pushed over the control socket. A rule placed one
+        // way at build time and the other way at runtime is a rule that
+        // filters differently depending on how it arrived.
+        let placements = rule.macos_placements();
+
+        for (provider, scope) in &placements {
+            out.push(Placement {
+                rule,
+                engine: match provider {
+                    MacosProvider::Flow => Engine::NeFlow,
+                    MacosProvider::Packet => Engine::NePacket,
+                },
+                scope: match scope {
+                    MacosScope::All => ProtocolScope::Any,
+                    MacosScope::ConnectionOriented => ProtocolScope::Only(FLOW_PROTOCOLS.to_vec()),
+                    MacosScope::Connectionless => ProtocolScope::Excluding(FLOW_PROTOCOLS.to_vec()),
+                },
+            });
+        }
+
+        // An identity-scoped rule that would otherwise have reached the packet
+        // provider is dropped there rather than installed: `handleNewPacket`
+        // has no `sourceAppAuditToken`, so the predicate could not be
+        // evaluated. The reference semantics agree — an identity predicate
+        // without an identity never matches — but the operator should hear it
+        // from the compiler rather than infer it from a rule that never fires.
+        let reaches_packet_provider =
+            rule.protocol == Protocol::Any || !FLOW_PROTOCOLS.contains(&rule.protocol);
+        if rule.app.is_some()
+            && reaches_packet_provider
+            && !matches!(rule.layer, Layer::AppDpi | Layer::Stream)
+        {
+            notes.push(Diagnostic::note(
+                codes::EBPF_OFFLOAD,
+                Span::default(),
+                format!(
+                    "rule `{}` is identity-scoped and is installed only on the flow \
+                     provider; the packet provider has no audit token to match on",
+                    rule.name
+                ),
+            ));
         }
     }
 

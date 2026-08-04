@@ -53,7 +53,7 @@ silent failure:
   have.
 
 `signing.sh` also refuses to proceed while `IPCBridge.swift` still carries the
-placeholder Team ID. The extension checks its XPC peer's Team ID before accepting
+placeholder Team ID. The extension checks its peer's Team ID before accepting
 a policy, and a placeholder there produces a build that activates cleanly and
 refuses every connection from the daemon.
 

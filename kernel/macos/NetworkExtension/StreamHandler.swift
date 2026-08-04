@@ -721,7 +721,7 @@ struct UFWSignatureSet {
 /// Every read is bounds-checked. The payload arrives over XPC from a peer
 /// whose Team ID was verified, which makes it the daemon — not which makes it
 /// correct, and a decoder is not the place to discover the difference.
-private struct UFWWireReader {
+struct UFWWireReader {
     let bytes: [UInt8]
     var position = 0
 

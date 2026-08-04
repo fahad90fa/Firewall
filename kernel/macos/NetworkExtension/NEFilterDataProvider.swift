@@ -53,7 +53,17 @@ final class UFWFilterDataProvider: NEFilterDataProvider {
     private let streams = UFWStreamHandler()
     private let packets = UFWPacketHandler()
     private var bridge: UFWIPCBridge?
+    private var control: UFWControlSocket?
     private let installed = UFWInstalledSnapshot()
+
+    /// Monotonic per-event counter. The daemon orders events by it when two
+    /// share a microsecond, which on a machine deciding thousands of flows a
+    /// second is often.
+    private var eventSequence: UInt64 = 0
+
+    /// Resolved once. `ProcessInfo.hostName` can go to the resolver, and the
+    /// verdict path is not somewhere to discover that.
+    private let hostID = ProcessInfo.processInfo.hostName
 
     // MARK: Lifecycle
 
@@ -88,6 +98,44 @@ final class UFWFilterDataProvider: NEFilterDataProvider {
         bridge.connect()
         self.bridge = bridge
 
+        // The channel the daemon actually uses. XPC above is for clients that
+        // cannot open a socket in the group container; this is what carries
+        // policy in a deployment, and `daemon/src/ipc/macos.rs` is the other
+        // end of it.
+        let control = UFWControlSocket(path: UFWControlSocket.defaultPath,
+                                       teamID: UFWIPCBridge.expectedTeamID)
+        control.onPolicy = { [weak self] engine in
+            guard let self else { return }
+            self.queue.async {
+                self.engine = engine
+                self.installed.setPolicy(revision: engine.revision, rules: engine.ruleCount)
+                self.log.info("installed policy revision \(engine.revision, privacy: .public) (\(engine.ruleCount, privacy: .public) rules) over the control socket")
+            }
+        }
+        control.onSignatures = { [weak self] set in
+            self?.queue.async {
+                self?.streams.installSignatures(set)
+                self?.installed.setSignatures(set.signatures.count)
+            }
+        }
+        control.onFlush = { [weak self] in
+            guard let self else { return }
+            self.queue.async {
+                // An empty table, not the built-in one. Re-installing the
+                // compiled-in policy would make a flush mean "revert to the
+                // build", which is not what the operator asked for.
+                self.engine = UFWRuleEngine(rules: [], defaultAction: .deny,
+                                            internalNetworks: [], perimeterNetworks: [])
+                self.installed.setPolicy(revision: 0, rules: 0)
+                self.log.notice("policy flushed; the default action now decides every flow")
+            }
+        }
+        control.statisticsSource = { [weak self] in
+            self?.installed.snapshot() ?? (revision: 0, rules: 0, signatures: 0)
+        }
+        control.start()
+        self.control = control
+
         completionHandler(nil)
     }
 
@@ -95,6 +143,7 @@ final class UFWFilterDataProvider: NEFilterDataProvider {
                              completionHandler: @escaping () -> Void) {
         log.info("stopping: reason \(reason.rawValue, privacy: .public)")
         bridge?.disconnect()
+        control?.stop()
         streams.flushAll()
         completionHandler()
     }
@@ -150,10 +199,10 @@ final class UFWFilterDataProvider: NEFilterDataProvider {
 
             let decision = engine.evaluate(facts, scope: .connectionOriented)
             for alert in engine.drainAlerts() {
-                bridge?.report(alert, facts: facts)
+                emit(alert, facts: facts)
             }
             if decision.shouldLog {
-                bridge?.report(decision, facts: facts)
+                emit(decision, facts: facts)
             }
 
             switch UFWEnforcement.current {
@@ -215,10 +264,10 @@ final class UFWFilterDataProvider: NEFilterDataProvider {
 
             let decision = engine.evaluate(facts, scope: .connectionOriented)
             for alert in engine.drainAlerts() {
-                bridge?.report(alert, facts: facts)
+                emit(alert, facts: facts)
             }
             if decision.shouldLog {
-                bridge?.report(decision, facts: facts)
+                emit(decision, facts: facts)
             }
 
             if decision.action == .deny && UFWEnforcement.current == .enforce {
@@ -297,5 +346,36 @@ final class UFWInstalledSnapshot {
         lock.lock()
         defer { lock.unlock() }
         return (revision, rules, signatures)
+    }
+}
+
+
+extension UFWFilterDataProvider {
+    /// Report one decision on whichever channels are up.
+    ///
+    /// Both, when both are: the control socket carries the binary event the
+    /// daemon's log pipeline reads, and XPC carries the JSON form for a
+    /// management client. Neither is allowed to block the verdict — the socket
+    /// hands off to its own queue, and the XPC queue drops oldest-first when
+    /// it fills. A log line lost is bad; a verdict that misses its deadline is
+    /// worse, because the system then decides the flow permissively and nobody
+    /// finds out.
+    func emit(_ decision: UFWDecision, facts: UFWFlowFacts) {
+        bridge?.report(decision, facts: facts)
+
+        guard let control else { return }
+        eventSequence &+= 1
+        let event = UFWLogEventWire.encode(
+            hostID: hostID,
+            sequence: eventSequence,
+            timestampMicros: UInt64(Date().timeIntervalSince1970 * 1_000_000),
+            // From the snapshot rather than from `engine`, which the
+            // classifier owns; this runs on the same queue today and should
+            // not depend on that staying true.
+            policyRevision: installed.snapshot().revision,
+            decision: decision,
+            facts: facts,
+            latencyNanos: 0)
+        control.report(events: [event])
     }
 }

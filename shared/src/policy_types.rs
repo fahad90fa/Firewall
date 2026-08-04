@@ -1759,6 +1759,92 @@ pub fn render_ports(m: &PortMatch) -> String {
 }
 
 // ===========================================================================
+// macOS placement
+// ===========================================================================
+
+/// Which `NEFilter` callback carries a rule on macOS.
+///
+/// This lives here rather than in the macOS backend because two things need
+/// it and they run at different times: the compiler, when it emits the
+/// build-time rule table, and the extension, when it decodes a policy the
+/// daemon pushed over the control socket. A rule placed one way at build time
+/// and the other way at runtime is a rule that filters differently depending
+/// on how it arrived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum MacosProvider {
+    /// `handleNewFlow`, where `sourceAppAuditToken` gives us the process.
+    Flow = 0,
+    /// `handleNewPacket`, which sees ICMP and everything else without a flow
+    /// — and carries no process context at all.
+    Packet = 1,
+}
+
+/// Which protocols a placement is scoped to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum MacosScope {
+    All = 0,
+    ConnectionOriented = 1,
+    Connectionless = 2,
+}
+
+impl MacosProvider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MacosProvider::Flow => "flow",
+            MacosProvider::Packet => "packet",
+        }
+    }
+}
+
+impl MacosScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MacosScope::All => "any",
+            MacosScope::ConnectionOriented => "connectionOriented",
+            MacosScope::Connectionless => "connectionless",
+        }
+    }
+}
+
+/// Protocols delivered through `handleNewFlow`.
+pub const MACOS_FLOW_PROTOCOLS: [Protocol; 2] = [Protocol::Tcp, Protocol::Udp];
+
+impl CompiledRule {
+    /// Where this rule is installed on macOS.
+    ///
+    /// Usually one placement; a protocol-agnostic rule gets two, because the
+    /// flow provider and the packet provider between them cover what one hook
+    /// covers on the other platforms. Returning a list rather than a single
+    /// value is what makes that expansion explicit instead of a special case
+    /// two implementations have to remember.
+    ///
+    /// An identity-scoped rule is never placed on the packet provider:
+    /// `handleNewPacket` has no audit token, so the predicate could not be
+    /// evaluated there. Installing it anyway would be a rule that silently
+    /// never matches, which is worse than one that is absent.
+    pub fn macos_placements(&self) -> Vec<(MacosProvider, MacosScope)> {
+        let flow_protocol = MACOS_FLOW_PROTOCOLS.contains(&self.protocol);
+        let agnostic = self.protocol == Protocol::Any;
+
+        // Payload inspection only exists for flows, whatever the protocol says.
+        if matches!(self.layer, Layer::AppDpi | Layer::Stream) {
+            return vec![(MacosProvider::Flow, MacosScope::ConnectionOriented)];
+        }
+
+        let mut out = Vec::new();
+        if agnostic || flow_protocol {
+            out.push((MacosProvider::Flow, MacosScope::ConnectionOriented));
+        }
+        if (agnostic || !flow_protocol) && self.app.is_none() {
+            out.push((MacosProvider::Packet, MacosScope::Connectionless));
+        }
+        out
+    }
+}
+
+// ===========================================================================
 // Network profile
 // ===========================================================================
 

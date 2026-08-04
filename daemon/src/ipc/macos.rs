@@ -7,16 +7,25 @@
 //! available across that boundary:
 //!
 //! * **A mach XPC service** (`com.unifiedfirewall.policy.xpc`) — the
-//!   documented, Apple-blessed mechanism, and what
-//!   `NetworkExtension/IPCBridge.swift` advertises.
-//! * **A UNIX domain socket in the group container** — permitted from inside
-//!   the Network Extension sandbox, and a plain byte stream.
+//!   documented, Apple-blessed mechanism.
+//! * **A UNIX domain socket in the group container** — available to a System
+//!   Extension holding `com.apple.security.application-groups`, which
+//!   `build/macos/extension.entitlements` declares, and a plain byte stream.
 //!
-//! The extension listens on both. The daemon uses the socket, because it makes
-//! the framing, multiplexing and bounds checking identical to the other two
-//! platforms — one implementation, one set of tests, one place for a framing
-//! bug to hide. The XPC listener remains for clients that cannot open a socket
-//! in the container, notably a management tool running outside the group.
+//! The extension listens on both: `UFWControlSocket` and `UFWExtensionProtocol`
+//! in `kernel/macos/NetworkExtension/IPCBridge.swift`. The daemon uses the
+//! socket, because it makes the framing, multiplexing and bounds checking
+//! identical to the other two platforms — one implementation, one set of
+//! tests, one place for a framing bug to hide. The XPC listener remains for
+//! clients that cannot open a socket in the container, notably a management
+//! tool running outside the group.
+//!
+//! Using a socket does not weaken the peer check. `LOCAL_PEERTOKEN` yields the
+//! connecting process's audit token, which feeds the same
+//! `SecCodeCopyGuestWithAttributes` path `NSXPCConnection.auditToken` does, so
+//! both channels end at the same Team ID requirement. The peer's *pid* would
+//! not do: pids are reused, and the gap between accepting a connection and
+//! asking who owns it is exactly the gap that needs.
 //!
 //! # Container path
 //!
