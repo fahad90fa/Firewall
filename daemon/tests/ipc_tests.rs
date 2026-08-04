@@ -47,7 +47,11 @@ fn connect() -> Connected {
     let (channel, handshake) =
         KernelChannel::open(daemon_side, tx, "integration-host", TIMEOUT).expect("handshake");
     assert_eq!(handshake.platform, "mock");
-    Connected { channel, events, module }
+    Connected {
+        channel,
+        events,
+        module,
+    }
 }
 
 #[test]
@@ -66,12 +70,9 @@ fn a_full_install_then_incremental_updates() {
     second.revision = first.revision + 1;
     second.rules.remove(0);
     second.rules[0].priority = 999;
-    second.rules.push(CompiledRule::new(
-        99,
-        "added",
-        Layer::Packet,
-        Action::Deny,
-    ));
+    second
+        .rules
+        .push(CompiledRule::new(99, "added", Layer::Packet, Action::Deny));
     second.finalize();
 
     let delta = policy_store::diff(&first, &second);
@@ -250,7 +251,10 @@ fn losing_the_module_reports_a_disconnect_and_fails_later_requests() {
             Err(_) => break,
         }
     }
-    assert!(disconnected, "the supervisor must learn the module went away");
+    assert!(
+        disconnected,
+        "the supervisor must learn the module went away"
+    );
     assert!(!c.channel.is_connected());
     assert!(c.channel.stats(Duration::from_millis(200)).is_err());
 }
@@ -378,5 +382,9 @@ fn a_set_with_no_content_conditions_ships_without_an_automaton() {
     );
     assert!(errors.is_empty(), "{errors:?}");
     assert!(set.automaton().is_none());
-    assert_eq!(*set.encode().last().unwrap(), 0, "the automaton flag should be clear");
+    assert_eq!(
+        *set.encode().last().unwrap(),
+        0,
+        "the automaton flag should be clear"
+    );
 }

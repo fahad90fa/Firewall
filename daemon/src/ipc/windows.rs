@@ -32,7 +32,11 @@ use super::{StreamTransport, Transport};
 pub const DEFAULT_ENDPOINT: &str = ufw_shared::constants::WINDOWS_DEVICE_LINK;
 
 pub fn connect(endpoint: &str) -> io::Result<Box<dyn Transport>> {
-    let path = if endpoint.is_empty() { DEFAULT_ENDPOINT } else { endpoint };
+    let path = if endpoint.is_empty() {
+        DEFAULT_ENDPOINT
+    } else {
+        endpoint
+    };
 
     let file = OpenOptions::new()
         .read(true)

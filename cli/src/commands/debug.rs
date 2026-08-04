@@ -37,7 +37,9 @@ pub fn run(args: &[String], options: &GlobalOptions, transport: &mut dyn Transpo
         "signatures" => signatures(rest, options, transport),
         "dump" => dump(options, transport),
         "mode" => mode(rest, options, transport),
-        other => Err(CliError::Usage(format!("unknown debug subcommand `{other}`"))),
+        other => Err(CliError::Usage(format!(
+            "unknown debug subcommand `{other}`"
+        ))),
     }
 }
 
@@ -82,10 +84,7 @@ fn signatures(
             out.push('\n');
         }
 
-        out.push_str(&format!(
-            "{} signature(s) loaded\n",
-            number(v, "count")
-        ));
+        out.push_str(&format!("{} signature(s) loaded\n", number(v, "count")));
         if dangling > 0 {
             out.push_str(&format!(
                 "\nwarning: {dangling} DPI reference(s) in the installed policy match no \
@@ -156,9 +155,10 @@ fn dump(options: &GlobalOptions, transport: &mut dyn Transport) -> CliResult {
     w.begin_object();
     w.bool_field("ok", true);
     w.str_field("cli_version", ufw_shared::constants::VERSION);
-    w.str_field("collected_at", &ufw_shared::log_types::format_rfc3339_micros(
-        ufw_shared::now_us(),
-    ));
+    w.str_field(
+        "collected_at",
+        &ufw_shared::log_types::format_rfc3339_micros(ufw_shared::now_us()),
+    );
     w.raw_field("status", &status);
     w.raw_field("stats", &stats);
     w.raw_field("rules", &rules);
@@ -170,10 +170,7 @@ fn dump(options: &GlobalOptions, transport: &mut dyn Transport) -> CliResult {
     Ok(emit(options.format, &combined, |v| {
         let status = field(v, "status");
         let mut out = String::new();
-        out.push_str(&format!(
-            "collected {}\n\n",
-            text(v, "collected_at")
-        ));
+        out.push_str(&format!("collected {}\n\n", text(v, "collected_at")));
         out.push_str(&format!(
             "host {} | {} | version {} | mode {}\n",
             text(status, "host_id"),
@@ -181,9 +178,7 @@ fn dump(options: &GlobalOptions, transport: &mut dyn Transport) -> CliResult {
             text(status, "version"),
             text(status, "mode")
         ));
-        out.push_str(
-            "\nRun with `--output json` to capture the full dump for a bug report.\n",
-        );
+        out.push_str("\nRun with `--output json` to capture the full dump for a bug report.\n");
         out
     }))
 }
@@ -211,7 +206,9 @@ fn mode(args: &[String], options: &GlobalOptions, transport: &mut dyn Transport)
 
     let raw = client::call(
         transport,
-        RequestBuilder::new("set-mode").str("mode", mode.as_str()).finish(),
+        RequestBuilder::new("set-mode")
+            .str("mode", mode.as_str())
+            .finish(),
     )?;
 
     Ok(emit(options.format, &raw, |v| {
@@ -242,7 +239,10 @@ mod tests {
     }
 
     fn options(format: Format) -> GlobalOptions {
-        GlobalOptions { format, ..Default::default() }
+        GlobalOptions {
+            format,
+            ..Default::default()
+        }
     }
 
     const STATS: &str = r#"{"ok":true,"packets_seen":100,"packets_allowed":90,"packets_denied":10,
@@ -308,7 +308,10 @@ mod tests {
 
     #[test]
     fn identity_timeouts_are_called_out_as_a_problem() {
-        let lossy = STATS.replace("\"identity_queries_timed_out\":0", "\"identity_queries_timed_out\":5");
+        let lossy = STATS.replace(
+            "\"identity_queries_timed_out\":0",
+            "\"identity_queries_timed_out\":5",
+        );
         let mut t = ScriptedTransport::new([lossy]);
         let out = run(&args(&["stats"]), &options(Format::Table), &mut t).unwrap();
         assert!(out.contains("5 identity query(ies) timed out"), "{out}");
@@ -325,7 +328,8 @@ mod tests {
 
     #[test]
     fn emergency_allow_requires_an_explicit_confirmation() {
-        let mut t = ScriptedTransport::new([r#"{"ok":true,"message":"mode is now emergency-allow"}"#]);
+        let mut t =
+            ScriptedTransport::new([r#"{"ok":true,"message":"mode is now emergency-allow"}"#]);
         let err = run(
             &args(&["mode", "emergency-allow"]),
             &options(Format::Table),
@@ -340,8 +344,9 @@ mod tests {
 
     #[test]
     fn emergency_allow_with_yes_goes_through_and_says_what_it_did() {
-        let mut t =
-            ScriptedTransport::new([r#"{"ok":true,"message":"enforcement mode is now emergency-allow"}"#]);
+        let mut t = ScriptedTransport::new([
+            r#"{"ok":true,"message":"enforcement mode is now emergency-allow"}"#,
+        ]);
         let out = run(
             &args(&["mode", "emergency-allow", "--yes"]),
             &options(Format::Table),
@@ -372,7 +377,12 @@ mod tests {
     #[test]
     fn an_unknown_mode_is_a_usage_error() {
         let mut t = ScriptedTransport::default();
-        let err = run(&args(&["mode", "sideways"]), &options(Format::Table), &mut t).unwrap_err();
+        let err = run(
+            &args(&["mode", "sideways"]),
+            &options(Format::Table),
+            &mut t,
+        )
+        .unwrap_err();
         assert_eq!(err.exit_code(), 2);
     }
 

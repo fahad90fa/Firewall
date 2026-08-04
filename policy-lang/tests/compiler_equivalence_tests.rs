@@ -58,7 +58,10 @@ fn the_realistic_policy_is_equivalent_on_all_three_platforms() {
 #[test]
 fn the_compiler_driver_verifies_equivalence_by_default() {
     let r = compile_str("equiv", &fixture(), &CompileOptions::default());
-    let eq = r.equivalence.as_ref().expect("verification runs by default");
+    let eq = r
+        .equivalence
+        .as_ref()
+        .expect("verification runs by default");
     assert!(eq.is_equivalent(), "{}", eq.render());
     assert!(eq.scenarios_checked > 100);
 }
@@ -204,7 +207,12 @@ fn identity_rules_agree_across_platforms_for_each_platform_binary() {
     let identities = [
         mk(r"C:\Browser\b.exe", Some("Contoso Ltd"), None, None),
         mk("/usr/bin/b", None, None, None),
-        mk("/Applications/B.app", None, Some("com.contoso.b"), Some("ABCDE12345")),
+        mk(
+            "/Applications/B.app",
+            None,
+            Some("com.contoso.b"),
+            Some("ABCDE12345"),
+        ),
     ];
 
     let models: Vec<DecisionModel> = compile_all(&policy).into_iter().map(|a| a.model).collect();
@@ -346,7 +354,11 @@ fn the_linux_ebpf_offload_is_always_a_prefix_of_the_evaluation_order() {
             .filter(|r| r.predicate.direction != Direction::Outbound)
             .map(|r| r.id)
             .collect();
-        let offloaded: Vec<u32> = artifact.model.rules_on(Engine::Ebpf).map(|r| r.id).collect();
+        let offloaded: Vec<u32> = artifact
+            .model
+            .rules_on(Engine::Ebpf)
+            .map(|r| r.id)
+            .collect();
 
         assert_eq!(
             offloaded,
@@ -392,7 +404,10 @@ fn windows_filter_weights_reproduce_the_evaluation_order() {
         .iter()
         .rposition(|r| matches!(r.engine, Engine::WfpAle | Engine::WfpPacket));
     if let (Some(s), Some(g)) = (first_stream, last_group) {
-        assert!(s > g, "stream-layer filters must sort after ALE/packet ones");
+        assert!(
+            s > g,
+            "stream-layer filters must sort after ALE/packet ones"
+        );
     }
 }
 

@@ -41,10 +41,10 @@ use ufw_daemon::config::Config;
 use ufw_daemon::identity::TrustDatabase;
 use ufw_daemon::ipc::{self, KernelChannel, KernelEvent};
 use ufw_daemon::logging::{Enrichment, Logger};
-use ufw_daemon::signatures;
 use ufw_daemon::management_api::{cli, rest, ApiError, ControlPlane, Router};
 use ufw_daemon::policy_loader;
 use ufw_daemon::policy_store::describe;
+use ufw_daemon::signatures;
 use ufw_daemon::state::{self, DaemonState, Health};
 use ufw_shared::constants;
 use ufw_shared::log_types::{EventKind, Severity};
@@ -313,7 +313,10 @@ fn run() -> Result<(), String> {
         let capabilities = daemon.kernel().capabilities;
         if capabilities.has(Capabilities::DPI) {
             let payload = daemon.signatures().encode();
-            match channel.install_signatures(&payload, Duration::from_millis(config.ipc.connect_timeout_ms)) {
+            match channel.install_signatures(
+                &payload,
+                Duration::from_millis(config.ipc.connect_timeout_ms),
+            ) {
                 Ok(ack) => logs.note(
                     &config.daemon.host_id,
                     Severity::Notice,
@@ -735,7 +738,9 @@ impl ControlPlane for Supervisor {
             )));
         };
         let delta = ufw_daemon::policy_store::diff(&active, &loaded.policy);
-        Ok(ufw_daemon::management_api::simple(&describe(&delta, &active)))
+        Ok(ufw_daemon::management_api::simple(&describe(
+            &delta, &active,
+        )))
     }
 
     fn rollback(&self, revision: u64) -> Result<String, ApiError> {

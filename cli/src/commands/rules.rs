@@ -32,7 +32,9 @@ pub fn run(args: &[String], options: &GlobalOptions, transport: &mut dyn Transpo
         "hits" => hits(options, transport),
         // `ufwctl rules --filter dns` with no subcommand is the common case.
         _ if sub.starts_with('-') => list(args, options, transport),
-        other => Err(CliError::Usage(format!("unknown rules subcommand `{other}`"))),
+        other => Err(CliError::Usage(format!(
+            "unknown rules subcommand `{other}`"
+        ))),
     }
 }
 
@@ -194,7 +196,10 @@ mod tests {
     }
 
     fn options(format: Format) -> GlobalOptions {
-        GlobalOptions { format, ..Default::default() }
+        GlobalOptions {
+            format,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -256,7 +261,12 @@ mod tests {
           "has_identity_predicate":false,"has_dpi_predicate":false,"ebpf_eligible":true,
           "log":true,"tags":["baseline"]}}"#;
         let mut t = ScriptedTransport::new([response]);
-        let out = run(&args(&["show", "allow-dns"]), &options(Format::Table), &mut t).unwrap();
+        let out = run(
+            &args(&["show", "allow-dns"]),
+            &options(Format::Table),
+            &mut t,
+        )
+        .unwrap();
         assert!(out.contains("name          allow-dns"));
         assert!(out.contains("identity      any"));
         assert!(out.contains("tags          baseline"));

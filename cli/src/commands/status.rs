@@ -194,7 +194,10 @@ mod tests {
     }"#;
 
     fn options(format: Format) -> GlobalOptions {
-        GlobalOptions { format, ..Default::default() }
+        GlobalOptions {
+            format,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -250,7 +253,9 @@ mod tests {
         let mut t = ScriptedTransport::new([STATUS]);
         let args = vec!["--watch".to_string(), "soon".to_string()];
         assert_eq!(
-            run(&args, &options(Format::Table), &mut t).unwrap_err().exit_code(),
+            run(&args, &options(Format::Table), &mut t)
+                .unwrap_err()
+                .exit_code(),
             2
         );
     }

@@ -197,8 +197,7 @@ fn follow(path: &PathBuf, filter: &Filter, options: &GlobalOptions) -> CliResult
         // Rotation: the file we hold shrank or was replaced.
         if let Ok(meta) = std::fs::metadata(path) {
             if meta.len() < position {
-                file = std::fs::File::open(path)
-                    .map_err(|e| CliError::Local(e.to_string()))?;
+                file = std::fs::File::open(path).map_err(|e| CliError::Local(e.to_string()))?;
                 position = 0;
             }
         }
@@ -329,7 +328,10 @@ mod tests {
     }
 
     fn options(format: Format) -> GlobalOptions {
-        GlobalOptions { format, ..Default::default() }
+        GlobalOptions {
+            format,
+            ..Default::default()
+        }
     }
 
     fn event(ts: &str, decision: &str, rule: &str, app: &str, kind: &str) -> String {
@@ -374,10 +376,34 @@ mod tests {
 
     fn sample() -> LogFile {
         LogFile::new(&[
-            event("2024-01-01T00:00:01.000000Z", "allow", "allow-dns", "/usr/bin/curl", "flow-decision"),
-            event("2024-01-01T00:00:02.000000Z", "deny", "block-telnet", "/tmp/dropper", "flow-decision"),
-            event("2024-01-01T00:00:03.000000Z", "deny", "block-telnet", "/tmp/dropper", "alert"),
-            event("2024-01-02T00:00:00.000000Z", "allow", "allow-dns", "/usr/bin/curl", "flow-decision"),
+            event(
+                "2024-01-01T00:00:01.000000Z",
+                "allow",
+                "allow-dns",
+                "/usr/bin/curl",
+                "flow-decision",
+            ),
+            event(
+                "2024-01-01T00:00:02.000000Z",
+                "deny",
+                "block-telnet",
+                "/tmp/dropper",
+                "flow-decision",
+            ),
+            event(
+                "2024-01-01T00:00:03.000000Z",
+                "deny",
+                "block-telnet",
+                "/tmp/dropper",
+                "alert",
+            ),
+            event(
+                "2024-01-02T00:00:00.000000Z",
+                "allow",
+                "allow-dns",
+                "/usr/bin/curl",
+                "flow-decision",
+            ),
         ])
     }
 
@@ -430,12 +456,7 @@ mod tests {
         for (flags, expected) in cases {
             let mut argv = vec!["--file", &path];
             argv.extend(flags.iter());
-            let out = run(
-                &args(&argv),
-                &options(Format::Table),
-                &mut t,
-            )
-            .unwrap();
+            let out = run(&args(&argv), &options(Format::Table), &mut t).unwrap();
             assert_eq!(
                 out.lines().count(),
                 expected + 1,

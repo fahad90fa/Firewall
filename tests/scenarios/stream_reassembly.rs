@@ -98,7 +98,10 @@ fn a_dpi_scan_survives_the_wire_intact() {
     assert_eq!(decoded.l7, scan.l7);
     assert_eq!(decoded.hits, scan.hits);
     assert_eq!(decoded.first_hit_offset, scan.first_hit_offset);
-    assert!(decoded.truncated, "the truncation flag must survive the round trip");
+    assert!(
+        decoded.truncated,
+        "the truncation flag must survive the round trip"
+    );
 }
 
 #[test]
@@ -140,8 +143,7 @@ fn a_module_reporting_the_wrong_abi_is_refused_rather_than_trusted() {
     });
     let (tx, _events) = channel();
 
-    let result =
-        KernelChannel::open(daemon_side, tx, "wrong-abi", Duration::from_secs(2));
+    let result = KernelChannel::open(daemon_side, tx, "wrong-abi", Duration::from_secs(2));
     assert!(
         result.is_err(),
         "a module with a mismatched ABI revision must not complete the handshake"
@@ -166,7 +168,10 @@ fn a_module_that_never_answers_produces_a_timeout_rather_than_a_hang() {
             .expect("the handshake still completes; only stats are ignored");
 
     let result = kernel.stats(Duration::from_millis(200));
-    assert!(result.is_err(), "an unanswered request must time out, not block");
+    assert!(
+        result.is_err(),
+        "an unanswered request must time out, not block"
+    );
 
     kernel.shutdown();
     module.stop();

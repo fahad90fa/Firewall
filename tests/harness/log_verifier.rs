@@ -25,7 +25,9 @@ pub struct Captured {
 
 impl Captured {
     pub fn from(sink: &MemorySink) -> Self {
-        Captured { events: sink.events.lock().unwrap().clone() }
+        Captured {
+            events: sink.events.lock().unwrap().clone(),
+        }
     }
 
     pub fn len(&self) -> usize {

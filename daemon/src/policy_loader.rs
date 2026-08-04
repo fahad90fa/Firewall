@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use ufw_policy_lang::{CompileOptions, Compilation};
+use ufw_policy_lang::{Compilation, CompileOptions};
 use ufw_shared::policy_types::CompiledPolicy;
 
 use crate::config::PolicyConfig;
@@ -154,7 +154,10 @@ pub fn load(config: &PolicyConfig) -> Result<LoadedPolicy, LoadError> {
     };
 
     let Some(policy) = result.policy else {
-        return Err(LoadError::Compile { file: source_path, diagnostics });
+        return Err(LoadError::Compile {
+            file: source_path,
+            diagnostics,
+        });
     };
 
     if let Some(eq) = &result.equivalence {
@@ -178,7 +181,7 @@ pub fn load(config: &PolicyConfig) -> Result<LoadedPolicy, LoadError> {
             .unwrap_or(0),
         rules_removed: result.optimization.rules_removed(),
         ebpf_eligible: result.optimization.ebpf_eligible,
-        })
+    })
 }
 
 /// The policy files to load, in order.
@@ -386,7 +389,10 @@ mod tests {
         f.write("base.yaml", GOOD);
         let loaded = load(&f.config()).expect("compiles");
         assert_eq!(loaded.policy.rules.len(), 1);
-        assert!(loaded.equivalence_scenarios > 0, "equivalence must have run");
+        assert!(
+            loaded.equivalence_scenarios > 0,
+            "equivalence must have run"
+        );
         assert!(loaded.source.ends_with("base.yaml"));
     }
 
@@ -504,7 +510,10 @@ mod tests {
         w.poll();
 
         f.write("extra.yaml", "version: 1\n");
-        assert!(w.poll(), "a policy added after startup must trigger a reload");
+        assert!(
+            w.poll(),
+            "a policy added after startup must trigger a reload"
+        );
     }
 
     #[test]

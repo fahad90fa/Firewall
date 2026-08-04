@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use ufw_policy_lang::compiler;
-use ufw_policy_lang::{CompileOptions, Compilation};
+use ufw_policy_lang::{Compilation, CompileOptions};
 use ufw_shared::policy_types::{Decision, Direction, FlowContext, Protocol};
 use ufw_shared::Platform;
 
@@ -61,13 +61,17 @@ pub fn run(args: &[String], options: &GlobalOptions, transport: &mut dyn Transpo
                 .map_err(|_| CliError::Usage("the revision must be a number".into()))?;
             let raw = client::call(
                 transport,
-                RequestBuilder::new("rollback").num("revision", revision).finish(),
+                RequestBuilder::new("rollback")
+                    .num("revision", revision)
+                    .finish(),
             )?;
             Ok(emit(options.format, &raw, |v| {
                 format!("{}\n", text(v, "message"))
             }))
         }
-        other => Err(CliError::Usage(format!("unknown policy subcommand `{other}`"))),
+        other => Err(CliError::Usage(format!(
+            "unknown policy subcommand `{other}`"
+        ))),
     }
 }
 
@@ -163,7 +167,10 @@ pub fn validate_offline(args: &[String], options: &GlobalOptions) -> CliResult {
         w.str_field("file", &path.display().to_string());
         w.u64_field("rules", policy.rules.len() as u64);
         w.u64_field("warnings", result.diagnostics.warning_count() as u64);
-        w.str_field("ruleset_sha256", &ufw_shared::hash::hex(&policy.ruleset_hash));
+        w.str_field(
+            "ruleset_sha256",
+            &ufw_shared::hash::hex(&policy.ruleset_hash),
+        );
         w.u64_field(
             "equivalence_scenarios",
             result
@@ -400,7 +407,10 @@ fn parse_flow(text: &str) -> Result<FlowSpec, CliError> {
         let end = stripped
             .find(']')
             .ok_or_else(|| CliError::Usage("unterminated IPv6 literal".into()))?;
-        (&stripped[..end], stripped[end + 1..].trim_start_matches(':'))
+        (
+            &stripped[..end],
+            stripped[end + 1..].trim_start_matches(':'),
+        )
     } else {
         rest.split_once(':')
             .ok_or_else(|| CliError::Usage("a flow needs a port".into()))?
@@ -423,7 +433,12 @@ fn parse_flow(text: &str) -> Result<FlowSpec, CliError> {
             .ok_or_else(|| CliError::Usage(format!("`{d}` is not a direction")))?,
     };
 
-    Ok(FlowSpec { protocol, dst, port, direction })
+    Ok(FlowSpec {
+        protocol,
+        dst,
+        port,
+        direction,
+    })
 }
 
 #[cfg(test)]
@@ -485,7 +500,10 @@ rules:
     }
 
     fn options(format: Format) -> GlobalOptions {
-        GlobalOptions { format, ..Default::default() }
+        GlobalOptions {
+            format,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -502,8 +520,8 @@ rules:
     fn validate_reports_compiler_diagnostics_and_fails() {
         let f = Fixture::new("invalid");
         let path = f.write("p.yaml", "version: 1\nrules:\n  - id: a\n");
-        let err =
-            validate_offline(&args(&[path.to_str().unwrap()]), &options(Format::Table)).unwrap_err();
+        let err = validate_offline(&args(&[path.to_str().unwrap()]), &options(Format::Table))
+            .unwrap_err();
         let text = err.to_string();
         assert!(text.contains("E0201"), "{text}");
         assert_eq!(err.exit_code(), 1);
@@ -549,7 +567,10 @@ rules:
             "linux/ufw_ebpf_rules.h",
             "macos/UFWPolicy.generated.swift",
         ] {
-            assert!(out_dir.join(expected).exists(), "{expected} was not written");
+            assert!(
+                out_dir.join(expected).exists(),
+                "{expected} was not written"
+            );
         }
     }
 
@@ -625,12 +646,21 @@ rules:
         assert!(spec.dst.is_ipv6());
 
         // Direction defaults to outbound, which is the common case.
-        assert_eq!(parse_flow("udp:1.1.1.1:53").unwrap().direction, Direction::Outbound);
+        assert_eq!(
+            parse_flow("udp:1.1.1.1:53").unwrap().direction,
+            Direction::Outbound
+        );
     }
 
     #[test]
     fn malformed_flows_are_usage_errors() {
-        for bad in ["", "tcp", "tcp:notanip:443", "tcp:1.1.1.1:notaport", "zz:1.1.1.1:1"] {
+        for bad in [
+            "",
+            "tcp",
+            "tcp:notanip:443",
+            "tcp:1.1.1.1:notaport",
+            "zz:1.1.1.1:1",
+        ] {
             assert_eq!(parse_flow(bad).unwrap_err().exit_code(), 2, "for {bad:?}");
         }
     }
@@ -638,7 +668,12 @@ rules:
     #[test]
     fn rollback_requires_a_numeric_revision() {
         let mut t = ScriptedTransport::new([r#"{"ok":true,"message":"done"}"#]);
-        let err = run(&args(&["rollback", "soon"]), &options(Format::Table), &mut t).unwrap_err();
+        let err = run(
+            &args(&["rollback", "soon"]),
+            &options(Format::Table),
+            &mut t,
+        )
+        .unwrap_err();
         assert_eq!(err.exit_code(), 2);
     }
 

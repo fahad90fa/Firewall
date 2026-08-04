@@ -67,7 +67,12 @@ fn a_signed_binary_matching_its_fingerprint_is_permitted() {
         "Contoso Ltd",
         TrustLevel::Trusted,
     ));
-    assert_decided_by(&p, &flow, "browser-web", "the deployed browser reaching the web");
+    assert_decided_by(
+        &p,
+        &flow,
+        "browser-web",
+        "the deployed browser reaching the web",
+    );
 }
 
 #[test]
@@ -80,18 +85,41 @@ fn one_application_can_be_described_for_three_platforms_at_once() {
     let p = policy(IDENTITY_POLICY);
 
     let linux = Flow::tcp("93.184.216.34", 443).with_identity(identities::signed(
-        "/opt/contoso/browser", "irrelevant-on-linux", TrustLevel::Trusted));
-    assert_decided_by(&p, &linux, "browser-web", "the Linux build, identified by path");
+        "/opt/contoso/browser",
+        "irrelevant-on-linux",
+        TrustLevel::Trusted,
+    ));
+    assert_decided_by(
+        &p,
+        &linux,
+        "browser-web",
+        "the Linux build, identified by path",
+    );
 
     let macos = Flow::tcp("93.184.216.34", 443).with_identity(identities::team(
         "/Applications/Contoso Browser.app/Contents/MacOS/browser",
-        "ABCDE12345", "com.contoso.browser", TrustLevel::Trusted));
-    assert_decided_by(&p, &macos, "browser-web", "the macOS build, identified by Team ID");
+        "ABCDE12345",
+        "com.contoso.browser",
+        TrustLevel::Trusted,
+    ));
+    assert_decided_by(
+        &p,
+        &macos,
+        "browser-web",
+        "the macOS build, identified by Team ID",
+    );
 
     let windows = Flow::tcp("93.184.216.34", 443).with_identity(identities::signed(
-        "C:\\Program Files\\Contoso Browser\\browser.exe", "Contoso Ltd",
-        TrustLevel::Trusted));
-    assert_decided_by(&p, &windows, "browser-web", "the Windows build, identified by signer");
+        "C:\\Program Files\\Contoso Browser\\browser.exe",
+        "Contoso Ltd",
+        TrustLevel::Trusted,
+    ));
+    assert_decided_by(
+        &p,
+        &windows,
+        "browser-web",
+        "the Windows build, identified by signer",
+    );
 }
 
 #[test]
@@ -101,11 +129,17 @@ fn the_same_path_from_a_different_signer_does_not_match() {
     // is the entire reason the rule names a signer as well as a path.
     let p = policy(IDENTITY_POLICY);
     let flow = Flow::tcp("93.184.216.34", 443).with_identity(identities::signed(
-        "C:\\Program Files\\Contoso Browser\\browser.exe", "Someone Else",
-        TrustLevel::Trusted));
+        "C:\\Program Files\\Contoso Browser\\browser.exe",
+        "Someone Else",
+        TrustLevel::Trusted,
+    ));
     // Falls through the allow to the unsigned-deny? No: it is `trusted`, so it
     // matches neither. It reaches the policy default, which is deny.
-    assert_default(&p, &flow, "a trusted binary at the browser's path, signed by someone else");
+    assert_default(
+        &p,
+        &flow,
+        "a trusted binary at the browser's path, signed by someone else",
+    );
 }
 
 #[test]
@@ -115,22 +149,32 @@ fn an_unresolved_identity_matches_nothing() {
     let flow = Flow::tcp("93.184.216.34", 443).unidentified();
 
     // It does not match `browser-web`, which is the obvious half.
-    let outcome = ufw_e2e::connection_tracker::evaluate(
-        &p, &flow, "an unresolved process reaching the web");
-    assert_ne!(outcome.rule_name.as_deref(), Some("browser-web"),
-               "an unresolved process must not satisfy an application rule");
+    let outcome =
+        ufw_e2e::connection_tracker::evaluate(&p, &flow, "an unresolved process reaching the web");
+    assert_ne!(
+        outcome.rule_name.as_deref(),
+        Some("browser-web"),
+        "an unresolved process must not satisfy an application rule"
+    );
 
     // And it does not match `deny-unsigned-web` either, which is the half that
     // matters: that rule's predicate is `trust: [untrusted, unknown]`, and an
     // absent identity has no trust level at all. It is not "unknown trust" —
     // it is "no answer", and a rule written about trust levels must not fire on
     // the absence of one.
-    assert_ne!(outcome.rule_name.as_deref(), Some("deny-unsigned-web"),
-               "an absent identity is not the same as a known-untrusted one");
+    assert_ne!(
+        outcome.rule_name.as_deref(),
+        Some("deny-unsigned-web"),
+        "an absent identity is not the same as a known-untrusted one"
+    );
 
     // The flow is still denied — by the policy default, which is where an
     // undecidable flow belongs.
-    assert_default(&p, &flow, "an unresolved process falls through to the default");
+    assert_default(
+        &p,
+        &flow,
+        "an unresolved process falls through to the default",
+    );
 }
 
 #[test]
@@ -140,8 +184,12 @@ fn an_unsigned_binary_is_denied_by_the_rule_written_for_it() {
     let p = policy(IDENTITY_POLICY);
     let flow = Flow::tcp("93.184.216.34", 443)
         .with_identity(identities::unsigned("/tmp/downloaded-thing"));
-    assert_decided_by(&p, &flow, "deny-unsigned-web",
-                      "an unsigned binary reaching the web");
+    assert_decided_by(
+        &p,
+        &flow,
+        "deny-unsigned-web",
+        "an unsigned binary reaching the web",
+    );
 }
 
 #[test]
@@ -151,19 +199,26 @@ fn a_tampered_signature_is_worse_than_no_signature() {
     // with no signature was simply never signed. Collapsing the two loses the
     // only evidence that something was altered.
     let p = policy(IDENTITY_POLICY);
-    let flow = Flow::tcp("93.184.216.34", 443)
-        .with_identity(identities::tampered("/usr/lib/contoso-browser/browser", "Contoso Ltd"));
+    let flow = Flow::tcp("93.184.216.34", 443).with_identity(identities::tampered(
+        "/usr/lib/contoso-browser/browser",
+        "Contoso Ltd",
+    ));
 
     // It is at the browser's exact path with the right signer string, and it
     // still does not match `browser-web`, because the rule requires the
     // signature to *validate*.
-    assert_decided_by(&p, &flow, "deny-unsigned-web",
-                      "a modified copy of the browser at the browser's path");
+    assert_decided_by(
+        &p,
+        &flow,
+        "deny-unsigned-web",
+        "a modified copy of the browser at the browser's path",
+    );
 }
 
 #[test]
 fn a_trust_bound_admits_everything_at_or_above_it() {
-    let p = policy("\
+    let p = policy(
+        "\
 version: 1
 defaults:
   action: deny
@@ -177,16 +232,24 @@ rules:
       trust: [\">= known\"]
     destination:
       ports: [443]
-");
+",
+    );
     for (trust, label) in [
         (TrustLevel::Known, "known"),
         (TrustLevel::Trusted, "trusted"),
         (TrustLevel::System, "system"),
     ] {
-        let flow = Flow::tcp("93.184.216.34", 443)
-            .with_identity(identities::signed("/usr/bin/thing", "Someone", trust));
-        assert_decided_by(&p, &flow, "allow-known-or-better",
-                          &format!("a `{label}` binary against `>= known`"));
+        let flow = Flow::tcp("93.184.216.34", 443).with_identity(identities::signed(
+            "/usr/bin/thing",
+            "Someone",
+            trust,
+        ));
+        assert_decided_by(
+            &p,
+            &flow,
+            "allow-known-or-better",
+            &format!("a `{label}` binary against `>= known`"),
+        );
     }
 
     for (identity, label) in [
@@ -223,8 +286,14 @@ rules:
 ",
         &ufw_policy_lang::CompileOptions::default(),
     );
-    assert!(!result.is_ok(),
-            "an identity predicate on ICMP should not compile:\n{}", result.render());
-    assert!(result.render().contains("icmp"),
-            "the diagnostic should name the protocol:\n{}", result.render());
+    assert!(
+        !result.is_ok(),
+        "an identity predicate on ICMP should not compile:\n{}",
+        result.render()
+    );
+    assert!(
+        result.render().contains("icmp"),
+        "the diagnostic should name the protocol:\n{}",
+        result.render()
+    );
 }

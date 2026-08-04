@@ -69,7 +69,11 @@ fn binary() -> PathBuf {
     if path.ends_with("deps") {
         path.pop();
     }
-    path.join(if cfg!(windows) { "ufwctl.exe" } else { "ufwctl" })
+    path.join(if cfg!(windows) {
+        "ufwctl.exe"
+    } else {
+        "ufwctl"
+    })
 }
 
 fn run(args: &[&str]) -> Output {
@@ -141,7 +145,12 @@ fn a_usage_error_exits_two() {
         vec!["policy", "explain"],
     ] {
         let out = run(&args);
-        assert_eq!(code(&out), 2, "{args:?} should be a usage error: {}", stderr(&out));
+        assert_eq!(
+            code(&out),
+            2,
+            "{args:?} should be a usage error: {}",
+            stderr(&out)
+        );
     }
 }
 
@@ -267,10 +276,7 @@ fn json_output_is_machine_readable_for_ci() {
     let v = ufw_shared::json::parse(stdout(&out).trim()).expect("valid JSON");
     assert_eq!(v.get("ok").unwrap().as_bool(), Some(true));
     assert_eq!(v.get("rules").unwrap().as_u64(), Some(2));
-    assert_eq!(
-        v.get("ruleset_sha256").unwrap().as_str().unwrap().len(),
-        64
-    );
+    assert_eq!(v.get("ruleset_sha256").unwrap().as_str().unwrap().len(), 64);
 }
 
 #[test]
@@ -376,7 +382,11 @@ fn subcommand_help_never_needs_a_daemon() {
         // Help you can only read when the service is up is help you cannot
         // read when you need it.
         assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
-        assert!(stdout(&out).contains("ufwctl"), "{args:?}: {}", stdout(&out));
+        assert!(
+            stdout(&out).contains("ufwctl"),
+            "{args:?}: {}",
+            stdout(&out)
+        );
     }
 }
 
@@ -384,5 +394,9 @@ fn subcommand_help_never_needs_a_daemon() {
 fn a_mistyped_command_suggests_the_real_one() {
     let out = run(&["polciy", "validate"]);
     assert_eq!(code(&out), 2);
-    assert!(stderr(&out).contains("did you mean `policy`"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("did you mean `policy`"),
+        "{}",
+        stderr(&out)
+    );
 }

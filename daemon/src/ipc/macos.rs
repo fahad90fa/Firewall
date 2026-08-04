@@ -31,7 +31,8 @@ use std::path::PathBuf;
 use super::Transport;
 
 /// System-wide container path. Overridable through `ipc.endpoint`.
-pub const DEFAULT_ENDPOINT: &str = "/Library/Group Containers/group.com.unifiedfirewall/ufw-control.sock";
+pub const DEFAULT_ENDPOINT: &str =
+    "/Library/Group Containers/group.com.unifiedfirewall/ufw-control.sock";
 
 pub fn connect(endpoint: &str) -> io::Result<Box<dyn Transport>> {
     let candidates: Vec<PathBuf> = if endpoint.is_empty() {
@@ -53,7 +54,10 @@ pub fn connect(endpoint: &str) -> io::Result<Box<dyn Transport>> {
         .map(|p| p.display().to_string())
         .collect::<Vec<_>>()
         .join(", ");
-    let kind = last.as_ref().map(|e| e.kind()).unwrap_or(io::ErrorKind::NotFound);
+    let kind = last
+        .as_ref()
+        .map(|e| e.kind())
+        .unwrap_or(io::ErrorKind::NotFound);
     Err(io::Error::new(
         kind,
         format!(

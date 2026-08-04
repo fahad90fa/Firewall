@@ -515,7 +515,10 @@ mod tests {
     fn every_format_renders_a_single_line() {
         for format in [LogFormat::Json, LogFormat::Text, LogFormat::Cef] {
             let line = render(&event(1), format);
-            assert!(!line.contains('\n'), "{format:?} produced a multi-line record");
+            assert!(
+                !line.contains('\n'),
+                "{format:?} produced a multi-line record"
+            );
             assert!(!line.is_empty());
         }
     }
@@ -595,7 +598,11 @@ mod tests {
             sink.flush().unwrap();
         }
         let text = std::fs::read_to_string(&config.path).unwrap();
-        assert_eq!(text.lines().count(), 2, "a daemon restart must not lose logs");
+        assert_eq!(
+            text.lines().count(),
+            2,
+            "a daemon restart must not lose logs"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

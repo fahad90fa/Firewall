@@ -2,7 +2,7 @@
 //! compiler driver so defaults, inference and lowering are all in play.
 
 use ufw_policy_lang::error::codes;
-use ufw_policy_lang::{compile_str, CompileOptions, Compilation};
+use ufw_policy_lang::{compile_str, Compilation, CompileOptions};
 use ufw_shared::identity_types::{AppIdentity, SignatureType, TrustLevel};
 use ufw_shared::policy_types::*;
 
@@ -93,7 +93,11 @@ fn perimeter_upgrade_applies_only_where_the_destination_can_leave() {
 #[test]
 fn application_definitions_lower_to_platform_aware_predicates() {
     let policy = compiled(&fixture());
-    let browser = policy.rules.iter().find(|r| r.name == "browser-web").unwrap();
+    let browser = policy
+        .rules
+        .iter()
+        .find(|r| r.name == "browser-web")
+        .unwrap();
     let app = browser.app.as_ref().expect("identity predicate");
 
     // One fingerprint per platform block, so the Windows signer requirement
@@ -101,7 +105,11 @@ fn application_definitions_lower_to_platform_aware_predicates() {
     assert_eq!(app.fingerprints.len(), 3);
 
     // Windows and macOS paths compare case-insensitively; Linux paths do not.
-    let paths: Vec<_> = app.fingerprints.iter().flat_map(|f| f.paths.iter()).collect();
+    let paths: Vec<_> = app
+        .fingerprints
+        .iter()
+        .flat_map(|f| f.paths.iter())
+        .collect();
     let win = paths.iter().find(|p| p.pattern.contains('\\')).unwrap();
     assert!(win.case_insensitive);
     let lin = paths
@@ -110,12 +118,14 @@ fn application_definitions_lower_to_platform_aware_predicates() {
         .unwrap();
     assert!(!lin.case_insensitive);
 
-    let has = |f: fn(&ufw_shared::policy_types::AppFingerprint) -> bool| {
-        app.fingerprints.iter().any(f)
-    };
+    let has =
+        |f: fn(&ufw_shared::policy_types::AppFingerprint) -> bool| app.fingerprints.iter().any(f);
     assert!(has(|f| f.signers.iter().any(|s| s == "Contoso Ltd")));
     assert!(has(|f| f.team_ids.iter().any(|t| t == "ABCDE12345")));
-    assert!(has(|f| f.bundle_ids.iter().any(|b| b == "com.contoso.browser")));
+    assert!(has(|f| f
+        .bundle_ids
+        .iter()
+        .any(|b| b == "com.contoso.browser")));
     assert!(app.require_valid_signature);
     // `>= trusted` admits trusted and system, nothing weaker.
     assert!(!app.trust.contains(TrustLevel::Known));
@@ -194,7 +204,9 @@ fn the_compiled_fixture_enforces_what_it_says() {
 
     let tunnel = dns.clone().with_dpi(DpiScan {
         l7: L7Protocol::Dns,
-        hits: vec![ufw_shared::hash::derive_signature_id("dns-tunnel-high-entropy")],
+        hits: vec![ufw_shared::hash::derive_signature_id(
+            "dns-tunnel-high-entropy",
+        )],
         first_hit_offset: 12,
         truncated: false,
     });
@@ -286,8 +298,9 @@ fn diagnostics_render_with_a_caret_under_the_offending_text() {
     assert!(text.contains("error[E0202]"));
     assert!(text.contains("did you mean `allow`?"));
     assert!(text.contains("action: allowe"));
-    assert!(text.lines().any(|l| l.trim_start().starts_with('^')
-        || l.contains("^^^")));
+    assert!(text
+        .lines()
+        .any(|l| l.trim_start().starts_with('^') || l.contains("^^^")));
 }
 
 #[test]
@@ -326,7 +339,10 @@ fn a_header_only_rule_can_be_pinned_to_the_perimeter_stage() {
     );
     assert!(result.is_ok(), "{}", result.render());
     let policy = result.policy.as_ref().expect("compiled");
-    assert_eq!(policy.rules[0].layer, ufw_shared::policy_types::Layer::Perimeter);
+    assert_eq!(
+        policy.rules[0].layer,
+        ufw_shared::policy_types::Layer::Perimeter
+    );
 }
 
 #[test]
@@ -342,7 +358,10 @@ fn an_identity_rule_still_cannot_be_pinned_below_the_identity_stage() {
         );
         let result = compile_str("identity", &source, &CompileOptions::default());
         assert!(
-            result.diagnostics.iter().any(|d| d.code == codes::LAYER_MISMATCH),
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.code == codes::LAYER_MISMATCH),
             "`layer: {layer}` on an identity rule should be refused:\n{}",
             result.render()
         );

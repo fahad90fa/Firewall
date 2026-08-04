@@ -328,7 +328,10 @@ impl DaemonState {
         match self.with_policies(|s| s.active().map(|r| (r.origin.clone(), r.activated_at_us))) {
             Some((origin, at)) => {
                 w.str_field("origin", &origin);
-                w.str_field("activated_at", &ufw_shared::log_types::format_rfc3339_micros(at));
+                w.str_field(
+                    "activated_at",
+                    &ufw_shared::log_types::format_rfc3339_micros(at),
+                );
             }
             None => {
                 w.null_field("origin");
@@ -415,7 +418,10 @@ pub fn platform_trust_anchors() -> Vec<(String, TrustLevel)> {
     {
         return vec![
             ("Software Signing".into(), TrustLevel::System),
-            ("Apple Mac OS Application Signing".into(), TrustLevel::System),
+            (
+                "Apple Mac OS Application Signing".into(),
+                TrustLevel::System,
+            ),
         ];
     }
     #[allow(unreachable_code)]
@@ -452,7 +458,9 @@ mod tests {
     fn state() -> (DaemonState, Logger) {
         let logger = Logger::with_sinks(&logging_config(), Enrichment::default(), Vec::new());
         let identity = Arc::new(IdentityService::new(
-            Box::new(crate::identity::NullResolver::new(ResolverOptions::default())),
+            Box::new(crate::identity::NullResolver::new(
+                ResolverOptions::default(),
+            )),
             TrustDatabase::new(),
             ResolverOptions::default(),
             16,
@@ -515,7 +523,9 @@ mod tests {
     fn policy_state_is_reflected_in_status() {
         let (s, _l) = state();
         s.with_policies(|store| {
-            let staged = store.stage(policy(), "test.yaml", 1_700_000_000_000_000).unwrap();
+            let staged = store
+                .stage(policy(), "test.yaml", 1_700_000_000_000_000)
+                .unwrap();
             store.commit(staged);
         });
         s.note_reload(true);
@@ -535,7 +545,10 @@ mod tests {
         let json = s.status_json();
         let v = ufw_shared::json::parse(&json).expect("valid JSON from a cold daemon");
         assert_eq!(v.get("health").unwrap().as_str(), Some("starting"));
-        assert_eq!(v.get("policy").unwrap().get("origin"), Some(&ufw_shared::json::Json::Null));
+        assert_eq!(
+            v.get("policy").unwrap().get("origin"),
+            Some(&ufw_shared::json::Json::Null)
+        );
     }
 
     #[test]
@@ -565,7 +578,11 @@ mod tests {
         assert!(names.contains(&"dpi"));
         assert!(names.contains(&"ebpf-fastpath"));
         assert_eq!(
-            v.get("traffic").unwrap().get("flows_denied").unwrap().as_u64(),
+            v.get("traffic")
+                .unwrap()
+                .get("flows_denied")
+                .unwrap()
+                .as_u64(),
             Some(7)
         );
     }

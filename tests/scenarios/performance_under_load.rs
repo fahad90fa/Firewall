@@ -224,7 +224,10 @@ fn the_optimizer_does_not_make_evaluation_slower() {
     };
 
     let optimized = ufw_policy_lang::compile_str(
-        "optimized", &source, &ufw_policy_lang::CompileOptions::default());
+        "optimized",
+        &source,
+        &ufw_policy_lang::CompileOptions::default(),
+    );
     assert!(optimized.is_ok(), "{}", optimized.render());
 
     let unoptimized = ufw_policy_lang::compile_str(

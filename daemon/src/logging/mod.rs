@@ -150,7 +150,13 @@ impl LogHandle {
     }
 
     /// Convenience for the daemon's own operational messages.
-    pub fn note(&self, host_id: &str, severity: Severity, kind: EventKind, message: impl Into<String>) {
+    pub fn note(
+        &self,
+        host_id: &str,
+        severity: Severity,
+        kind: EventKind,
+        message: impl Into<String>,
+    ) {
         let mut event = LogEvent::new(
             ufw_shared::now_us(),
             host_id,
@@ -194,7 +200,9 @@ pub struct Logger {
 
 impl std::fmt::Debug for Logger {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Logger").field("handle", &self.handle).finish()
+        f.debug_struct("Logger")
+            .field("handle", &self.handle)
+            .finish()
     }
 }
 
@@ -216,7 +224,9 @@ impl Logger {
         let mut problems = Vec::new();
 
         if config.stdout {
-            sinks.push(Box::new(sink::StdoutSink::new(crate::config::LogFormat::Text)));
+            sinks.push(Box::new(sink::StdoutSink::new(
+                crate::config::LogFormat::Text,
+            )));
         }
         if let Some(file) = &config.file {
             match sink::FileSink::open(file) {
@@ -541,8 +551,9 @@ mod tests {
         );
         // The routine permit is gone; everything else survived.
         assert_eq!(out.len(), 3);
-        assert!(out.iter().all(|e| e.decision == Decision::Deny
-            || e.kind != EventKind::FlowDecision));
+        assert!(out
+            .iter()
+            .all(|e| e.decision == Decision::Deny || e.kind != EventKind::FlowDecision));
     }
 
     #[test]
@@ -575,7 +586,11 @@ mod tests {
         );
         assert_eq!(out.len(), 4, "three denials plus one correlation");
         let alert = out.iter().find(|e| e.kind == EventKind::Alert).unwrap();
-        assert!(alert.message.as_deref().unwrap().contains("correlated pattern"));
+        assert!(alert
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("correlated pattern"));
         assert!(alert.tags.contains(&"correlation".to_string()));
     }
 

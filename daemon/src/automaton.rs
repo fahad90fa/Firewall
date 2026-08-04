@@ -260,7 +260,10 @@ impl Automaton {
             return None;
         }
 
-        Some(Automaton { patterns: patterns.to_vec(), tries })
+        Some(Automaton {
+            patterns: patterns.to_vec(),
+            tries,
+        })
     }
 
     pub fn patterns(&self) -> &[Pattern] {
@@ -277,7 +280,9 @@ impl Automaton {
 
     /// One pass over `data`, both tries advancing together.
     pub fn scan(&self, data: &[u8]) -> MatchTable {
-        let mut table = MatchTable { hits: vec![PatternHit::default(); self.patterns.len()] };
+        let mut table = MatchTable {
+            hits: vec![PatternHit::default(); self.patterns.len()],
+        };
         if data.is_empty() {
             return table;
         }
@@ -459,7 +464,11 @@ pub fn naive_contains(pattern: &[u8], nocase: bool, data: &[u8], offset: u32, de
     if plen == 0 || offset >= len {
         return false;
     }
-    let mut end = if depth != 0 { offset.saturating_add(depth) } else { len };
+    let mut end = if depth != 0 {
+        offset.saturating_add(depth)
+    } else {
+        len
+    };
     if end > len {
         end = len;
     }
@@ -513,7 +522,11 @@ pub fn content_matches(
     if plen == 0 || offset >= len {
         return false;
     }
-    let mut end = if depth != 0 { offset.saturating_add(depth) } else { len };
+    let mut end = if depth != 0 {
+        offset.saturating_add(depth)
+    } else {
+        len
+    };
     if end > len {
         end = len;
     }
@@ -535,11 +548,17 @@ mod tests {
     use super::*;
 
     fn pat(s: &str) -> Pattern {
-        Pattern { bytes: s.as_bytes().to_vec(), nocase: false }
+        Pattern {
+            bytes: s.as_bytes().to_vec(),
+            nocase: false,
+        }
     }
 
     fn ipat(s: &str) -> Pattern {
-        Pattern { bytes: s.as_bytes().to_vec(), nocase: true }
+        Pattern {
+            bytes: s.as_bytes().to_vec(),
+            nocase: true,
+        }
     }
 
     #[test]
@@ -548,10 +567,28 @@ mod tests {
         let a = Automaton::build(&patterns).expect("built");
         let table = a.scan(b"ushers");
         // "she" at 1, "he" at 2, "hers" at 2. "his" never.
-        assert_eq!(table.hit(0), PatternHit { first_start: 2, count: 1 });
-        assert_eq!(table.hit(1), PatternHit { first_start: 1, count: 1 });
+        assert_eq!(
+            table.hit(0),
+            PatternHit {
+                first_start: 2,
+                count: 1
+            }
+        );
+        assert_eq!(
+            table.hit(1),
+            PatternHit {
+                first_start: 1,
+                count: 1
+            }
+        );
         assert_eq!(table.hit(2), PatternHit::default());
-        assert_eq!(table.hit(3), PatternHit { first_start: 2, count: 1 });
+        assert_eq!(
+            table.hit(3),
+            PatternHit {
+                first_start: 2,
+                count: 1
+            }
+        );
     }
 
     #[test]
@@ -585,7 +622,11 @@ mod tests {
         assert_eq!(upper.hit(1).count, 1, "the folded pattern matched too");
 
         let lower = a.scan(b"post /");
-        assert_eq!(lower.hit(0).count, 0, "a case-sensitive pattern must not fold");
+        assert_eq!(
+            lower.hit(0).count,
+            0,
+            "a case-sensitive pattern must not fold"
+        );
         assert_eq!(lower.hit(1).count, 1);
     }
 
@@ -602,7 +643,13 @@ mod tests {
         let a = Automaton::build(&[pat("ab")]).expect("built");
         let data = b"ab....ab";
         let table = a.scan(data);
-        assert_eq!(table.hit(0), PatternHit { first_start: 0, count: 2 });
+        assert_eq!(
+            table.hit(0),
+            PatternHit {
+                first_start: 0,
+                count: 2
+            }
+        );
 
         // The window excludes the first occurrence but contains the second.
         // Only the fallback can know that.
@@ -699,8 +746,7 @@ mod tests {
                         let slow =
                             naive_contains(&pattern.bytes, pattern.nocase, &data, offset, depth);
                         assert_eq!(
-                            fast,
-                            slow,
+                            fast, slow,
                             "round {round}: pattern {pattern:?} offset {offset} depth {depth} \
                              over {data:?}"
                         );
@@ -715,13 +761,19 @@ mod tests {
         // Silently covering the first N patterns would be a firewall that
         // reports a clean scan for signatures it never looked at.
         let many: Vec<Pattern> = (0..MAX_PATTERNS + 1)
-            .map(|i| Pattern { bytes: format!("p{i:04}").into_bytes(), nocase: false })
+            .map(|i| Pattern {
+                bytes: format!("p{i:04}").into_bytes(),
+                nocase: false,
+            })
             .collect();
         assert!(Automaton::build(&many).is_none());
 
         // And a set whose trie exceeds the state budget.
         let wide: Vec<Pattern> = (0..64)
-            .map(|i| Pattern { bytes: vec![i as u8; 64], nocase: false })
+            .map(|i| Pattern {
+                bytes: vec![i as u8; 64],
+                nocase: false,
+            })
             .collect();
         assert!(Automaton::build(&wide).is_some(), "64 x 64 bytes fits");
 
@@ -729,7 +781,10 @@ mod tests {
             .map(|i| {
                 let mut bytes = vec![0u8; 64];
                 bytes[..2].copy_from_slice(&(i as u16).to_le_bytes());
-                Pattern { bytes, nocase: false }
+                Pattern {
+                    bytes,
+                    nocase: false,
+                }
             })
             .collect();
         // 512 patterns x ~64 distinct states each exceeds MAX_STATES.
@@ -738,7 +793,11 @@ mod tests {
 
     #[test]
     fn an_empty_pattern_is_refused() {
-        assert!(Automaton::build(&[Pattern { bytes: Vec::new(), nocase: false }]).is_none());
+        assert!(Automaton::build(&[Pattern {
+            bytes: Vec::new(),
+            nocase: false
+        }])
+        .is_none());
     }
 
     #[test]
@@ -763,6 +822,12 @@ mod tests {
         // condition on `state == 0`, and this is that exit condition.
         let a = Automaton::build(&[pat("abc")]).expect("built");
         let table = a.scan(b"zzzzabc");
-        assert_eq!(table.hit(0), PatternHit { first_start: 4, count: 1 });
+        assert_eq!(
+            table.hit(0),
+            PatternHit {
+                first_start: 4,
+                count: 1
+            }
+        );
     }
 }

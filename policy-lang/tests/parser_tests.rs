@@ -100,9 +100,15 @@ fn endpoint_and_application_shorthands_expand() {
          \x20 - id: b\n    action: allow\n    destination: [10.0.0.0/8, 8.8.8.8/32]\n    application: [x, y]\n",
     );
     assert!(!diags.has_errors(), "{:?}", diags.codes());
-    assert_eq!(doc.rules[0].destination.as_ref().unwrap().addresses.len(), 1);
+    assert_eq!(
+        doc.rules[0].destination.as_ref().unwrap().addresses.len(),
+        1
+    );
     assert_eq!(doc.rules[0].application.as_ref().unwrap().names.len(), 1);
-    assert_eq!(doc.rules[1].destination.as_ref().unwrap().addresses.len(), 2);
+    assert_eq!(
+        doc.rules[1].destination.as_ref().unwrap().addresses.len(),
+        2
+    );
     assert_eq!(doc.rules[1].application.as_ref().unwrap().names.len(), 2);
 }
 
@@ -139,11 +145,9 @@ fn recovery_keeps_parsing_after_every_class_of_error() {
         let (doc, diags) = parse_src(&full);
         assert!(diags.has_errors(), "{label}: expected an error");
         assert!(
-            doc.rules.iter().any(|r| r
-                .id
-                .as_ref()
-                .map(|i| i.value == "good")
-                .unwrap_or(false)),
+            doc.rules
+                .iter()
+                .any(|r| r.id.as_ref().map(|i| i.value == "good").unwrap_or(false)),
             "{label}: recovery lost the following rule"
         );
     }

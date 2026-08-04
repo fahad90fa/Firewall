@@ -177,7 +177,9 @@ impl TrustMask {
     }
 
     pub fn levels(self) -> impl Iterator<Item = TrustLevel> {
-        TrustLevel::ALL.into_iter().filter(move |l| self.contains(*l))
+        TrustLevel::ALL
+            .into_iter()
+            .filter(move |l| self.contains(*l))
     }
 
     /// Mask of every level at or above `min`, which is how `trust: ">= known"`
@@ -257,7 +259,7 @@ impl AppIdentity {
             platform_meta: BTreeMap::new(),
             resolved_at_us: now_us,
             ttl_secs: 5,
-            }
+        }
     }
 
     pub fn is_expired(&self, now_us: u64) -> bool {
@@ -457,7 +459,8 @@ mod tests {
         id.signature_valid = true;
         id.signer = Some("Debian".into());
         id.trust = TrustLevel::Known;
-        id.platform_meta.insert("selinux".into(), "unconfined_t".into());
+        id.platform_meta
+            .insert("selinux".into(), "unconfined_t".into());
 
         let mut w = Writer::new();
         id.encode(&mut w);

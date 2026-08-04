@@ -46,10 +46,15 @@ fn installing_the_same_policy_twice_is_a_no_op() {
     // time.
     let (mut store, first) = store_with(BASELINE);
     let staged = store.stage(policy(BASELINE), "test", at(2));
-    assert!(staged.is_none(),
-            "recompiling an unchanged policy should produce no change at all: {staged:?}");
-    assert_eq!(store.active_revision(), first,
-               "a no-op stage must not advance the revision");
+    assert!(
+        staged.is_none(),
+        "recompiling an unchanged policy should produce no change at all: {staged:?}"
+    );
+    assert_eq!(
+        store.active_revision(),
+        first,
+        "a no-op stage must not advance the revision"
+    );
 }
 
 #[test]
@@ -69,12 +74,20 @@ fn adding_one_rule_produces_a_one_rule_delta() {
         .stage(policy(&extended), "test", at(2))
         .expect("adding a rule is a change");
     let delta = &staged.delta;
-    assert_eq!(delta.added.len(), 1,
-               "one new rule should add exactly one: {:?}", staged);
-    assert!(delta.removed.is_empty(),
-            "nothing was deleted, so nothing should be removed: {delta:?}");
-    assert!(delta.modified.is_empty(),
-            "the existing rules are unchanged, so none should be modified: {delta:?}");
+    assert_eq!(
+        delta.added.len(),
+        1,
+        "one new rule should add exactly one: {:?}",
+        staged
+    );
+    assert!(
+        delta.removed.is_empty(),
+        "nothing was deleted, so nothing should be removed: {delta:?}"
+    );
+    assert!(
+        delta.modified.is_empty(),
+        "the existing rules are unchanged, so none should be modified: {delta:?}"
+    );
     assert_eq!(delta.added[0].name, "allow-loopback");
 }
 
@@ -107,8 +120,11 @@ fn changing_a_rules_body_is_a_modification() {
     let delta = &staged.delta;
     assert!(delta.added.is_empty(), "{delta:?}");
     assert!(delta.removed.is_empty(), "{delta:?}");
-    assert_eq!(delta.modified.len(), 1,
-               "one rule's body changed, so exactly one should be modified: {delta:?}");
+    assert_eq!(
+        delta.modified.len(),
+        1,
+        "one rule's body changed, so exactly one should be modified: {delta:?}"
+    );
     assert_eq!(delta.modified[0].name, "block-telnet");
 }
 
@@ -119,16 +135,25 @@ fn a_broken_policy_leaves_the_installed_one_alone() {
     let (store, revision) = store_with(BASELINE);
 
     let broken = ufw_policy_lang::compile_str(
-        "broken", "version: 1\nrules:\n  - id: a\n",
-        &ufw_policy_lang::CompileOptions::default());
+        "broken",
+        "version: 1\nrules:\n  - id: a\n",
+        &ufw_policy_lang::CompileOptions::default(),
+    );
     assert!(!broken.is_ok(), "the fixture is supposed to be broken");
-    assert!(broken.policy.is_none(),
-            "a failed compile must not yield a policy to install");
+    assert!(
+        broken.policy.is_none(),
+        "a failed compile must not yield a policy to install"
+    );
 
-    assert_eq!(store.active_revision(), revision,
-               "a failed compile must not disturb the installed revision");
-    assert!(store.active().is_some(),
-            "a failed compile must not leave the machine with no policy");
+    assert_eq!(
+        store.active_revision(),
+        revision,
+        "a failed compile must not disturb the installed revision"
+    );
+    assert!(
+        store.active().is_some(),
+        "a failed compile must not leave the machine with no policy"
+    );
 }
 
 #[test]
@@ -136,7 +161,9 @@ fn rolling_back_restores_the_earlier_rule_set() {
     let (mut store, first) = store_with(BASELINE);
 
     let narrowed = BASELINE.replace(
-        "  - id: allow-internal-web\n", "  - id: allow-internal-web-disabled\n");
+        "  - id: allow-internal-web\n",
+        "  - id: allow-internal-web-disabled\n",
+    );
     let staged = store
         .stage(policy(&narrowed), "test", at(2))
         .expect("renaming a rule is a change");
@@ -152,13 +179,17 @@ fn rolling_back_restores_the_earlier_rule_set() {
     let staged = store
         .prepare_rollback(first, at(3))
         .expect("rolling back to a retained revision");
-    assert!(staged.revision.revision() > second,
-            "a rollback should advance the revision, not rewind it");
+    assert!(
+        staged.revision.revision() > second,
+        "a rollback should advance the revision, not rewind it"
+    );
     store.commit(staged);
 
     let active = store.active_policy().expect("a policy is installed");
-    assert!(active.rules.iter().any(|r| r.name == "allow-internal-web"),
-            "the rolled-back policy should contain the original rule");
+    assert!(
+        active.rules.iter().any(|r| r.name == "allow-internal-web"),
+        "the rolled-back policy should contain the original rule"
+    );
 }
 
 #[test]
@@ -169,9 +200,9 @@ fn a_policy_file_on_disk_round_trips_through_the_loader() {
     let scratch = Scratch::new("hot-reload");
     let path = scratch.write("policy.yaml", BASELINE);
 
-    let compilation = ufw_policy_lang::compile_file(
-        &path, &ufw_policy_lang::CompileOptions::default())
-        .expect("reading the policy file");
+    let compilation =
+        ufw_policy_lang::compile_file(&path, &ufw_policy_lang::CompileOptions::default())
+            .expect("reading the policy file");
     assert!(compilation.is_ok(), "{}", compilation.render());
 
     let from_disk = compilation.policy.expect("a compiled policy");
@@ -180,6 +211,9 @@ fn a_policy_file_on_disk_round_trips_through_the_loader() {
     // Same rules, same ids, same content hash. The file's *name* differs, so
     // the ruleset hash would differ — the content hash is the one that answers
     // "did the policy change".
-    assert_eq!(from_disk.content_hash(), from_string.content_hash(),
-               "compiling from a file and from a string should mean the same thing");
+    assert_eq!(
+        from_disk.content_hash(),
+        from_string.content_hash(),
+        "compiling from a file and from a string should mean the same thing"
+    );
 }

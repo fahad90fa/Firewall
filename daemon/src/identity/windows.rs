@@ -292,7 +292,10 @@ mod tests {
         assert_eq!(id.signer.as_deref(), Some("Contoso Ltd"));
         assert_eq!(id.trust, TrustLevel::Trusted);
         assert!(id.sha256.is_some());
-        assert_eq!(id.platform_meta.get("issuer").map(String::as_str), Some("Example CA"));
+        assert_eq!(
+            id.platform_meta.get("issuer").map(String::as_str),
+            Some("Example CA")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -319,7 +322,9 @@ mod tests {
         // A trusted signer name on a broken signature must not grant trust.
         assert_eq!(id.trust, TrustLevel::Untrusted);
         assert_eq!(
-            id.platform_meta.get("signature_failure").map(String::as_str),
+            id.platform_meta
+                .get("signature_failure")
+                .map(String::as_str),
             Some("TRUST_E_BAD_DIGEST")
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -342,7 +347,10 @@ mod tests {
     #[test]
     fn a_missing_image_is_untrusted() {
         let resolver = WindowsResolver::new(ResolverOptions::default());
-        let id = resolver.resolve(&query(Path::new(r"C:\nope\gone.exe")), &TrustDatabase::new());
+        let id = resolver.resolve(
+            &query(Path::new(r"C:\nope\gone.exe")),
+            &TrustDatabase::new(),
+        );
         assert_eq!(id.trust, TrustLevel::Untrusted);
         assert!(id.platform_meta.contains_key("image_missing"));
     }

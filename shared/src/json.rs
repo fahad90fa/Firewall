@@ -69,11 +69,17 @@ impl Default for JsonWriter {
 
 impl JsonWriter {
     pub fn new() -> Self {
-        JsonWriter { out: String::with_capacity(512), needs_comma: vec![false] }
+        JsonWriter {
+            out: String::with_capacity(512),
+            needs_comma: vec![false],
+        }
     }
 
     pub fn with_capacity(n: usize) -> Self {
-        JsonWriter { out: String::with_capacity(n), needs_comma: vec![false] }
+        JsonWriter {
+            out: String::with_capacity(n),
+            needs_comma: vec![false],
+        }
     }
 
     pub fn finish(self) -> String {
@@ -319,7 +325,11 @@ impl std::error::Error for JsonError {}
 /// Parse a complete JSON document. Trailing whitespace is allowed; trailing
 /// non-whitespace is an error.
 pub fn parse(input: &str) -> Result<Json, JsonError> {
-    let mut p = Parser { b: input.as_bytes(), pos: 0, depth: 0 };
+    let mut p = Parser {
+        b: input.as_bytes(),
+        pos: 0,
+        depth: 0,
+    };
     p.skip_ws();
     let v = p.value()?;
     p.skip_ws();
@@ -341,7 +351,10 @@ struct Parser<'a> {
 
 impl<'a> Parser<'a> {
     fn err(&self, msg: &str) -> JsonError {
-        JsonError { offset: self.pos, message: msg.to_string() }
+        JsonError {
+            offset: self.pos,
+            message: msg.to_string(),
+        }
     }
 
     fn skip_ws(&mut self) {
@@ -481,8 +494,9 @@ impl<'a> Parser<'a> {
                                 if !(0xDC00..0xE000).contains(&lo) {
                                     return Err(self.err("invalid low surrogate"));
                                 }
-                                let cp =
-                                    0x1_0000u32 + ((hi as u32 - 0xD800) << 10) + (lo as u32 - 0xDC00);
+                                let cp = 0x1_0000u32
+                                    + ((hi as u32 - 0xD800) << 10)
+                                    + (lo as u32 - 0xDC00);
                                 char::from_u32(cp).ok_or_else(|| self.err("invalid code point"))?
                             } else {
                                 char::from_u32(hi as u32)
@@ -584,7 +598,10 @@ impl<'a> Parser<'a> {
             .map_err(|_| self.err("invalid number"))?;
         text.parse::<f64>()
             .map(Json::Number)
-            .map_err(|_| JsonError { offset: start, message: "invalid number".into() })
+            .map_err(|_| JsonError {
+                offset: start,
+                message: "invalid number".into(),
+            })
     }
 }
 
@@ -616,7 +633,10 @@ mod tests {
         w.end_object();
         w.null_field("f");
         w.end_object();
-        assert_eq!(w.as_str(), r#"{"a":"x","b":7,"c":[1,2],"d":{"e":true},"f":null}"#);
+        assert_eq!(
+            w.as_str(),
+            r#"{"a":"x","b":7,"c":[1,2],"d":{"e":true},"f":null}"#
+        );
         assert!(parse(w.as_str()).is_ok());
     }
 
@@ -629,7 +649,8 @@ mod tests {
 
     #[test]
     fn roundtrip_through_parser() {
-        let src = r#"{"s":"h\u00e9llo \ud83d\ude00","n":-12.5e2,"t":true,"z":null,"a":[1,{"k":[]}]}"#;
+        let src =
+            r#"{"s":"h\u00e9llo \ud83d\ude00","n":-12.5e2,"t":true,"z":null,"a":[1,{"k":[]}]}"#;
         let v = parse(src).unwrap();
         assert_eq!(v.get("s").unwrap().as_str().unwrap(), "héllo 😀");
         assert_eq!(v.get("n").unwrap().as_f64().unwrap(), -1250.0);
@@ -641,7 +662,14 @@ mod tests {
     #[test]
     fn rejects_malformed() {
         for bad in [
-            "{", "[1,]", "{\"a\"}", "tru", "01", "\"\\x\"", "{\"a\":1}x", "\"\u{1}\"",
+            "{",
+            "[1,]",
+            "{\"a\"}",
+            "tru",
+            "01",
+            "\"\\x\"",
+            "{\"a\":1}x",
+            "\"\u{1}\"",
         ] {
             assert!(parse(bad).is_err(), "should have rejected {bad:?}");
         }

@@ -33,11 +33,11 @@ use std::time::Duration;
 use ufw_shared::constants;
 use ufw_shared::identity_types::AppIdentity;
 use ufw_shared::log_types::LogEvent;
+use ufw_shared::policy_types::CompiledPolicy;
 use ufw_shared::protocol::{
     Capabilities, EnforcementMode, Hello, IdentityQuery, InstallAck, Message, MessageHeader,
     PolicyDelta,
 };
-use ufw_shared::policy_types::CompiledPolicy;
 
 pub mod linux;
 pub mod loopback;
@@ -134,7 +134,10 @@ pub struct StreamTransport<S> {
 
 impl<S> StreamTransport<S> {
     pub fn new(stream: S, endpoint: impl Into<String>) -> Self {
-        StreamTransport { stream, endpoint: endpoint.into() }
+        StreamTransport {
+            stream,
+            endpoint: endpoint.into(),
+        }
     }
 }
 
@@ -274,9 +277,15 @@ pub fn default_endpoint() -> &'static str {
 /// Asynchronous messages the module can push at any time.
 pub enum KernelEvent {
     Logs(Vec<LogEvent>),
-    IdentityQuery { seq: u32, query: IdentityQuery },
+    IdentityQuery {
+        seq: u32,
+        query: IdentityQuery,
+    },
     /// The module reported a problem out of band.
-    Error { code: u32, detail: String },
+    Error {
+        code: u32,
+        detail: String,
+    },
     /// The transport ended. The supervisor reconnects if configured to.
     Disconnected(Option<String>),
 }
@@ -468,10 +477,17 @@ impl KernelChannel {
 
     // --- high-level operations ------------------------------------------
 
-    pub fn install_policy(&self, policy: &CompiledPolicy, timeout: Duration) -> io::Result<InstallAck> {
+    pub fn install_policy(
+        &self,
+        policy: &CompiledPolicy,
+        timeout: Duration,
+    ) -> io::Result<InstallAck> {
         match self.request(Message::PolicyInstall(Box::new(policy.clone())), timeout)? {
             Message::PolicyInstallAck(ack) => self.check_hash(ack, policy.ruleset_hash),
-            Message::Error(e) => Err(io::Error::other(format!("policy install failed: {}", e.detail))),
+            Message::Error(e) => Err(io::Error::other(format!(
+                "policy install failed: {}",
+                e.detail
+            ))),
             other => Err(unexpected(other)),
         }
     }
@@ -479,7 +495,10 @@ impl KernelChannel {
     pub fn update_policy(&self, delta: &PolicyDelta, timeout: Duration) -> io::Result<InstallAck> {
         match self.request(Message::PolicyUpdate(Box::new(delta.clone())), timeout)? {
             Message::PolicyUpdateAck(ack) => self.check_hash(ack, delta.result_hash),
-            Message::Error(e) => Err(io::Error::other(format!("policy update failed: {}", e.detail))),
+            Message::Error(e) => Err(io::Error::other(format!(
+                "policy update failed: {}",
+                e.detail
+            ))),
             other => Err(unexpected(other)),
         }
     }
@@ -501,9 +520,9 @@ impl KernelChannel {
         timeout: Duration,
     ) -> io::Result<ufw_shared::protocol::SignatureInstallAck> {
         let expected = ufw_shared::hash::sha256(payload);
-        let message = Message::SignatureInstall(Box::new(
-            ufw_shared::protocol::SignatureInstall { payload: payload.to_vec() },
-        ));
+        let message = Message::SignatureInstall(Box::new(ufw_shared::protocol::SignatureInstall {
+            payload: payload.to_vec(),
+        }));
         match self.request(message, timeout)? {
             Message::SignatureInstallAck(ack) => {
                 if ack.payload_hash != expected {
@@ -556,7 +575,11 @@ impl KernelChannel {
         }
     }
 
-    pub fn set_mode(&self, mode: EnforcementMode, timeout: Duration) -> io::Result<EnforcementMode> {
+    pub fn set_mode(
+        &self,
+        mode: EnforcementMode,
+        timeout: Duration,
+    ) -> io::Result<EnforcementMode> {
         match self.request(Message::SetMode(mode), timeout)? {
             Message::ModeAck(m) => Ok(m),
             other => Err(unexpected(other)),
@@ -608,7 +631,10 @@ impl Drop for KernelChannel {
 fn unexpected(m: Message) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
-        format!("unexpected message from kernel module: {}", m.msg_type().as_str()),
+        format!(
+            "unexpected message from kernel module: {}",
+            m.msg_type().as_str()
+        ),
     )
 }
 
@@ -655,7 +681,10 @@ fn reader_loop(
         let event = match message {
             Message::LogEvents(v) => KernelEvent::Logs(v),
             Message::IdentityQuery(q) => KernelEvent::IdentityQuery { seq, query: q },
-            Message::Error(e) => KernelEvent::Error { code: e.code, detail: e.detail },
+            Message::Error(e) => KernelEvent::Error {
+                code: e.code,
+                detail: e.detail,
+            },
             other => KernelEvent::Error {
                 code: ufw_shared::protocol::error_codes::INTERNAL,
                 detail: format!(
@@ -685,7 +714,11 @@ pub fn establish(endpoint: &str, host_id: &str, timeout: Duration) -> io::Result
     let transport = connect(endpoint)?;
     let (tx, rx) = channel();
     let (channel, handshake) = KernelChannel::open(transport, tx, host_id, timeout)?;
-    Ok(Connection { channel, events: rx, handshake })
+    Ok(Connection {
+        channel,
+        events: rx,
+        handshake,
+    })
 }
 
 #[cfg(test)]
@@ -847,7 +880,9 @@ mod tests {
         next.finalize();
 
         let delta = crate::policy_store::diff(&policy, &next);
-        let ack = channel.update_policy(&delta, Duration::from_secs(2)).unwrap();
+        let ack = channel
+            .update_policy(&delta, Duration::from_secs(2))
+            .unwrap();
         assert_eq!(ack.filters_installed, 1);
         assert_eq!(module.installed_rule_count(), 2);
         module.stop();

@@ -129,7 +129,9 @@ impl Request {
 
         Ok(match op {
             "status" => Request::Status,
-            "list-rules" => Request::ListRules { filter: arg("filter") },
+            "list-rules" => Request::ListRules {
+                filter: arg("filter"),
+            },
             "get-rule" => Request::GetRule {
                 key: arg("key").ok_or_else(|| ApiError::bad_request("missing `key`"))?,
             },
@@ -172,25 +174,46 @@ pub struct ApiError {
 
 impl ApiError {
     pub fn bad_request(message: impl Into<String>) -> Self {
-        ApiError { status: 400, message: message.into() }
+        ApiError {
+            status: 400,
+            message: message.into(),
+        }
     }
     pub fn unauthorized(message: impl Into<String>) -> Self {
-        ApiError { status: 401, message: message.into() }
+        ApiError {
+            status: 401,
+            message: message.into(),
+        }
     }
     pub fn forbidden(message: impl Into<String>) -> Self {
-        ApiError { status: 403, message: message.into() }
+        ApiError {
+            status: 403,
+            message: message.into(),
+        }
     }
     pub fn not_found(message: impl Into<String>) -> Self {
-        ApiError { status: 404, message: message.into() }
+        ApiError {
+            status: 404,
+            message: message.into(),
+        }
     }
     pub fn conflict(message: impl Into<String>) -> Self {
-        ApiError { status: 409, message: message.into() }
+        ApiError {
+            status: 409,
+            message: message.into(),
+        }
     }
     pub fn internal(message: impl Into<String>) -> Self {
-        ApiError { status: 500, message: message.into() }
+        ApiError {
+            status: 500,
+            message: message.into(),
+        }
     }
     pub fn unavailable(message: impl Into<String>) -> Self {
-        ApiError { status: 503, message: message.into() }
+        ApiError {
+            status: 503,
+            message: message.into(),
+        }
     }
 
     pub fn to_json(&self) -> String {
@@ -461,7 +484,10 @@ impl Router {
             ("flows_denied", stats.flows_denied),
             ("identity_cache_hits", stats.identity_cache_hits),
             ("identity_cache_misses", stats.identity_cache_misses),
-            ("identity_queries_timed_out", stats.identity_queries_timed_out),
+            (
+                "identity_queries_timed_out",
+                stats.identity_queries_timed_out,
+            ),
             ("dpi_scans", stats.dpi_scans),
             ("dpi_hits", stats.dpi_hits),
             ("reassembly_contexts", stats.reassembly_contexts),
@@ -622,9 +648,12 @@ mod tests {
         let mut rule = CompiledRule::new(101, "allow-dns", Layer::Packet, Action::Allow);
         rule.tags = vec!["baseline".into()];
         policy.rules.push(rule);
-        policy
-            .rules
-            .push(CompiledRule::new(202, "block-telnet", Layer::Packet, Action::Deny));
+        policy.rules.push(CompiledRule::new(
+            202,
+            "block-telnet",
+            Layer::Packet,
+            Action::Deny,
+        ));
         policy.finalize();
         state.with_policies(|s| {
             let staged = s.stage(policy, "test.yaml", 1).unwrap();
@@ -633,7 +662,12 @@ mod tests {
 
         let control = Arc::new(RecordingControl::default());
         let router = Router::new(Arc::clone(&state), control.clone());
-        Harness { router, control, state, _logger: logger }
+        Harness {
+            router,
+            control,
+            state,
+            _logger: logger,
+        }
     }
 
     #[test]
@@ -643,7 +677,9 @@ mod tests {
             Request::ReloadPolicy,
             Request::FlushPolicy,
             Request::Rollback { revision: 1 },
-            Request::SetMode { mode: EnforcementMode::EmergencyAllow },
+            Request::SetMode {
+                mode: EnforcementMode::EmergencyAllow,
+            },
             Request::Shutdown,
         ] {
             let err = h
@@ -680,13 +716,17 @@ mod tests {
     #[test]
     fn admin_requests_reach_the_control_plane() {
         let h = harness();
-        h.router.dispatch(Request::ReloadPolicy, Authority::Admin).unwrap();
+        h.router
+            .dispatch(Request::ReloadPolicy, Authority::Admin)
+            .unwrap();
         h.router
             .dispatch(Request::Rollback { revision: 3 }, Authority::Admin)
             .unwrap();
         h.router
             .dispatch(
-                Request::SetMode { mode: EnforcementMode::Monitor },
+                Request::SetMode {
+                    mode: EnforcementMode::Monitor,
+                },
                 Authority::Admin,
             )
             .unwrap();
@@ -709,13 +749,20 @@ mod tests {
             let filtered = h
                 .router
                 .dispatch(
-                    Request::ListRules { filter: Some(filter.into()) },
+                    Request::ListRules {
+                        filter: Some(filter.into()),
+                    },
                     Authority::ReadOnly,
                 )
                 .unwrap();
             let v = json::parse(&filtered.body).unwrap();
             let rules = v.get("rules").unwrap().as_array().unwrap();
-            assert_eq!(rules.len(), 1, "filter `{filter}` matched {} rules", rules.len());
+            assert_eq!(
+                rules.len(),
+                1,
+                "filter `{filter}` matched {} rules",
+                rules.len()
+            );
             assert_eq!(rules[0].get("name").unwrap().as_str(), Some("allow-dns"));
         }
     }
@@ -741,14 +788,19 @@ mod tests {
         let revisions = v.get("revisions").unwrap().as_array().unwrap();
         assert_eq!(revisions.len(), 1);
         assert_eq!(revisions[0].get("active").unwrap().as_bool(), Some(true));
-        assert_eq!(revisions[0].get("origin").unwrap().as_str(), Some("test.yaml"));
+        assert_eq!(
+            revisions[0].get("origin").unwrap().as_str(),
+            Some("test.yaml")
+        );
     }
 
     #[test]
     fn shutdown_is_recorded_on_the_daemon_state() {
         let h = harness();
         assert!(!h.state.is_shutting_down());
-        h.router.dispatch(Request::Shutdown, Authority::Admin).unwrap();
+        h.router
+            .dispatch(Request::Shutdown, Authority::Admin)
+            .unwrap();
         assert!(h.state.is_shutting_down());
     }
 
@@ -770,13 +822,23 @@ mod tests {
             (r#"{"op":"status"}"#, Request::Status),
             (
                 r#"{"op":"list-rules","filter":"dns"}"#,
-                Request::ListRules { filter: Some("dns".into()) },
+                Request::ListRules {
+                    filter: Some("dns".into()),
+                },
             ),
-            (r#"{"op":"get-rule","key":"a"}"#, Request::GetRule { key: "a".into() }),
-            (r#"{"op":"rollback","revision":4}"#, Request::Rollback { revision: 4 }),
+            (
+                r#"{"op":"get-rule","key":"a"}"#,
+                Request::GetRule { key: "a".into() },
+            ),
+            (
+                r#"{"op":"rollback","revision":4}"#,
+                Request::Rollback { revision: 4 },
+            ),
             (
                 r#"{"op":"set-mode","mode":"monitor"}"#,
-                Request::SetMode { mode: EnforcementMode::Monitor },
+                Request::SetMode {
+                    mode: EnforcementMode::Monitor,
+                },
             ),
             (
                 r#"{"op":"resolve-identity","pid":42}"#,

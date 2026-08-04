@@ -79,7 +79,12 @@ impl Backend for MacOsBackend {
             ),
         ];
 
-        Artifact { platform: Platform::MacOS, files, model, notes }
+        Artifact {
+            platform: Platform::MacOS,
+            files,
+            model,
+            notes,
+        }
     }
 }
 
@@ -204,7 +209,10 @@ fn emit_json(policy: &CompiledPolicy, placements: &[Placement<'_>]) -> String {
     w.u64_field("format_version", 1);
     w.str_field("policy", &policy.name);
     w.u64_field("revision", policy.revision);
-    w.str_field("ruleset_sha256", &ufw_shared::hash::hex(&policy.ruleset_hash));
+    w.str_field(
+        "ruleset_sha256",
+        &ufw_shared::hash::hex(&policy.ruleset_hash),
+    );
     w.str_field("default_action", policy.default_action.as_str());
     w.str_field("xpc_service", constants::MACOS_XPC_SERVICE);
     w.str_field("app_group", constants::MACOS_APP_GROUP);
@@ -496,8 +504,7 @@ fn swift_dpi(dpi: Option<&DpiMatch>) -> String {
             .map(|s| s.to_string())
             .collect::<Vec<_>>()
             .join(", "),
-        d.l7
-            .iter()
+        d.l7.iter()
             .map(|p| format!(".{}", p.as_str()))
             .collect::<Vec<_>>()
             .join(", "),

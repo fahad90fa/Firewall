@@ -143,7 +143,9 @@ pub fn read_request<R: Read>(stream: R, max_body: usize) -> Result<HttpRequest, 
         // A leading space is a header continuation, which this server does not
         // accept; ambiguity about where a header ends is how smuggling starts.
         if header.starts_with(' ') || header.starts_with('\t') {
-            return Err(ApiError::bad_request("header continuation lines are not supported"));
+            return Err(ApiError::bad_request(
+                "header continuation lines are not supported",
+            ));
         }
         let (name, value) = header
             .split_once(':')
@@ -169,7 +171,10 @@ pub fn read_request<R: Read>(stream: R, max_body: usize) -> Result<HttpRequest, 
         .unwrap_or(0);
 
     if declared > max_body {
-        return Err(ApiError { status: 413, message: format!("body exceeds {max_body} bytes") });
+        return Err(ApiError {
+            status: 413,
+            message: format!("body exceeds {max_body} bytes"),
+        });
     }
 
     let mut body = vec![0u8; declared];
@@ -178,10 +183,16 @@ pub fn read_request<R: Read>(stream: R, max_body: usize) -> Result<HttpRequest, 
             .read_exact(&mut body)
             .map_err(|e| ApiError::bad_request(format!("truncated body: {e}")))?;
     }
-    let body = String::from_utf8(body)
-        .map_err(|_| ApiError::bad_request("body is not valid UTF-8"))?;
+    let body =
+        String::from_utf8(body).map_err(|_| ApiError::bad_request("body is not valid UTF-8"))?;
 
-    Ok(HttpRequest { method, path, query, headers, body })
+    Ok(HttpRequest {
+        method,
+        path,
+        query,
+        headers,
+        body,
+    })
 }
 
 fn read_line<R: BufRead>(reader: &mut R, out: &mut String, max: usize) -> Result<(), ApiError> {
@@ -218,7 +229,9 @@ pub fn route(request: &HttpRequest) -> Result<Request, ApiError> {
         ("GET", "/v1/ping") | ("GET", "/healthz") => Ok(Request::Ping),
         ("GET", "/v1/status") => Ok(Request::Status),
         ("GET", "/v1/stats") => Ok(Request::Stats),
-        ("GET", "/v1/rules") => Ok(Request::ListRules { filter: request.param("filter") }),
+        ("GET", "/v1/rules") => Ok(Request::ListRules {
+            filter: request.param("filter"),
+        }),
         ("GET", "/v1/revisions") => Ok(Request::ListRevisions),
         ("GET", "/v1/trust") => Ok(Request::ListTrust),
         ("GET", "/v1/signatures") => Ok(Request::ListSignatures),
@@ -251,7 +264,9 @@ pub fn authorize(
     request: &HttpRequest,
 ) -> Result<Authority, ApiError> {
     if !config.allow_from.is_empty() && !config.allow_from.contains(&peer) && !peer.is_loopback() {
-        return Err(ApiError::forbidden(format!("{peer} is not in api.allow_from")));
+        return Err(ApiError::forbidden(format!(
+            "{peer} is not in api.allow_from"
+        )));
     }
 
     match &config.auth_token {
@@ -353,9 +368,10 @@ pub fn serve(
     // stop the daemon at startup, not produce a port that accepts connections
     // and fails every one of them.
     let acceptor = if config.tls.is_enabled() {
-        Some(crate::tls::TlsAcceptor::from_config(&config.tls).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, e)
-        })?)
+        Some(
+            crate::tls::TlsAcceptor::from_config(&config.tls)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?,
+        )
     } else {
         None
     };
@@ -479,16 +495,15 @@ mod tests {
     #[test]
     fn transfer_encoding_is_refused() {
         // Accepting both framings is how request smuggling starts.
-        let err = request("POST /v1/rpc HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n")
-            .unwrap_err();
+        let err =
+            request("POST /v1/rpc HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n").unwrap_err();
         assert_eq!(err.status, 400);
         assert!(err.message.contains("Transfer-Encoding"));
     }
 
     #[test]
     fn header_continuations_are_refused() {
-        let err = request("GET /v1/status HTTP/1.1\r\nHost: a\r\n  continued\r\n\r\n")
-            .unwrap_err();
+        let err = request("GET /v1/status HTTP/1.1\r\nHost: a\r\n  continued\r\n\r\n").unwrap_err();
         assert_eq!(err.status, 400);
     }
 
@@ -504,7 +519,10 @@ mod tests {
 
     #[test]
     fn an_overlong_line_is_rejected() {
-        let raw = format!("GET /{} HTTP/1.1\r\n\r\n", "a".repeat(MAX_REQUEST_LINE + 10));
+        let raw = format!(
+            "GET /{} HTTP/1.1\r\n\r\n",
+            "a".repeat(MAX_REQUEST_LINE + 10)
+        );
         assert_eq!(request(&raw).unwrap_err().status, 400);
     }
 
@@ -523,12 +541,20 @@ mod tests {
         let cases: [(&str, Request); 6] = [
             ("GET /v1/status HTTP/1.1\r\n\r\n", Request::Status),
             ("GET /healthz HTTP/1.1\r\n\r\n", Request::Ping),
-            ("GET /v1/rules HTTP/1.1\r\n\r\n", Request::ListRules { filter: None }),
+            (
+                "GET /v1/rules HTTP/1.1\r\n\r\n",
+                Request::ListRules { filter: None },
+            ),
             (
                 "GET /v1/rules/allow-dns HTTP/1.1\r\n\r\n",
-                Request::GetRule { key: "allow-dns".into() },
+                Request::GetRule {
+                    key: "allow-dns".into(),
+                },
             ),
-            ("POST /v1/policy/reload HTTP/1.1\r\n\r\n", Request::ReloadPolicy),
+            (
+                "POST /v1/policy/reload HTTP/1.1\r\n\r\n",
+                Request::ReloadPolicy,
+            ),
             ("POST /v1/shutdown HTTP/1.1\r\n\r\n", Request::Shutdown),
         ];
         for (raw, expected) in cases {
@@ -552,7 +578,10 @@ mod tests {
     #[test]
     fn loopback_without_a_token_is_admin() {
         let r = request("GET /v1/status HTTP/1.1\r\n\r\n").unwrap();
-        assert_eq!(authorize(&config(), loopback(), &r).unwrap(), Authority::Admin);
+        assert_eq!(
+            authorize(&config(), loopback(), &r).unwrap(),
+            Authority::Admin
+        );
     }
 
     #[test]
@@ -595,7 +624,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            authorize(&c, "203.0.113.9".parse().unwrap(), &r).unwrap_err().status,
+            authorize(&c, "203.0.113.9".parse().unwrap(), &r)
+                .unwrap_err()
+                .status,
             403
         );
         assert!(authorize(&c, "198.51.100.4".parse().unwrap(), &r).is_ok());

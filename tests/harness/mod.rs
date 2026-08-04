@@ -35,7 +35,7 @@ pub mod packet_generator;
 
 use std::path::PathBuf;
 
-use ufw_policy_lang::{compile_str, CompileOptions, Compilation};
+use ufw_policy_lang::{compile_str, Compilation, CompileOptions};
 use ufw_shared::policy_types::CompiledPolicy;
 
 /// A scratch directory that cleans up after itself.

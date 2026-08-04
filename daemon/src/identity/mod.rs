@@ -220,15 +220,15 @@ impl TrustDatabase {
             SignatureType::None => TrustLevel::Unknown,
             SignatureType::Indeterminate => TrustLevel::Unknown,
             _ if !signature_valid => TrustLevel::Untrusted,
-            _ => self
-                .lookup(None, team_id, signer)
-                .unwrap_or(default_signed),
+            _ => self.lookup(None, team_id, signer).unwrap_or(default_signed),
         }
     }
 }
 
 fn is_team_id(s: &str) -> bool {
-    s.len() == 10 && s.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+    s.len() == 10
+        && s.chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
 }
 
 // ===========================================================================
@@ -403,7 +403,10 @@ impl IdentityService {
     /// Answer a query from the kernel module.
     pub fn answer(&self, query: &IdentityQuery) -> AppIdentity {
         let now = now_us();
-        let key = IdentityKey { pid: query.pid, start_time_us: query.start_time_us };
+        let key = IdentityKey {
+            pid: query.pid,
+            start_time_us: query.start_time_us,
+        };
 
         // Only consult the cache when the module supplied a start time. Without
         // one the key is a bare pid, which is exactly the aliasing this cache
@@ -511,9 +514,18 @@ mod tests {
         db.insert("Contoso Ltd", TrustLevel::Known);
         assert_eq!(db.len(), 3);
 
-        assert_eq!(db.lookup(Some(&[0xab; 32]), None, None), Some(TrustLevel::System));
-        assert_eq!(db.lookup(None, Some("ABCDE12345"), None), Some(TrustLevel::Trusted));
-        assert_eq!(db.lookup(None, None, Some("Contoso Ltd")), Some(TrustLevel::Known));
+        assert_eq!(
+            db.lookup(Some(&[0xab; 32]), None, None),
+            Some(TrustLevel::System)
+        );
+        assert_eq!(
+            db.lookup(None, Some("ABCDE12345"), None),
+            Some(TrustLevel::Trusted)
+        );
+        assert_eq!(
+            db.lookup(None, None, Some("Contoso Ltd")),
+            Some(TrustLevel::Known)
+        );
         assert_eq!(db.lookup(None, None, Some("Nobody")), None);
     }
 
@@ -555,7 +567,14 @@ mod tests {
             TrustLevel::Untrusted
         );
         assert_eq!(
-            db.classify(SignatureType::None, false, None, None, None, TrustLevel::Known),
+            db.classify(
+                SignatureType::None,
+                false,
+                None,
+                None,
+                None,
+                TrustLevel::Known
+            ),
             TrustLevel::Unknown
         );
     }
@@ -612,7 +631,10 @@ mod tests {
     #[test]
     fn cache_hits_and_misses_are_counted() {
         let cache = IdentityCache::new(10);
-        let key = IdentityKey { pid: 1, start_time_us: 100 };
+        let key = IdentityKey {
+            pid: 1,
+            start_time_us: 100,
+        };
         assert!(cache.get(key, 0).is_none());
         cache.insert(key, identity(1, 100, 0));
         assert!(cache.get(key, 0).is_some());
@@ -625,11 +647,17 @@ mod tests {
     #[test]
     fn pid_reuse_misses_rather_than_returning_the_wrong_identity() {
         let cache = IdentityCache::new(10);
-        let old = IdentityKey { pid: 42, start_time_us: 1_000 };
+        let old = IdentityKey {
+            pid: 42,
+            start_time_us: 1_000,
+        };
         cache.insert(old, identity(42, 1_000, 0));
 
         // Same pid, different start time: a different process.
-        let new = IdentityKey { pid: 42, start_time_us: 2_000 };
+        let new = IdentityKey {
+            pid: 42,
+            start_time_us: 2_000,
+        };
         assert!(
             cache.get(new, 0).is_none(),
             "a recycled pid must not inherit the old process's identity"
@@ -639,7 +667,10 @@ mod tests {
     #[test]
     fn expired_entries_are_dropped_on_read() {
         let cache = IdentityCache::new(10);
-        let key = IdentityKey { pid: 1, start_time_us: 1 };
+        let key = IdentityKey {
+            pid: 1,
+            start_time_us: 1,
+        };
         cache.insert(key, identity(1, 1, 0));
         assert!(cache.get(key, 61_000_000).is_none());
         assert_eq!(cache.len(), 0);
@@ -653,7 +684,10 @@ mod tests {
         let cache = IdentityCache::new(4);
         for i in 0..20u32 {
             cache.insert(
-                IdentityKey { pid: i, start_time_us: i as u64 + 1 },
+                IdentityKey {
+                    pid: i,
+                    start_time_us: i as u64 + 1,
+                },
                 identity(i, i as u64 + 1, now + i as u64),
             );
         }
@@ -665,12 +699,46 @@ mod tests {
     fn eviction_prefers_the_oldest_entry() {
         let now = now_us();
         let cache = IdentityCache::new(2);
-        cache.insert(IdentityKey { pid: 1, start_time_us: 1 }, identity(1, 1, now));
-        cache.insert(IdentityKey { pid: 2, start_time_us: 2 }, identity(2, 2, now + 1_000));
-        cache.insert(IdentityKey { pid: 3, start_time_us: 3 }, identity(3, 3, now + 2_000));
+        cache.insert(
+            IdentityKey {
+                pid: 1,
+                start_time_us: 1,
+            },
+            identity(1, 1, now),
+        );
+        cache.insert(
+            IdentityKey {
+                pid: 2,
+                start_time_us: 2,
+            },
+            identity(2, 2, now + 1_000),
+        );
+        cache.insert(
+            IdentityKey {
+                pid: 3,
+                start_time_us: 3,
+            },
+            identity(3, 3, now + 2_000),
+        );
         // pid 1 was resolved first, so it is the one that went.
-        assert!(cache.get(IdentityKey { pid: 1, start_time_us: 1 }, now).is_none());
-        assert!(cache.get(IdentityKey { pid: 3, start_time_us: 3 }, now).is_some());
+        assert!(cache
+            .get(
+                IdentityKey {
+                    pid: 1,
+                    start_time_us: 1
+                },
+                now
+            )
+            .is_none());
+        assert!(cache
+            .get(
+                IdentityKey {
+                    pid: 3,
+                    start_time_us: 3
+                },
+                now
+            )
+            .is_some());
     }
 
     // --- service ----------------------------------------------------------
@@ -697,7 +765,9 @@ mod tests {
 
     fn service() -> IdentityService {
         IdentityService::new(
-            Box::new(CountingResolver { calls: Default::default() }),
+            Box::new(CountingResolver {
+                calls: Default::default(),
+            }),
             TrustDatabase::new(),
             ResolverOptions::default(),
             16,

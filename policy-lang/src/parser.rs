@@ -26,7 +26,11 @@ use crate::lexer::{Token, TokenKind};
 /// Parse a token stream. Always returns a document; the diagnostics say
 /// whether it is complete.
 pub fn parse(tokens: &[Token]) -> (PolicyDocument, Diagnostics) {
-    let mut p = Parser { tokens, pos: 0, diags: Diagnostics::new() };
+    let mut p = Parser {
+        tokens,
+        pos: 0,
+        diags: Diagnostics::new(),
+    };
     let doc = p.parse_document();
     (doc, p.diags)
 }
@@ -401,21 +405,33 @@ impl<'a> Parser<'a> {
                     doc.address_groups = self
                         .parse_named_lists(&key)
                         .into_iter()
-                        .map(|(name, entries, span)| AddressGroup { span, name, entries })
+                        .map(|(name, entries, span)| AddressGroup {
+                            span,
+                            name,
+                            entries,
+                        })
                         .collect();
                 }
                 "port_groups" => {
                     doc.port_groups = self
                         .parse_named_lists(&key)
                         .into_iter()
-                        .map(|(name, entries, span)| PortGroup { span, name, entries })
+                        .map(|(name, entries, span)| PortGroup {
+                            span,
+                            name,
+                            entries,
+                        })
                         .collect();
                 }
                 "signature_groups" => {
                     doc.signature_groups = self
                         .parse_named_lists(&key)
                         .into_iter()
-                        .map(|(name, entries, span)| SignatureGroup { span, name, entries })
+                        .map(|(name, entries, span)| SignatureGroup {
+                            span,
+                            name,
+                            entries,
+                        })
                         .collect();
                 }
                 "applications" => doc.applications = self.parse_applications(&key),
@@ -441,7 +457,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_metadata(&mut self, key: &Spanned<String>) -> Metadata {
-        let mut m = Metadata { span: key.span, ..Default::default() };
+        let mut m = Metadata {
+            span: key.span,
+            ..Default::default()
+        };
         let Some(col) = self.block_col(key.span.col) else {
             return m;
         };
@@ -463,7 +482,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_defaults(&mut self, key: &Spanned<String>) -> Defaults {
-        let mut d = Defaults { span: key.span, ..Default::default() };
+        let mut d = Defaults {
+            span: key.span,
+            ..Default::default()
+        };
         let Some(col) = self.block_col(key.span.col) else {
             return d;
         };
@@ -597,7 +619,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_network_profile(&mut self, key: &Spanned<String>) -> NetworkProfile {
-        let mut np = NetworkProfile { span: key.span, ..Default::default() };
+        let mut np = NetworkProfile {
+            span: key.span,
+            ..Default::default()
+        };
         let Some(col) = self.block_col(key.span.col) else {
             return np;
         };
@@ -669,7 +694,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_rule(&mut self, col: u32, dash_span: Span) -> Rule {
-        let mut rule = Rule { span: dash_span, ..Default::default() };
+        let mut rule = Rule {
+            span: dash_span,
+            ..Default::default()
+        };
         let mut seen = Vec::new();
         while let Some(k) = self.next_key_at(col) {
             if self.check_duplicate(&mut seen, &k) {
@@ -701,7 +729,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_endpoint(&mut self, key: &Spanned<String>) -> Endpoint {
-        let mut ep = Endpoint { span: key.span, ..Default::default() };
+        let mut ep = Endpoint {
+            span: key.span,
+            ..Default::default()
+        };
 
         // `source: any` and `destination: [10.0.0.0/8]` are shorthands for a
         // block with only `addresses:`; they are how most rules are written.
@@ -734,7 +765,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_app_selector(&mut self, key: &Spanned<String>) -> AppSelector {
-        let mut sel = AppSelector { span: key.span, ..Default::default() };
+        let mut sel = AppSelector {
+            span: key.span,
+            ..Default::default()
+        };
 
         // `application: browser` and `application: [browser, mail]` name
         // definitions from the `applications:` section.
@@ -772,7 +806,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_dpi(&mut self, key: &Spanned<String>) -> DpiClause {
-        let mut dpi = DpiClause { span: key.span, ..Default::default() };
+        let mut dpi = DpiClause {
+            span: key.span,
+            ..Default::default()
+        };
         let Some(col) = self.block_col(key.span.col) else {
             // `dpi: [sig-a, sig-b]` shorthand.
             if matches!(self.peek().kind, TokenKind::Scalar(_) | TokenKind::LBracket) {
@@ -797,7 +834,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_schedule(&mut self, key: &Spanned<String>) -> Schedule {
-        let mut s = Schedule { span: key.span, ..Default::default() };
+        let mut s = Schedule {
+            span: key.span,
+            ..Default::default()
+        };
         let Some(col) = self.block_col(key.span.col) else {
             return s;
         };
@@ -924,8 +964,20 @@ rules:
     fn parses_a_complete_policy() {
         let doc = parse_ok(FULL);
         assert_eq!(doc.version.as_ref().unwrap().value, "1");
-        assert_eq!(doc.metadata.as_ref().unwrap().name.as_ref().unwrap().value, "baseline");
-        assert_eq!(doc.defaults.as_ref().unwrap().action.as_ref().unwrap().value, "deny");
+        assert_eq!(
+            doc.metadata.as_ref().unwrap().name.as_ref().unwrap().value,
+            "baseline"
+        );
+        assert_eq!(
+            doc.defaults
+                .as_ref()
+                .unwrap()
+                .action
+                .as_ref()
+                .unwrap()
+                .value,
+            "deny"
+        );
         assert_eq!(doc.address_groups.len(), 2);
         assert_eq!(doc.port_groups.len(), 1);
         assert_eq!(doc.signature_groups.len(), 1);
@@ -939,12 +991,19 @@ rules:
         let rfc1918 = &doc.address_groups[0];
         assert_eq!(rfc1918.name.value, "rfc1918");
         assert_eq!(
-            rfc1918.entries.iter().map(|e| e.value.as_str()).collect::<Vec<_>>(),
+            rfc1918
+                .entries
+                .iter()
+                .map(|e| e.value.as_str())
+                .collect::<Vec<_>>(),
             vec!["10.0.0.0/8", "192.168.0.0/16"]
         );
         let dns = &doc.address_groups[1];
         assert_eq!(
-            dns.entries.iter().map(|e| e.value.as_str()).collect::<Vec<_>>(),
+            dns.entries
+                .iter()
+                .map(|e| e.value.as_str())
+                .collect::<Vec<_>>(),
             vec!["1.1.1.1/32", "8.8.8.8/32"]
         );
     }

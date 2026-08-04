@@ -58,11 +58,19 @@ impl Default for Flow {
 
 impl Flow {
     pub fn tcp(dst: &str, port: u16) -> Self {
-        Flow { dst: (parse_ip(dst), port), protocol: Protocol::Tcp, ..Default::default() }
+        Flow {
+            dst: (parse_ip(dst), port),
+            protocol: Protocol::Tcp,
+            ..Default::default()
+        }
     }
 
     pub fn udp(dst: &str, port: u16) -> Self {
-        Flow { dst: (parse_ip(dst), port), protocol: Protocol::Udp, ..Default::default() }
+        Flow {
+            dst: (parse_ip(dst), port),
+            protocol: Protocol::Udp,
+            ..Default::default()
+        }
     }
 
     pub fn icmp(dst: &str) -> Self {
@@ -141,8 +149,7 @@ impl Flow {
 
     /// Build the context. Borrows from `self`, so the flow must outlive it.
     pub fn context<'a>(&'a self, profile: &NetworkProfile) -> FlowContext<'a> {
-        let mut ctx =
-            FlowContext::new(profile, self.direction, self.protocol, self.src, self.dst);
+        let mut ctx = FlowContext::new(profile, self.direction, self.protocol, self.src, self.dst);
         if let Some(identity) = &self.identity {
             ctx = ctx.with_identity(identity);
         }

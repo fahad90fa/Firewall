@@ -40,7 +40,9 @@ pub fn run(args: &[String], options: &GlobalOptions, transport: &mut dyn Transpo
 fn resolve(pid: u64, options: &GlobalOptions, transport: &mut dyn Transport) -> CliResult {
     let raw = client::call(
         transport,
-        RequestBuilder::new("resolve-identity").num("pid", pid).finish(),
+        RequestBuilder::new("resolve-identity")
+            .num("pid", pid)
+            .finish(),
     )?;
 
     Ok(emit(options.format, &raw, |v| {
@@ -50,10 +52,7 @@ fn resolve(pid: u64, options: &GlobalOptions, transport: &mut dyn Transport) -> 
         t.push(["path", &text(id, "path")]);
         t.push(["sha256", &text(id, "sha256")]);
         t.push(["signature", &text(id, "signature_type")]);
-        t.push([
-            "signature valid",
-            &text(id, "signature_valid"),
-        ]);
+        t.push(["signature valid", &text(id, "signature_valid")]);
         t.push(["signer", &text(id, "signer")]);
         t.push(["team id", &text(id, "team_id")]);
         t.push(["bundle id", &text(id, "bundle_id")]);
@@ -66,10 +65,7 @@ fn resolve(pid: u64, options: &GlobalOptions, transport: &mut dyn Transport) -> 
             out.push_str("\nplatform detail:\n");
             let mut m = Table::new(["", ""]);
             for (key, value) in meta {
-                m.push([
-                    key.clone(),
-                    value.as_str().unwrap_or_default().to_string(),
-                ]);
+                m.push([key.clone(), value.as_str().unwrap_or_default().to_string()]);
             }
             out.push_str(&m.render());
         }
@@ -135,7 +131,10 @@ mod tests {
     }
 
     fn options(format: Format) -> GlobalOptions {
-        GlobalOptions { format, ..Default::default() }
+        GlobalOptions {
+            format,
+            ..Default::default()
+        }
     }
 
     const SIGNED: &str = r#"{"ok":true,"identity":{
@@ -174,7 +173,10 @@ mod tests {
     fn an_unsigned_result_says_which_rules_can_still_match_it() {
         let unsigned = SIGNED
             .replace("\"trust\":\"trusted\"", "\"trust\":\"unknown\"")
-            .replace("\"signature_type\":\"elf-hash\"", "\"signature_type\":\"none\"");
+            .replace(
+                "\"signature_type\":\"elf-hash\"",
+                "\"signature_type\":\"none\"",
+            );
         let mut t = ScriptedTransport::new([unsigned]);
         let out = run(&args(&["resolve", "1"]), &options(Format::Table), &mut t).unwrap();
         assert!(out.contains("trust: [unknown]"), "{out}");
@@ -185,7 +187,9 @@ mod tests {
         let mut t = ScriptedTransport::default();
         for bad in [args(&["resolve"]), args(&["resolve", "self"])] {
             assert_eq!(
-                run(&bad, &options(Format::Table), &mut t).unwrap_err().exit_code(),
+                run(&bad, &options(Format::Table), &mut t)
+                    .unwrap_err()
+                    .exit_code(),
                 2
             );
         }

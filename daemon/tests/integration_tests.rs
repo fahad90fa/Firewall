@@ -17,9 +17,7 @@ use ufw_daemon::ipc::loopback::{self, MockKernelModule};
 use ufw_daemon::ipc::{KernelChannel, KernelEvent};
 use ufw_daemon::logging::sink::MemorySink;
 use ufw_daemon::logging::{Enrichment, Logger};
-use ufw_daemon::management_api::{
-    ApiError, Authority, ControlPlane, Request, Router, Response,
-};
+use ufw_daemon::management_api::{ApiError, Authority, ControlPlane, Request, Response, Router};
 use ufw_daemon::policy_loader;
 use ufw_daemon::policy_store::{apply, describe, diff};
 use ufw_daemon::state::DaemonState;
@@ -120,8 +118,8 @@ struct TestSupervisor {
 
 impl TestSupervisor {
     fn install(&self, origin: &str) -> Result<String, ApiError> {
-        let loaded = policy_loader::load(&self.policy)
-            .map_err(|e| ApiError::bad_request(e.to_string()))?;
+        let loaded =
+            policy_loader::load(&self.policy).map_err(|e| ApiError::bad_request(e.to_string()))?;
         let now = ufw_shared::now_us();
         let staged = self
             .state
@@ -171,8 +169,8 @@ impl ControlPlane for TestSupervisor {
             .map_err(|e| ApiError::bad_request(e.to_string()))
     }
     fn diff_policy(&self) -> Result<String, ApiError> {
-        let loaded = policy_loader::load(&self.policy)
-            .map_err(|e| ApiError::bad_request(e.to_string()))?;
+        let loaded =
+            policy_loader::load(&self.policy).map_err(|e| ApiError::bad_request(e.to_string()))?;
         let active = self
             .state
             .active_policy()
@@ -235,7 +233,10 @@ fn boot(policy_config: PolicyConfig) -> Daemon {
     let sink = MemorySink::new();
     let logger = Logger::with_sinks(
         &logging_config(),
-        Enrichment { host_id: "int-host".into(), ..Default::default() },
+        Enrichment {
+            host_id: "int-host".into(),
+            ..Default::default()
+        },
         vec![Box::new(sink.clone())],
     );
 
@@ -501,7 +502,10 @@ fn kernel_log_events_flow_through_enrichment_to_the_sink() {
     // Enrichment fills in what the module left blank and leaves what it
     // supplied: the module stamped its own host id, so that one stands.
     assert_eq!(events[0].host_id, "mock-host");
-    assert!(events[0].sequence > 0, "the logger assigns a sequence number");
+    assert!(
+        events[0].sequence > 0,
+        "the logger assigns a sequence number"
+    );
     assert_eq!(events[0].message.as_deref(), Some("blocked something"));
 
     // An event with no host id gets the daemon's.
@@ -530,7 +534,9 @@ fn enforcement_mode_changes_propagate_to_state_and_module() {
 
     d.router
         .dispatch(
-            Request::SetMode { mode: EnforcementMode::Monitor },
+            Request::SetMode {
+                mode: EnforcementMode::Monitor,
+            },
             Authority::Admin,
         )
         .unwrap();
@@ -586,7 +592,9 @@ fn a_read_only_caller_cannot_reach_any_mutating_operation() {
     for request in [
         Request::FlushPolicy,
         Request::Rollback { revision: 1 },
-        Request::SetMode { mode: EnforcementMode::EmergencyAllow },
+        Request::SetMode {
+            mode: EnforcementMode::EmergencyAllow,
+        },
         Request::ReloadPolicy,
     ] {
         assert_eq!(
@@ -614,7 +622,9 @@ fn every_read_only_endpoint_answers_with_parseable_json() {
         Request::Status,
         Request::Stats,
         Request::ListRules { filter: None },
-        Request::GetRule { key: "allow-dns".into() },
+        Request::GetRule {
+            key: "allow-dns".into(),
+        },
         Request::ListRevisions,
         Request::ListTrust,
         Request::Ping,

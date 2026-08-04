@@ -65,12 +65,10 @@ impl TlsConfig {
     pub fn validate(&self) -> Result<(), String> {
         match (&self.cert_path, &self.key_path) {
             (None, None) => Ok(()),
-            (Some(_), None) => Err(
-                "api.tls_cert is set but api.tls_key is not; a certificate \
+            (Some(_), None) => Err("api.tls_cert is set but api.tls_key is not; a certificate \
                  without a key cannot serve TLS, and falling back to plaintext \
                  on a port you believe is encrypted is worse than refusing"
-                    .into(),
-            ),
+                .into()),
             (None, Some(_)) => Err("api.tls_key is set but api.tls_cert is not".into()),
             (Some(cert), Some(key)) => {
                 if !cert.exists() {
@@ -242,9 +240,9 @@ mod imp {
                 Some(ca_path) => {
                     let mut roots = RootCertStore::empty();
                     for ca in load_certs(ca_path)? {
-                        roots.add(ca).map_err(|e| {
-                            format!("{}: {e}", ca_path.display())
-                        })?;
+                        roots
+                            .add(ca)
+                            .map_err(|e| format!("{}: {e}", ca_path.display()))?;
                     }
                     if roots.is_empty() {
                         return Err(format!(
@@ -271,7 +269,9 @@ mod imp {
             // implement — which presents as a hang, not an error.
             server_config.alpn_protocols = vec![b"http/1.1".to_vec()];
 
-            Ok(TlsAcceptor { config: Arc::new(server_config) })
+            Ok(TlsAcceptor {
+                config: Arc::new(server_config),
+            })
         }
 
         /// Wrap an accepted connection.
@@ -314,17 +314,13 @@ mod imp {
             // system bundle contains hundreds of certificates and a handful
             // are routinely expired or use an algorithm rustls declines. One
             // unparsable entry must not empty the trust store.
-            let (added, _ignored) =
-                roots.add_parsable_certificates(webpki_roots_or_empty());
+            let (added, _ignored) = roots.add_parsable_certificates(webpki_roots_or_empty());
             let _ = added;
 
             if let Some(path) = extra_ca {
                 let certs = load_certs(path)?;
                 if certs.is_empty() {
-                    return Err(format!(
-                        "{}: no CA certificates found",
-                        path.display()
-                    ));
+                    return Err(format!("{}: no CA certificates found", path.display()));
                 }
                 for ca in certs {
                     roots
@@ -334,18 +330,18 @@ mod imp {
             }
 
             if roots.is_empty() {
-                return Err(
-                    "no trust anchors available: neither platform roots nor a \
+                return Err("no trust anchors available: neither platform roots nor a \
                      configured logging.siem_ca_path. Refusing to ship log \
                      events to an unverifiable peer."
-                        .into(),
-                );
+                    .into());
             }
 
             let config = rustls::ClientConfig::builder()
                 .with_root_certificates(roots)
                 .with_no_client_auth();
-            Ok(TlsConnector { config: Arc::new(config) })
+            Ok(TlsConnector {
+                config: Arc::new(config),
+            })
         }
 
         pub fn connect(
@@ -376,11 +372,11 @@ mod imp {
     /// including an enterprise root an administrator installed.
     fn webpki_roots_or_empty() -> Vec<CertificateDer<'static>> {
         const CANDIDATES: [&str; 5] = [
-            "/etc/ssl/certs/ca-certificates.crt",       // Debian, Ubuntu, Alpine
-            "/etc/pki/tls/certs/ca-bundle.crt",         // Fedora, RHEL
-            "/etc/ssl/ca-bundle.pem",                   // openSUSE
-            "/etc/ssl/cert.pem",                        // macOS, Alpine
-            "/usr/local/share/certs/ca-root-nss.crt",   // FreeBSD
+            "/etc/ssl/certs/ca-certificates.crt", // Debian, Ubuntu, Alpine
+            "/etc/pki/tls/certs/ca-bundle.crt",   // Fedora, RHEL
+            "/etc/ssl/ca-bundle.pem",             // openSUSE
+            "/etc/ssl/cert.pem",                  // macOS, Alpine
+            "/usr/local/share/certs/ca-root-nss.crt", // FreeBSD
         ];
         for path in CANDIDATES {
             if let Ok(certs) = load_certs(Path::new(path)) {
@@ -501,7 +497,10 @@ mod tests {
         let err = config.validate().unwrap_err();
         assert!(err.contains("tls_key"), "{err}");
         assert!(err.contains("worse than refusing"), "{err}");
-        assert!(config.is_enabled(), "a half-configuration still counts as asking for TLS");
+        assert!(
+            config.is_enabled(),
+            "a half-configuration still counts as asking for TLS"
+        );
     }
 
     #[test]

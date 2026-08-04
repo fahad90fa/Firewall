@@ -336,7 +336,9 @@ fn the_generated_windows_header_compiles_against_the_driver_abi() {
     let result = compile_str("abi-check", POLICY, &CompileOptions::default());
     assert!(result.is_ok(), "{}", result.render());
 
-    let artifact = result.artifact(Platform::Windows).expect("windows artifact");
+    let artifact = result
+        .artifact(Platform::Windows)
+        .expect("windows artifact");
     let dir = scratch("windows");
     for file in &artifact.files {
         let name = Path::new(&file.path).file_name().unwrap();

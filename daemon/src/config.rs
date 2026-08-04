@@ -63,7 +63,10 @@ impl fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 fn err<T>(line: usize, message: impl Into<String>) -> Result<T, ConfigError> {
-    Err(ConfigError { line, message: message.into() })
+    Err(ConfigError {
+        line,
+        message: message.into(),
+    })
 }
 
 /// A parsed document: fully-qualified key (`"logging.file.path"`) to value.
@@ -138,7 +141,10 @@ impl Toml {
         match self.get(key) {
             None => Ok(None),
             Some((Value::String(s), _)) => Ok(Some(s.clone())),
-            Some((v, line)) => err(*line, format!("`{key}` must be a string, found {}", v.type_name())),
+            Some((v, line)) => err(
+                *line,
+                format!("`{key}` must be a string, found {}", v.type_name()),
+            ),
         }
     }
 
@@ -146,7 +152,10 @@ impl Toml {
         match self.get(key) {
             None => Ok(None),
             Some((Value::Boolean(b), _)) => Ok(Some(*b)),
-            Some((v, line)) => err(*line, format!("`{key}` must be a boolean, found {}", v.type_name())),
+            Some((v, line)) => err(
+                *line,
+                format!("`{key}` must be a boolean, found {}", v.type_name()),
+            ),
         }
     }
 
@@ -154,7 +163,10 @@ impl Toml {
         match self.get(key) {
             None => Ok(None),
             Some((Value::Integer(n), _)) => Ok(Some(*n)),
-            Some((v, line)) => err(*line, format!("`{key}` must be an integer, found {}", v.type_name())),
+            Some((v, line)) => err(
+                *line,
+                format!("`{key}` must be an integer, found {}", v.type_name()),
+            ),
         }
     }
 
@@ -180,14 +192,20 @@ impl Toml {
                         other => {
                             return err(
                                 *line,
-                                format!("`{key}` must be an array of strings, found {}", other.type_name()),
+                                format!(
+                                    "`{key}` must be an array of strings, found {}",
+                                    other.type_name()
+                                ),
                             )
                         }
                     }
                 }
                 Ok(out)
             }
-            Some((v, line)) => err(*line, format!("`{key}` must be an array, found {}", v.type_name())),
+            Some((v, line)) => err(
+                *line,
+                format!("`{key}` must be an array, found {}", v.type_name()),
+            ),
         }
     }
 
@@ -232,7 +250,10 @@ fn parse_value(text: &str, line: usize) -> Result<Value, ConfigError> {
             let inner = text
                 .strip_prefix('\'')
                 .and_then(|s| s.strip_suffix('\''))
-                .ok_or_else(|| ConfigError { line, message: "unterminated literal string".into() })?;
+                .ok_or_else(|| ConfigError {
+                    line,
+                    message: "unterminated literal string".into(),
+                })?;
             Ok(Value::String(inner.to_string()))
         }
         b'[' => parse_array(text, line),
@@ -288,7 +309,10 @@ fn parse_array(text: &str, line: usize) -> Result<Value, ConfigError> {
     let inner = text
         .strip_prefix('[')
         .and_then(|s| s.strip_suffix(']'))
-        .ok_or_else(|| ConfigError { line, message: "unterminated array".into() })?;
+        .ok_or_else(|| ConfigError {
+            line,
+            message: "unterminated array".into(),
+        })?;
     let mut out = Vec::new();
     let mut depth = 0usize;
     let mut in_string = false;
@@ -626,7 +650,10 @@ impl Config {
             let suggestion = closest(key, KNOWN_KEYS)
                 .map(|s| format!("; did you mean `{s}`?"))
                 .unwrap_or_default();
-            return err(*line, format!("unknown configuration key `{key}`{suggestion}"));
+            return err(
+                *line,
+                format!("unknown configuration key `{key}`{suggestion}"),
+            );
         }
 
         let mut c = Config::default();
@@ -639,10 +666,11 @@ impl Config {
             c.daemon.state_dir = PathBuf::from(v);
         }
         if let Some(v) = doc.string("daemon.mode")? {
-            c.daemon.mode = ufw_shared::protocol::EnforcementMode::parse(&v).ok_or(ConfigError {
-                line: 0,
-                message: format!("`{v}` is not a mode (enforce, monitor, emergency-allow)"),
-            })?;
+            c.daemon.mode =
+                ufw_shared::protocol::EnforcementMode::parse(&v).ok_or(ConfigError {
+                    line: 0,
+                    message: format!("`{v}` is not a mode (enforce, monitor, emergency-allow)"),
+                })?;
         }
         if let Some(v) = doc.bool("daemon.require_kernel_module")? {
             c.daemon.require_kernel_module = v;
@@ -802,10 +830,12 @@ impl Config {
         c.api.rest_bind = doc.string("api.rest_bind")?;
         c.api.grpc_bind = doc.string("api.grpc_bind")?;
         for a in doc.string_array("api.allow_from")? {
-            c.api.allow_from.push(a.parse::<IpAddr>().map_err(|_| ConfigError {
-                line: 0,
-                message: format!("`{a}` is not an IP address"),
-            })?);
+            c.api
+                .allow_from
+                .push(a.parse::<IpAddr>().map_err(|_| ConfigError {
+                    line: 0,
+                    message: format!("`{a}` is not an IP address"),
+                })?);
         }
         c.api.auth_token = doc.string("api.auth_token")?;
         c.api.tls.cert_path = doc.string("api.tls_cert")?.map(PathBuf::from);
@@ -877,10 +907,10 @@ impl Config {
             return err(0, crate::tls::unavailable_message());
         }
 
-        self.api.tls.validate().map_err(|message| ConfigError {
-            line: 0,
-            message,
-        })?;
+        self.api
+            .tls
+            .validate()
+            .map_err(|message| ConfigError { line: 0, message })?;
         if let Some(token) = &self.api.auth_token {
             if token.len() < 32 {
                 return err(
@@ -905,7 +935,10 @@ impl Config {
                     );
                 }
                 if !ca.exists() {
-                    return err(0, format!("`logging.siem.ca_path`: {} does not exist", ca.display()));
+                    return err(
+                        0,
+                        format!("`logging.siem.ca_path`: {} does not exist", ca.display()),
+                    );
                 }
             }
         }
@@ -988,7 +1021,10 @@ cli_socket = "/run/ufw.sock"
 "#;
         let c = Config::parse(text).expect("parses");
         assert_eq!(c.daemon.host_id, "web-01");
-        assert_eq!(c.daemon.mode, ufw_shared::protocol::EnforcementMode::Monitor);
+        assert_eq!(
+            c.daemon.mode,
+            ufw_shared::protocol::EnforcementMode::Monitor
+        );
         assert!(!c.daemon.require_kernel_module);
         assert_eq!(c.policy.files, vec!["base.yaml", "app.yaml"]);
         assert_eq!(c.policy.watch_interval_ms, 250);
@@ -1014,7 +1050,10 @@ cli_socket = "/run/ufw.sock"
     #[test]
     fn defaults_are_conservative() {
         let c = Config::parse("").unwrap();
-        assert_eq!(c.daemon.mode, ufw_shared::protocol::EnforcementMode::Enforce);
+        assert_eq!(
+            c.daemon.mode,
+            ufw_shared::protocol::EnforcementMode::Enforce
+        );
         assert!(c.daemon.require_kernel_module);
         assert!(c.policy.verify_equivalence);
         assert!(c.api.rest_bind.is_none());
@@ -1026,7 +1065,11 @@ cli_socket = "/run/ufw.sock"
     fn unknown_keys_are_errors_with_a_suggestion() {
         let e = Config::parse("[api]\nrest_bindd = \"127.0.0.1:1\"\n").unwrap_err();
         assert!(e.message.contains("unknown configuration key"));
-        assert!(e.message.contains("did you mean `api.rest_bind`?"), "{}", e.message);
+        assert!(
+            e.message.contains("did you mean `api.rest_bind`?"),
+            "{}",
+            e.message
+        );
         assert_eq!(e.line, 2);
     }
 

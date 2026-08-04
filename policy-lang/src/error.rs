@@ -26,21 +26,41 @@ pub struct Span {
 
 impl Span {
     pub fn new(start: u32, end: u32, line: u32, col: u32) -> Self {
-        Span { start, end, line, col }
+        Span {
+            start,
+            end,
+            line,
+            col,
+        }
     }
 
     /// A zero-width span, used for diagnostics about something that is
     /// *missing* rather than wrong.
     pub fn point(at: u32, line: u32, col: u32) -> Self {
-        Span { start: at, end: at, line, col }
+        Span {
+            start: at,
+            end: at,
+            line,
+            col,
+        }
     }
 
     /// Smallest span covering both.
     pub fn merge(self, other: Span) -> Span {
         if self.start <= other.start {
-            Span { start: self.start, end: self.end.max(other.end), line: self.line, col: self.col }
+            Span {
+                start: self.start,
+                end: self.end.max(other.end),
+                line: self.line,
+                col: self.col,
+            }
         } else {
-            Span { start: other.start, end: self.end.max(other.end), line: other.line, col: other.col }
+            Span {
+                start: other.start,
+                end: self.end.max(other.end),
+                line: other.line,
+                col: other.col,
+            }
         }
     }
 
@@ -66,11 +86,17 @@ impl<T> Spanned<T> {
     }
 
     pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Spanned<U> {
-        Spanned { value: f(self.value), span: self.span }
+        Spanned {
+            value: f(self.value),
+            span: self.span,
+        }
     }
 
     pub fn as_ref(&self) -> Spanned<&T> {
-        Spanned { value: &self.value, span: self.span }
+        Spanned {
+            value: &self.value,
+            span: self.span,
+        }
     }
 }
 
@@ -193,11 +219,17 @@ impl Diagnostic {
     }
 
     pub fn warning(code: &'static str, span: Span, message: impl Into<String>) -> Self {
-        Diagnostic { severity: Severity::Warning, ..Self::error(code, span, message) }
+        Diagnostic {
+            severity: Severity::Warning,
+            ..Self::error(code, span, message)
+        }
     }
 
     pub fn note(code: &'static str, span: Span, message: impl Into<String>) -> Self {
-        Diagnostic { severity: Severity::Note, ..Self::error(code, span, message) }
+        Diagnostic {
+            severity: Severity::Note,
+            ..Self::error(code, span, message)
+        }
     }
 
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
@@ -291,7 +323,11 @@ impl SourceFile {
                 line_starts.push(i as u32 + 1);
             }
         }
-        SourceFile { name: name.into(), text, line_starts }
+        SourceFile {
+            name: name.into(),
+            text,
+            line_starts,
+        }
     }
 
     /// 1-based line lookup.
@@ -350,7 +386,9 @@ impl Diagnostics {
     }
 
     pub fn warnings(&self) -> impl Iterator<Item = &Diagnostic> {
-        self.items.iter().filter(|d| d.severity == Severity::Warning)
+        self.items
+            .iter()
+            .filter(|d| d.severity == Severity::Warning)
     }
 
     pub fn has_errors(&self) -> bool {
@@ -422,16 +460,26 @@ pub struct Outcome<T> {
 
 impl<T> Outcome<T> {
     pub fn ok(value: T) -> Self {
-        Outcome { value: Some(value), diagnostics: Diagnostics::new() }
+        Outcome {
+            value: Some(value),
+            diagnostics: Diagnostics::new(),
+        }
     }
 
     pub fn with(value: T, diagnostics: Diagnostics) -> Self {
-        let value = if diagnostics.has_errors() { None } else { Some(value) };
+        let value = if diagnostics.has_errors() {
+            None
+        } else {
+            Some(value)
+        };
         Outcome { value, diagnostics }
     }
 
     pub fn failed(diagnostics: Diagnostics) -> Self {
-        Outcome { value: None, diagnostics }
+        Outcome {
+            value: None,
+            diagnostics,
+        }
     }
 
     pub fn is_ok(&self) -> bool {
@@ -519,9 +567,13 @@ mod tests {
     #[test]
     fn rendered_diagnostic_points_at_the_right_column() {
         let src = SourceFile::new("p.yaml", "rules:\n  - action: allowe\n");
-        let d = Diagnostic::error(codes::UNKNOWN_ENUM, Span::new(19, 25, 2, 13), "unknown action `allowe`")
-            .with_label("not a valid action")
-            .with_help("did you mean `allow`?");
+        let d = Diagnostic::error(
+            codes::UNKNOWN_ENUM,
+            Span::new(19, 25, 2, 13),
+            "unknown action `allowe`",
+        )
+        .with_label("not a valid action")
+        .with_help("did you mean `allow`?");
         let text = d.render(&src);
         assert!(text.contains("error[E0202]: unknown action `allowe`"));
         assert!(text.contains("--> p.yaml:2:13"));
@@ -539,8 +591,16 @@ mod tests {
     #[test]
     fn diagnostics_collect_rather_than_stop() {
         let mut d = Diagnostics::new();
-        d.push(Diagnostic::error(codes::MISSING_FIELD, Span::default(), "a"));
-        d.push(Diagnostic::warning(codes::BROAD_ALLOW, Span::default(), "b"));
+        d.push(Diagnostic::error(
+            codes::MISSING_FIELD,
+            Span::default(),
+            "a",
+        ));
+        d.push(Diagnostic::warning(
+            codes::BROAD_ALLOW,
+            Span::default(),
+            "b",
+        ));
         d.push(Diagnostic::note(codes::RULES_MERGED, Span::default(), "c"));
         assert_eq!(d.len(), 3);
         assert_eq!(d.error_count(), 1);
@@ -553,12 +613,20 @@ mod tests {
     #[test]
     fn outcome_discards_value_when_errors_present() {
         let mut d = Diagnostics::new();
-        d.push(Diagnostic::error(codes::MISSING_FIELD, Span::default(), "boom"));
+        d.push(Diagnostic::error(
+            codes::MISSING_FIELD,
+            Span::default(),
+            "boom",
+        ));
         let o = Outcome::with(42u32, d);
         assert!(!o.is_ok());
 
         let mut d = Diagnostics::new();
-        d.push(Diagnostic::warning(codes::BROAD_ALLOW, Span::default(), "meh"));
+        d.push(Diagnostic::warning(
+            codes::BROAD_ALLOW,
+            Span::default(),
+            "meh",
+        ));
         let o = Outcome::with(42u32, d);
         assert_eq!(o.value, Some(42));
     }

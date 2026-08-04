@@ -6,14 +6,10 @@
 
 use std::sync::Arc;
 
-use ufw_daemon::identity::{
-    IdentityResolver, IdentityService, ResolverOptions, TrustDatabase,
-};
-use ufw_shared::identity_types::{AppIdentity, IdentityQuery, SignatureType, TrustLevel};
-use ufw_shared::policy_types::{
-    AppFingerprint, AppMatch, PathPattern,
-};
+use ufw_daemon::identity::{IdentityResolver, IdentityService, ResolverOptions, TrustDatabase};
 use ufw_shared::identity_types::TrustMask;
+use ufw_shared::identity_types::{AppIdentity, IdentityQuery, SignatureType, TrustLevel};
+use ufw_shared::policy_types::{AppFingerprint, AppMatch, PathPattern};
 
 /// A resolver that reports whatever the test set up for a pid, and counts how
 /// often it was asked.
@@ -80,10 +76,7 @@ fn query(pid: u32, start: u64) -> IdentityQuery {
     }
 }
 
-fn service(
-    resolver: Arc<ScriptedResolver>,
-    anchors: &[(String, TrustLevel)],
-) -> IdentityService {
+fn service(resolver: Arc<ScriptedResolver>, anchors: &[(String, TrustLevel)]) -> IdentityService {
     struct Shared(Arc<ScriptedResolver>);
     impl IdentityResolver for Shared {
         fn resolve(&self, q: &IdentityQuery, t: &TrustDatabase) -> AppIdentity {
@@ -96,7 +89,10 @@ fn service(
     IdentityService::new(
         Box::new(Shared(resolver)),
         TrustDatabase::from_entries(anchors),
-        ResolverOptions { ttl_secs: 60, ..Default::default() },
+        ResolverOptions {
+            ttl_secs: 60,
+            ..Default::default()
+        },
         64,
     )
 }
@@ -201,10 +197,7 @@ fn a_resolved_identity_drives_the_policy_predicate_it_was_written_for() {
         Arc::clone(&resolver),
         &[("Contoso Ltd".to_string(), TrustLevel::Trusted)],
     );
-    resolver.set(
-        7,
-        signed(7, "/usr/lib/contoso/browser", "Contoso Ltd"),
-    );
+    resolver.set(7, signed(7, "/usr/lib/contoso/browser", "Contoso Ltd"));
     let identity = s.answer(&query(7, 1));
 
     let predicate = AppMatch {

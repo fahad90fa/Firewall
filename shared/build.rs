@@ -27,7 +27,11 @@ fn main() {
 
     // Older toolchains warn about unknown `cfg` values unless they are
     // declared. `check-cfg` is ignored by toolchains that predate it.
-    for flag in ["ufw_platform_windows", "ufw_platform_linux", "ufw_platform_macos"] {
+    for flag in [
+        "ufw_platform_windows",
+        "ufw_platform_linux",
+        "ufw_platform_macos",
+    ] {
         println!("cargo:rustc-check-cfg=cfg({flag})");
     }
 

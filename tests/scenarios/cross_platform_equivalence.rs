@@ -135,7 +135,9 @@ fn the_three_backends_agree_on_every_generated_scenario() {
     let result = compile_str("equivalence", WIDE, &CompileOptions::default());
     assert!(result.is_ok(), "{}", result.render());
 
-    let report = result.equivalence.expect("equivalence verification runs by default");
+    let report = result
+        .equivalence
+        .expect("equivalence verification runs by default");
     assert!(
         report.is_equivalent(),
         "the three backends disagree:\n{}",
@@ -192,18 +194,18 @@ fn the_shipped_policies_are_all_verified() {
     // The containerised traffic test's policy is included: it is only executed
     // under a Docker profile that most CI cannot run, so without this it would
     // rot unnoticed until somebody finally ran that profile.
-    let mut stack: Vec<std::path::PathBuf> = [
-        workspace.join("policies"),
-        workspace.join("tests/docker"),
-    ]
-    .into_iter()
-    .filter(|p| p.exists())
-    .collect();
+    let mut stack: Vec<std::path::PathBuf> =
+        [workspace.join("policies"), workspace.join("tests/docker")]
+            .into_iter()
+            .filter(|p| p.exists())
+            .collect();
     if stack.is_empty() {
         return;
     }
     while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -220,13 +222,20 @@ fn the_shipped_policies_are_all_verified() {
 
             let result = ufw_policy_lang::compile_file(&path, &CompileOptions::default())
                 .expect("reading a shipped policy");
-            assert!(result.is_ok(), "{} does not compile:\n{}",
-                    path.display(), result.render());
+            assert!(
+                result.is_ok(),
+                "{} does not compile:\n{}",
+                path.display(),
+                result.render()
+            );
 
             let report = result.equivalence.expect("verification runs by default");
-            assert!(report.is_equivalent(),
-                    "{} produces divergent backends:\n{}",
-                    path.display(), report.render());
+            assert!(
+                report.is_equivalent(),
+                "{} produces divergent backends:\n{}",
+                path.display(),
+                report.render()
+            );
             checked += 1;
         }
     }
@@ -240,11 +249,16 @@ fn single_platform_compilation_does_not_claim_equivalence() {
     // that says "equivalence verified" while having checked one backend is a
     // build that has taught its operators to ignore the line.
     let result = compile_str(
-        "one-platform", WIDE, &CompileOptions::single_platform(Platform::Linux));
+        "one-platform",
+        WIDE,
+        &CompileOptions::single_platform(Platform::Linux),
+    );
     assert!(result.is_ok(), "{}", result.render());
     assert_eq!(result.artifacts.len(), 1);
-    assert!(result.equivalence.is_none(),
-            "a single-platform build must not report an equivalence result");
+    assert!(
+        result.equivalence.is_none(),
+        "a single-platform build must not report an equivalence result"
+    );
 }
 
 #[test]
@@ -262,6 +276,8 @@ fn a_policy_whose_rules_all_gate_the_same_way_still_gets_a_real_corpus() {
 
     let report = result.equivalence.expect("a report");
     assert!(report.is_equivalent(), "{}", report.render());
-    assert!(report.scenarios_checked > 1,
-            "a single-rule policy still needs more than one scenario to say anything");
+    assert!(
+        report.scenarios_checked > 1,
+        "a single-rule policy still needs more than one scenario to say anything"
+    );
 }

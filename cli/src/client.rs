@@ -32,9 +32,8 @@ pub struct SocketTransport {
 impl SocketTransport {
     #[cfg(unix)]
     pub fn connect(path: &Path, timeout: Duration) -> Result<Self, CliError> {
-        let stream = std::os::unix::net::UnixStream::connect(path).map_err(|e| {
-            CliError::Unreachable(format!("{}: {e}", path.display()))
-        })?;
+        let stream = std::os::unix::net::UnixStream::connect(path)
+            .map_err(|e| CliError::Unreachable(format!("{}: {e}", path.display())))?;
         let _ = stream.set_read_timeout(Some(timeout));
         let _ = stream.set_write_timeout(Some(timeout));
         Ok(SocketTransport { stream })
@@ -104,7 +103,10 @@ pub struct LazyTransport {
 
 impl LazyTransport {
     pub fn new(options: &GlobalOptions) -> Self {
-        LazyTransport { options: options.clone(), inner: None }
+        LazyTransport {
+            options: options.clone(),
+            inner: None,
+        }
     }
 
     /// Whether a connection was ever opened. Used by the tests to assert that
@@ -119,10 +121,7 @@ impl Transport for LazyTransport {
         if self.inner.is_none() {
             self.inner = Some(connect(&self.options)?);
         }
-        self.inner
-            .as_mut()
-            .expect("just connected")
-            .call(request)
+        self.inner.as_mut().expect("just connected").call(request)
     }
 }
 
@@ -174,10 +173,7 @@ pub fn call(transport: &mut dyn Transport, request: String) -> Result<String, Cl
     // is a successful payload, which may legitimately have no `ok` field.
     if parsed.get("ok").and_then(|v| v.as_bool()) == Some(false) {
         return Err(CliError::Daemon {
-            status: parsed
-                .get("status")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(500) as u16,
+            status: parsed.get("status").and_then(|v| v.as_u64()).unwrap_or(500) as u16,
             message: parsed
                 .get("error")
                 .and_then(|v| v.as_str())
@@ -235,13 +231,17 @@ mod tests {
 
     #[test]
     fn requests_serialize_the_documented_shape() {
-        let request = RequestBuilder::new("list-rules").str("filter", "dns").finish();
+        let request = RequestBuilder::new("list-rules")
+            .str("filter", "dns")
+            .finish();
         assert_eq!(request, r#"{"op":"list-rules","filter":"dns"}"#);
 
         let request = RequestBuilder::new("rollback").num("revision", 7).finish();
         assert_eq!(request, r#"{"op":"rollback","revision":7}"#);
 
-        let request = RequestBuilder::new("status").opt_str("filter", None).finish();
+        let request = RequestBuilder::new("status")
+            .opt_str("filter", None)
+            .finish();
         assert_eq!(request, r#"{"op":"status"}"#);
     }
 

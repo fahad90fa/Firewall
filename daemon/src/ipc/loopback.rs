@@ -442,7 +442,11 @@ fn handle(
             }))
         }
         Message::IdentityResponse(identity) => {
-            state.lock().unwrap().identity_answers.push(identity.path.clone());
+            state
+                .lock()
+                .unwrap()
+                .identity_answers
+                .push(identity.path.clone());
             None
         }
         Message::StatsRequest => {

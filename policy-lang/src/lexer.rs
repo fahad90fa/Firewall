@@ -157,7 +157,9 @@ impl Lexer {
             self.diags.push(
                 Diagnostic::error(codes::UNCLOSED_FLOW_SEQ, span, "unclosed `[`")
                     .with_label("opened here, never closed")
-                    .with_help("flow sequences must close on the same logical value, e.g. `[a, b]`"),
+                    .with_help(
+                        "flow sequences must close on the same logical value, e.g. `[a, b]`",
+                    ),
             );
         }
 
@@ -374,7 +376,14 @@ impl Lexer {
         }
 
         let span = self.span_at(offsets, start, i, line_no);
-        self.push(TokenKind::Scalar(value), span, offsets, start, line_no, true);
+        self.push(
+            TokenKind::Scalar(value),
+            span,
+            offsets,
+            start,
+            line_no,
+            true,
+        );
         i
     }
 
@@ -392,13 +401,7 @@ impl Lexer {
 
     /// Scan an unquoted token: either `key:` or a scalar running to the end of
     /// the line (or to the next flow separator).
-    fn scan_bare(
-        &mut self,
-        chars: &[char],
-        offsets: &[u32],
-        line_no: u32,
-        start: usize,
-    ) -> usize {
+    fn scan_bare(&mut self, chars: &[char], offsets: &[u32], line_no: u32, start: usize) -> usize {
         let n = chars.len();
 
         // First, look for a key terminator without consuming anything.
@@ -462,7 +465,14 @@ impl Lexer {
         }
 
         let span = self.span_at(offsets, start, end, line_no);
-        self.push(TokenKind::Scalar(value), span, offsets, start, line_no, false);
+        self.push(
+            TokenKind::Scalar(value),
+            span,
+            offsets,
+            start,
+            line_no,
+            false,
+        );
         k
     }
 
@@ -517,7 +527,12 @@ mod tests {
     fn simple_mapping() {
         assert_eq!(
             kinds("version: 1\n"),
-            vec![key("version"), scalar("1"), TokenKind::Newline, TokenKind::Eof]
+            vec![
+                key("version"),
+                scalar("1"),
+                TokenKind::Newline,
+                TokenKind::Eof
+            ]
         );
     }
 
@@ -526,7 +541,12 @@ mod tests {
         let src = "# leading comment\n\n   \nversion: 1  # trailing\n";
         assert_eq!(
             kinds(src),
-            vec![key("version"), scalar("1"), TokenKind::Newline, TokenKind::Eof]
+            vec![
+                key("version"),
+                scalar("1"),
+                TokenKind::Newline,
+                TokenKind::Eof
+            ]
         );
     }
 
@@ -534,7 +554,12 @@ mod tests {
     fn hash_without_leading_space_is_not_a_comment() {
         assert_eq!(
             kinds("tag: red#blue\n"),
-            vec![key("tag"), scalar("red#blue"), TokenKind::Newline, TokenKind::Eof]
+            vec![
+                key("tag"),
+                scalar("red#blue"),
+                TokenKind::Newline,
+                TokenKind::Eof
+            ]
         );
     }
 
@@ -561,7 +586,12 @@ mod tests {
     fn dash_needs_trailing_space_so_negative_numbers_survive() {
         assert_eq!(
             kinds("offset: -5\n"),
-            vec![key("offset"), scalar("-5"), TokenKind::Newline, TokenKind::Eof]
+            vec![
+                key("offset"),
+                scalar("-5"),
+                TokenKind::Newline,
+                TokenKind::Eof
+            ]
         );
     }
 
@@ -599,7 +629,12 @@ mod tests {
         );
         assert_eq!(
             kinds("hash: sha256:deadbeef\n"),
-            vec![key("hash"), scalar("sha256:deadbeef"), TokenKind::Newline, TokenKind::Eof]
+            vec![
+                key("hash"),
+                scalar("sha256:deadbeef"),
+                TokenKind::Newline,
+                TokenKind::Eof
+            ]
         );
     }
 
@@ -620,7 +655,7 @@ mod tests {
     #[test]
     fn windows_paths_lex_as_one_scalar() {
         assert_eq!(
-            kinds(r"path: C:\Program Files\App\app.exe" .to_string().as_str()),
+            kinds(r"path: C:\Program Files\App\app.exe".to_string().as_str()),
             vec![
                 key("path"),
                 scalar(r"C:\Program Files\App\app.exe"),
@@ -634,11 +669,21 @@ mod tests {
     fn quoted_scalars_are_unescaped() {
         assert_eq!(
             kinds("name: \"a\\nb\\t\\\"c\\\"\"\n"),
-            vec![key("name"), scalar("a\nb\t\"c\""), TokenKind::Newline, TokenKind::Eof]
+            vec![
+                key("name"),
+                scalar("a\nb\t\"c\""),
+                TokenKind::Newline,
+                TokenKind::Eof
+            ]
         );
         assert_eq!(
             kinds("name: \"caf\\u00e9\"\n"),
-            vec![key("name"), scalar("café"), TokenKind::Newline, TokenKind::Eof]
+            vec![
+                key("name"),
+                scalar("café"),
+                TokenKind::Newline,
+                TokenKind::Eof
+            ]
         );
     }
 
@@ -646,11 +691,21 @@ mod tests {
     fn single_quotes_are_literal_with_doubling() {
         assert_eq!(
             kinds("name: 'a\\nb'\n"),
-            vec![key("name"), scalar("a\\nb"), TokenKind::Newline, TokenKind::Eof]
+            vec![
+                key("name"),
+                scalar("a\\nb"),
+                TokenKind::Newline,
+                TokenKind::Eof
+            ]
         );
         assert_eq!(
             kinds("name: 'it''s'\n"),
-            vec![key("name"), scalar("it's"), TokenKind::Newline, TokenKind::Eof]
+            vec![
+                key("name"),
+                scalar("it's"),
+                TokenKind::Newline,
+                TokenKind::Eof
+            ]
         );
     }
 
@@ -658,7 +713,12 @@ mod tests {
     fn quoted_keys_are_supported() {
         assert_eq!(
             kinds("\"my key\": 1\n"),
-            vec![key("my key"), scalar("1"), TokenKind::Newline, TokenKind::Eof]
+            vec![
+                key("my key"),
+                scalar("1"),
+                TokenKind::Newline,
+                TokenKind::Eof
+            ]
         );
     }
 
@@ -706,7 +766,10 @@ mod tests {
         let next = tokens.iter().find(|t| t.key() == Some("next")).unwrap();
         assert_eq!(next.line, 2);
         assert_eq!(next.col, 1);
-        assert_eq!(&src[next.span.start as usize..next.span.end as usize], "next:");
+        assert_eq!(
+            &src[next.span.start as usize..next.span.end as usize],
+            "next:"
+        );
     }
 
     #[test]
@@ -746,7 +809,12 @@ mod tests {
         // in token position can be a stray delimiter.
         assert_eq!(
             kinds("note: array[0]\n"),
-            vec![key("note"), scalar("array[0]"), TokenKind::Newline, TokenKind::Eof]
+            vec![
+                key("note"),
+                scalar("array[0]"),
+                TokenKind::Newline,
+                TokenKind::Eof
+            ]
         );
     }
 
@@ -775,7 +843,12 @@ mod tests {
     fn trailing_whitespace_is_trimmed_from_scalars() {
         assert_eq!(
             kinds("name: value   \n"),
-            vec![key("name"), scalar("value"), TokenKind::Newline, TokenKind::Eof]
+            vec![
+                key("name"),
+                scalar("value"),
+                TokenKind::Newline,
+                TokenKind::Eof
+            ]
         );
     }
 
@@ -797,7 +870,9 @@ mod tests {
     #[test]
     fn lexer_always_terminates_on_hostile_input() {
         // Regression guard: every scan path must consume at least one char.
-        for src in [":", "::", " : ", "-", "--", "[", "]", "[,]", "\"", "'", "\\"] {
+        for src in [
+            ":", "::", " : ", "-", "--", "[", "]", "[,]", "\"", "'", "\\",
+        ] {
             let (tokens, _) = tokenize(src);
             assert_eq!(tokens.last().unwrap().kind, TokenKind::Eof);
         }

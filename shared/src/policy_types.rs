@@ -127,7 +127,10 @@ impl Layer {
 
     /// Position of this layer in [`EVALUATION_ORDER`].
     pub fn stage_index(self) -> usize {
-        EVALUATION_ORDER.iter().position(|l| *l == self).unwrap_or(0)
+        EVALUATION_ORDER
+            .iter()
+            .position(|l| *l == self)
+            .unwrap_or(0)
     }
 }
 
@@ -499,7 +502,10 @@ impl Cidr {
         if prefix > max {
             return None;
         }
-        Some(Cidr { addr: mask_addr(addr, prefix), prefix })
+        Some(Cidr {
+            addr: mask_addr(addr, prefix),
+            prefix,
+        })
     }
 
     pub fn addr(&self) -> IpAddr {
@@ -532,11 +538,17 @@ impl Cidr {
 
     /// The `0.0.0.0/0` and `::/0` wildcards.
     pub fn any_v4() -> Self {
-        Cidr { addr: IpAddr::V4(Ipv4Addr::UNSPECIFIED), prefix: 0 }
+        Cidr {
+            addr: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            prefix: 0,
+        }
     }
 
     pub fn any_v6() -> Self {
-        Cidr { addr: IpAddr::V6(Ipv6Addr::UNSPECIFIED), prefix: 0 }
+        Cidr {
+            addr: IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+            prefix: 0,
+        }
     }
 
     pub fn is_any(&self) -> bool {
@@ -558,9 +570,7 @@ impl Cidr {
                 Some(v4) => self.contains(IpAddr::V4(v4)),
                 None => false,
             },
-            (IpAddr::V6(_), IpAddr::V4(v4)) => {
-                self.contains(IpAddr::V6(v4.to_ipv6_mapped()))
-            }
+            (IpAddr::V6(_), IpAddr::V4(v4)) => self.contains(IpAddr::V6(v4.to_ipv6_mapped())),
         }
     }
 
@@ -675,13 +685,19 @@ impl PortRange {
         PortRange { lo: p, hi: p }
     }
 
-    pub const ANY: PortRange = PortRange { lo: 0, hi: u16::MAX };
+    pub const ANY: PortRange = PortRange {
+        lo: 0,
+        hi: u16::MAX,
+    };
 
     /// Parse `443` or `8000-8100`.
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim();
         match s.split_once('-') {
-            Some((a, b)) => Some(PortRange::new(a.trim().parse().ok()?, b.trim().parse().ok()?)),
+            Some((a, b)) => Some(PortRange::new(
+                a.trim().parse().ok()?,
+                b.trim().parse().ok()?,
+            )),
             None => Some(PortRange::single(s.parse().ok()?)),
         }
     }
@@ -801,7 +817,11 @@ impl AddressMatch {
         for _ in 0..zn {
             zones.push(Zone::from_u8(r.u8()?).ok_or(ProtoError::Malformed("bad zone"))?);
         }
-        Ok(AddressMatch { cidrs, zones, negate: r.bool()? })
+        Ok(AddressMatch {
+            cidrs,
+            zones,
+            negate: r.bool()?,
+        })
     }
 }
 
@@ -884,7 +904,10 @@ impl PortMatch {
             let hi = r.u16()?;
             ranges.push(PortRange { lo, hi });
         }
-        Ok(PortMatch { ranges, negate: r.bool()? })
+        Ok(PortMatch {
+            ranges,
+            negate: r.bool()?,
+        })
     }
 }
 
@@ -905,12 +928,18 @@ pub struct PathPattern {
 
 impl PathPattern {
     pub fn new(pattern: impl Into<String>, case_insensitive: bool) -> Self {
-        PathPattern { pattern: pattern.into(), case_insensitive }
+        PathPattern {
+            pattern: pattern.into(),
+            case_insensitive,
+        }
     }
 
     pub fn matches(&self, path: &str) -> bool {
         if self.case_insensitive {
-            glob_match(&self.pattern.to_ascii_lowercase(), &path.to_ascii_lowercase())
+            glob_match(
+                &self.pattern.to_ascii_lowercase(),
+                &path.to_ascii_lowercase(),
+            )
         } else {
             glob_match(&self.pattern, path)
         }
@@ -1111,12 +1140,18 @@ pub struct AppMatch {
 
 impl AppMatch {
     pub fn any() -> Self {
-        AppMatch { trust: TrustMask::ANY, ..Default::default() }
+        AppMatch {
+            trust: TrustMask::ANY,
+            ..Default::default()
+        }
     }
 
     /// A predicate with a single fingerprint.
     pub fn single(fingerprint: AppFingerprint) -> Self {
-        AppMatch { fingerprints: vec![fingerprint], ..AppMatch::any() }
+        AppMatch {
+            fingerprints: vec![fingerprint],
+            ..AppMatch::any()
+        }
     }
 
     /// Whether this predicate constrains nothing at all.
@@ -1206,9 +1241,7 @@ impl DpiMatch {
         if !self.l7.is_empty() && !self.l7.contains(&scan.l7) {
             return false;
         }
-        if !self.signatures.is_empty()
-            && !self.signatures.iter().any(|s| scan.hits.contains(s))
-        {
+        if !self.signatures.is_empty() && !self.signatures.iter().any(|s| scan.hits.contains(s)) {
             return false;
         }
         true
@@ -1241,7 +1274,11 @@ impl DpiMatch {
             l7.push(L7Protocol::from_u8(r.u8()?).ok_or(ProtoError::Malformed("bad l7"))?);
         }
         let on_match = Action::from_u8(r.u8()?).ok_or(ProtoError::Malformed("bad action"))?;
-        Ok(DpiMatch { signatures, l7, on_match })
+        Ok(DpiMatch {
+            signatures,
+            l7,
+            on_match,
+        })
     }
 }
 
@@ -1343,7 +1380,11 @@ impl TimeWindow {
     }
 
     pub fn decode(r: &mut Reader<'_>) -> Result<Self, ProtoError> {
-        Ok(TimeWindow { days: r.u8()?, start_minute: r.u16()?, end_minute: r.u16()? })
+        Ok(TimeWindow {
+            days: r.u8()?,
+            start_minute: r.u16()?,
+            end_minute: r.u16()?,
+        })
     }
 }
 
@@ -1584,10 +1625,22 @@ impl CompiledRule {
         let source_ports = PortMatch::decode(r)?;
         let dest = AddressMatch::decode(r)?;
         let dest_ports = PortMatch::decode(r)?;
-        let app = if r.u8()? != 0 { Some(AppMatch::decode(r)?) } else { None };
-        let dpi = if r.u8()? != 0 { Some(DpiMatch::decode(r)?) } else { None };
+        let app = if r.u8()? != 0 {
+            Some(AppMatch::decode(r)?)
+        } else {
+            None
+        };
+        let dpi = if r.u8()? != 0 {
+            Some(DpiMatch::decode(r)?)
+        } else {
+            None
+        };
         let interfaces = r.string_list()?;
-        let schedule = if r.u8()? != 0 { Some(TimeWindow::decode(r)?) } else { None };
+        let schedule = if r.u8()? != 0 {
+            Some(TimeWindow::decode(r)?)
+        } else {
+            None
+        };
         let flags = r.u16()?;
         let tags = r.string_list()?;
         Ok(CompiledRule {
@@ -2230,7 +2283,10 @@ mod tests {
 
     #[test]
     fn port_negation() {
-        let m = PortMatch { ranges: vec![PortRange::single(22)], negate: true };
+        let m = PortMatch {
+            ranges: vec![PortRange::single(22)],
+            negate: true,
+        };
         assert!(!m.matches(22));
         assert!(m.matches(80));
     }
@@ -2296,7 +2352,10 @@ mod tests {
 
     #[test]
     fn app_match_never_matches_missing_identity() {
-        let m = AppMatch { trust: TrustMask::from_levels([TrustLevel::Unknown]), ..AppMatch::any() };
+        let m = AppMatch {
+            trust: TrustMask::from_levels([TrustLevel::Unknown]),
+            ..AppMatch::any()
+        };
         assert!(!m.matches(None));
         let negated = AppMatch { negate: true, ..m };
         // Negation does not turn "unknown process" into a match.
@@ -2336,7 +2395,10 @@ mod tests {
 
         let mut linux = identity("/usr/bin/app", TrustLevel::Trusted);
         linux.signer = None;
-        assert!(m.matches(Some(&linux)), "linux binary must match its own fingerprint");
+        assert!(
+            m.matches(Some(&linux)),
+            "linux binary must match its own fingerprint"
+        );
 
         let mut windows = identity(r"C:\\App\\app.exe", TrustLevel::Trusted);
         windows.signer = Some("Contoso Ltd".into());
@@ -2352,8 +2414,14 @@ mod tests {
     fn trust_applies_across_every_fingerprint() {
         let m = AppMatch {
             fingerprints: vec![
-                AppFingerprint { paths: vec![PathPattern::new("/a", false)], ..Default::default() },
-                AppFingerprint { paths: vec![PathPattern::new("/b", false)], ..Default::default() },
+                AppFingerprint {
+                    paths: vec![PathPattern::new("/a", false)],
+                    ..Default::default()
+                },
+                AppFingerprint {
+                    paths: vec![PathPattern::new("/b", false)],
+                    ..Default::default()
+                },
             ],
             trust: TrustMask::from_levels([TrustLevel::System]),
             ..AppMatch::any()
@@ -2367,7 +2435,11 @@ mod tests {
     #[test]
     fn schedule_simple_window() {
         // Monday-Friday 09:00-17:00
-        let w = TimeWindow { days: 0b0001_1111, start_minute: 540, end_minute: 1020 };
+        let w = TimeWindow {
+            days: 0b0001_1111,
+            start_minute: 540,
+            end_minute: 1020,
+        };
         assert!(w.contains(600)); // Mon 10:00
         assert!(!w.contains(400)); // Mon 06:40
         assert!(!w.contains(5 * 1440 + 600)); // Sat 10:00
@@ -2376,7 +2448,11 @@ mod tests {
     #[test]
     fn schedule_wrapping_window_spills_into_next_day() {
         // Friday 22:00 - 02:00
-        let w = TimeWindow { days: 0b0001_0000, start_minute: 1320, end_minute: 120 };
+        let w = TimeWindow {
+            days: 0b0001_0000,
+            start_minute: 1320,
+            end_minute: 120,
+        };
         assert!(w.contains(4 * 1440 + 1380)); // Fri 23:00
         assert!(w.contains(5 * 1440 + 60)); // Sat 01:00 (spill)
         assert!(!w.contains(5 * 1440 + 180)); // Sat 03:00
@@ -2390,7 +2466,10 @@ mod tests {
         r.priority = 100;
         r.direction = Direction::Outbound;
         r.protocol = Protocol::Udp;
-        r.dest_ports = PortMatch { ranges: vec![PortRange::single(53)], negate: false };
+        r.dest_ports = PortMatch {
+            ranges: vec![PortRange::single(53)],
+            negate: false,
+        };
         r
     }
 
@@ -2439,7 +2518,10 @@ mod tests {
         let mut allow = CompiledRule::new(30, "allow-web", Layer::Packet, Action::AllowInspect);
         allow.priority = 100;
         allow.protocol = Protocol::Tcp;
-        allow.dest_ports = PortMatch { ranges: vec![PortRange::single(443)], negate: false };
+        allow.dest_ports = PortMatch {
+            ranges: vec![PortRange::single(443)],
+            negate: false,
+        };
 
         let mut dpi_deny = CompiledRule::new(31, "block-exploit", Layer::Stream, Action::Allow);
         dpi_deny.priority = 10;
@@ -2479,7 +2561,11 @@ mod tests {
         let mut allow = CompiledRule::new(40, "allow-web", Layer::Packet, Action::Allow);
         allow.priority = 100;
         let mut dpi_deny = CompiledRule::new(41, "block-exploit", Layer::Stream, Action::Allow);
-        dpi_deny.dpi = Some(DpiMatch { signatures: vec![777], l7: vec![], on_match: Action::Deny });
+        dpi_deny.dpi = Some(DpiMatch {
+            signatures: vec![777],
+            l7: vec![],
+            on_match: Action::Deny,
+        });
 
         let p = build_policy(vec![allow, dpi_deny], Decision::Deny);
         let ctx = FlowContext::new(
@@ -2489,7 +2575,12 @@ mod tests {
             (v4("10.0.0.5"), 1),
             (v4("1.2.3.4"), 443),
         )
-        .with_dpi(DpiScan { l7: L7Protocol::Tls, hits: vec![777], first_hit_offset: 0, truncated: false });
+        .with_dpi(DpiScan {
+            l7: L7Protocol::Tls,
+            hits: vec![777],
+            first_hit_offset: 0,
+            truncated: false,
+        });
 
         // A plain `allow` means "stop looking", so the DPI rule never runs.
         assert_eq!(p.evaluate(&ctx).verdict(), (Decision::Allow, 40));
@@ -2505,7 +2596,11 @@ mod tests {
         });
 
         let mut dpi = CompiledRule::new(51, "alert-tls", Layer::AppDpi, Action::Allow);
-        dpi.dpi = Some(DpiMatch { signatures: vec![], l7: vec![L7Protocol::Tls], on_match: Action::Allow });
+        dpi.dpi = Some(DpiMatch {
+            signatures: vec![],
+            l7: vec![L7Protocol::Tls],
+            on_match: Action::Allow,
+        });
 
         let p = build_policy(vec![ident, dpi], Decision::Allow);
         let id = identity("/tmp/dropper", TrustLevel::Unknown);
@@ -2517,7 +2612,12 @@ mod tests {
             (v4("1.2.3.4"), 443),
         )
         .with_identity(&id)
-        .with_dpi(DpiScan { l7: L7Protocol::Tls, hits: vec![], first_hit_offset: 0, truncated: false });
+        .with_dpi(DpiScan {
+            l7: L7Protocol::Tls,
+            hits: vec![],
+            first_hit_offset: 0,
+            truncated: false,
+        });
 
         assert_eq!(p.evaluate(&ctx).verdict(), (Decision::Deny, 50));
     }
@@ -2545,7 +2645,11 @@ mod tests {
     fn zone_predicates_use_the_network_profile() {
         let mut r = CompiledRule::new(70, "deny-external", Layer::Packet, Action::Deny);
         r.priority = 10;
-        r.dest = AddressMatch { cidrs: vec![], zones: vec![Zone::External], negate: false };
+        r.dest = AddressMatch {
+            cidrs: vec![],
+            zones: vec![Zone::External],
+            negate: false,
+        };
         let p = build_policy(vec![r], Decision::Allow);
 
         let internal = FlowContext::new(
@@ -2614,9 +2718,18 @@ mod tests {
     #[test]
     fn dpi_predicates_do_not_apply_to_portless_protocols() {
         let mut r = CompiledRule::new(91, "sig", Layer::Stream, Action::Allow);
-        r.dpi = Some(DpiMatch { signatures: vec![5], l7: vec![], on_match: Action::Deny });
+        r.dpi = Some(DpiMatch {
+            signatures: vec![5],
+            l7: vec![],
+            on_match: Action::Deny,
+        });
         let p = build_policy(vec![r], Decision::Allow);
-        let scan = DpiScan { l7: L7Protocol::Unknown, hits: vec![5], first_hit_offset: 0, truncated: false };
+        let scan = DpiScan {
+            l7: L7Protocol::Unknown,
+            hits: vec![5],
+            first_hit_offset: 0,
+            truncated: false,
+        };
 
         let icmp = FlowContext::new(
             &p.network_profile,
@@ -2643,7 +2756,10 @@ mod tests {
     fn port_constraints_on_portless_protocols_never_match() {
         let mut r = CompiledRule::new(80, "icmp-with-ports", Layer::Packet, Action::Allow);
         r.protocol = Protocol::Icmp;
-        r.dest_ports = PortMatch { ranges: vec![PortRange::single(53)], negate: false };
+        r.dest_ports = PortMatch {
+            ranges: vec![PortRange::single(53)],
+            negate: false,
+        };
         let p = build_policy(vec![r], Decision::Deny);
         let ctx = FlowContext::new(
             &p.network_profile,
@@ -2734,7 +2850,11 @@ mod tests {
             on_match: Action::Alert,
         });
         rule.interfaces = vec!["eth0".into()];
-        rule.schedule = Some(TimeWindow { days: 0x7f, start_minute: 0, end_minute: 1439 });
+        rule.schedule = Some(TimeWindow {
+            days: 0x7f,
+            start_minute: 0,
+            end_minute: 1439,
+        });
         rule.tags = vec!["baseline".into()];
         rule.ebpf_eligible = true;
 

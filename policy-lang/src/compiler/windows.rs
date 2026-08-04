@@ -71,7 +71,12 @@ impl Backend for WindowsBackend {
             GeneratedFile::new("windows/ufw_filters.txt", emit_text(policy, &placements)),
         ];
 
-        Artifact { platform: Platform::Windows, files, model, notes }
+        Artifact {
+            platform: Platform::Windows,
+            files,
+            model,
+            notes,
+        }
     }
 }
 
@@ -251,7 +256,10 @@ fn emit_json(policy: &CompiledPolicy, placements: &[Placement<'_>]) -> String {
     w.u64_field("format_version", 1);
     w.str_field("policy", &policy.name);
     w.u64_field("revision", policy.revision);
-    w.str_field("ruleset_sha256", &ufw_shared::hash::hex(&policy.ruleset_hash));
+    w.str_field(
+        "ruleset_sha256",
+        &ufw_shared::hash::hex(&policy.ruleset_hash),
+    );
     w.str_field("default_action", policy.default_action.as_str());
     w.str_field("provider_key", "UFW_PROVIDER_KEY");
     w.str_field("sublayer_key", "UFW_SUBLAYER_KEY");
@@ -332,7 +340,11 @@ fn emit_conditions(w: &mut JsonWriter, r: &CompiledRule) {
             } else {
                 "FWPM_CONDITION_IP_LOCAL_ADDRESS"
             },
-            if r.source.negate { "not-equal" } else { "equal" },
+            if r.source.negate {
+                "not-equal"
+            } else {
+                "equal"
+            },
             &c.to_string(),
         );
     }
@@ -345,10 +357,20 @@ fn emit_conditions(w: &mut JsonWriter, r: &CompiledRule) {
         );
     }
     for range in &r.source_ports.ranges {
-        condition(w, "FWPM_CONDITION_IP_LOCAL_PORT", "range", &range.to_string());
+        condition(
+            w,
+            "FWPM_CONDITION_IP_LOCAL_PORT",
+            "range",
+            &range.to_string(),
+        );
     }
     for range in &r.dest_ports.ranges {
-        condition(w, "FWPM_CONDITION_IP_REMOTE_PORT", "range", &range.to_string());
+        condition(
+            w,
+            "FWPM_CONDITION_IP_REMOTE_PORT",
+            "range",
+            &range.to_string(),
+        );
     }
     for zone in &r.source.zones {
         // Zones have no native WFP condition; the callout evaluates them from
@@ -477,10 +499,16 @@ fn emit_header(policy: &CompiledPolicy, placements: &[Placement<'_>]) -> String 
     for (i, p) in placements.iter().enumerate() {
         let r = p.rule;
         if !r.source.cidrs.is_empty() {
-            s.push_str(&emit_cidr_array(&format!("kFilter{i}SrcCidr"), &r.source.cidrs));
+            s.push_str(&emit_cidr_array(
+                &format!("kFilter{i}SrcCidr"),
+                &r.source.cidrs,
+            ));
         }
         if !r.dest.cidrs.is_empty() {
-            s.push_str(&emit_cidr_array(&format!("kFilter{i}DstCidr"), &r.dest.cidrs));
+            s.push_str(&emit_cidr_array(
+                &format!("kFilter{i}DstCidr"),
+                &r.dest.cidrs,
+            ));
         }
         if !r.source_ports.ranges.is_empty() {
             s.push_str(&emit_port_array(
@@ -528,15 +556,24 @@ fn emit_header(policy: &CompiledPolicy, placements: &[Placement<'_>]) -> String 
             p.weight,
             wfp_action(r.effective_action()),
             r.direction.as_str().to_uppercase(),
-            r.protocol.number().map(|n| n.to_string()).unwrap_or_else(|| "UFW_PROTO_ANY".into()),
+            r.protocol
+                .number()
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "UFW_PROTO_ANY".into()),
             scope_macro(&p.scope),
             array_ref(&format!("kFilter{i}SrcCidr"), r.source.cidrs.is_empty()),
             r.source.cidrs.len(),
             array_ref(&format!("kFilter{i}DstCidr"), r.dest.cidrs.is_empty()),
             r.dest.cidrs.len(),
-            array_ref(&format!("kFilter{i}SrcPort"), r.source_ports.ranges.is_empty()),
+            array_ref(
+                &format!("kFilter{i}SrcPort"),
+                r.source_ports.ranges.is_empty()
+            ),
             r.source_ports.ranges.len(),
-            array_ref(&format!("kFilter{i}DstPort"), r.dest_ports.ranges.is_empty()),
+            array_ref(
+                &format!("kFilter{i}DstPort"),
+                r.dest_ports.ranges.is_empty()
+            ),
             r.dest_ports.ranges.len(),
             rule_flags(r),
         ));
@@ -591,7 +628,11 @@ fn rule_flags(r: &CompiledRule) -> String {
     if r.schedule.is_some() {
         flags.push("UFW_FLAG_HAS_SCHEDULE");
     }
-    if r.app.as_ref().map(|a| a.require_valid_signature).unwrap_or(false) {
+    if r.app
+        .as_ref()
+        .map(|a| a.require_valid_signature)
+        .unwrap_or(false)
+    {
         flags.push("UFW_FLAG_REQUIRE_VALID_SIG");
     }
     if flags.is_empty() {
@@ -727,7 +768,10 @@ mod tests {
         let mut ale = CompiledRule::new(3, "web", Layer::Packet, Action::AllowInspect);
         ale.priority = 100;
         ale.protocol = Protocol::Tcp;
-        ale.dest_ports = PortMatch { ranges: vec![PortRange::single(443)], negate: false };
+        ale.dest_ports = PortMatch {
+            ranges: vec![PortRange::single(443)],
+            negate: false,
+        };
 
         let mut stream = CompiledRule::new(4, "dpi", Layer::Stream, Action::Allow);
         stream.dpi = Some(DpiMatch {
@@ -746,7 +790,10 @@ mod tests {
         let a = WindowsBackend.generate(&policy());
         let f = a.file("windows/ufw_filters.json").unwrap();
         let v = json::parse(&f.contents).expect("filter spec must be valid JSON");
-        assert_eq!(v.get("format").unwrap().as_str(), Some("ufw-wfp-filter-spec"));
+        assert_eq!(
+            v.get("format").unwrap().as_str(),
+            Some("ufw-wfp-filter-spec")
+        );
         assert!(!v.get("filters").unwrap().as_array().unwrap().is_empty());
     }
 
@@ -756,12 +803,7 @@ mod tests {
         // packet rule at priority 1. In WFP both would land in the same layer
         // group, and only a stage-aware weight keeps the perimeter rule first.
         let a = WindowsBackend.generate(&policy());
-        let weights: Vec<(u32, u64)> = a
-            .model
-            .rules
-            .iter()
-            .map(|r| (r.id, r.order_key))
-            .collect();
+        let weights: Vec<(u32, u64)> = a.model.rules.iter().map(|r| (r.id, r.order_key)).collect();
         let lan = weights.iter().find(|(id, _)| *id == 1).unwrap().1;
         let icmp = weights.iter().find(|(id, _)| *id == 2).unwrap().1;
         assert!(lan > icmp, "higher weight is evaluated first in WFP");
@@ -795,11 +837,17 @@ mod tests {
         assert!(copies.iter().any(|c| c.engine == Engine::WfpPacket));
         // Exactly one admits TCP, exactly one admits ICMP.
         assert_eq!(
-            copies.iter().filter(|c| c.scope.admits(Protocol::Tcp)).count(),
+            copies
+                .iter()
+                .filter(|c| c.scope.admits(Protocol::Tcp))
+                .count(),
             1
         );
         assert_eq!(
-            copies.iter().filter(|c| c.scope.admits(Protocol::Icmp)).count(),
+            copies
+                .iter()
+                .filter(|c| c.scope.admits(Protocol::Icmp))
+                .count(),
             1
         );
     }
@@ -854,7 +902,9 @@ mod tests {
         let text = &a.file("windows/ufw_filters.txt").unwrap().contents;
         let lan = text.find("lan-ok").unwrap();
         let icmp = text.find("block-icmp").unwrap();
-        let dpi = text.find(" dpi ").unwrap_or_else(|| text.find("dpi").unwrap());
+        let dpi = text
+            .find(" dpi ")
+            .unwrap_or_else(|| text.find("dpi").unwrap());
         assert!(lan < icmp, "perimeter stage listed before packet stage");
         assert!(icmp < dpi, "stream layer listed last");
     }

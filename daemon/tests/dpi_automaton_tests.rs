@@ -64,11 +64,17 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 fn pat(s: &str) -> Pattern {
-    Pattern { bytes: s.as_bytes().to_vec(), nocase: false }
+    Pattern {
+        bytes: s.as_bytes().to_vec(),
+        nocase: false,
+    }
 }
 
 fn ipat(s: &str) -> Pattern {
-    Pattern { bytes: s.as_bytes().to_vec(), nocase: true }
+    Pattern {
+        bytes: s.as_bytes().to_vec(),
+        nocase: true,
+    }
 }
 
 /// Patterns chosen for the ways an Aho-Corasick implementation goes wrong:
@@ -525,7 +531,10 @@ fn the_two_headers_decode_the_same_table_identically() {
     let linux = run_platform(cc, Platform::Linux, &table, &corpus);
     let windows = run_platform(cc, Platform::Windows, &table, &corpus);
     if let (Some(l), Some(w)) = (linux, windows) {
-        assert_eq!(l, w, "the two kernel headers walked the same table differently");
+        assert_eq!(
+            l, w,
+            "the two kernel headers walked the same table differently"
+        );
     }
 }
 
@@ -577,7 +586,11 @@ fn a_truncated_table_is_refused_rather_than_walked() {
                 .arg(&source)
                 .output()
                 .expect("running the C compiler");
-            assert!(build.status.success(), "{}", String::from_utf8_lossy(&build.stderr));
+            assert!(
+                build.status.success(),
+                "{}",
+                String::from_utf8_lossy(&build.stderr)
+            );
 
             let run = Command::new(&binary)
                 .arg(dir.join("table.bin"))

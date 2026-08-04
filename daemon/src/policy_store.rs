@@ -155,7 +155,11 @@ impl PolicyStore {
     /// content matches the old one. Reusing the old revision number would make
     /// the kernel module's `base_revision` check meaningless and would leave
     /// two different moments in history sharing an identifier.
-    pub fn prepare_rollback(&mut self, to: u64, now_us: u64) -> Result<StagedChange, RollbackError> {
+    pub fn prepare_rollback(
+        &mut self,
+        to: u64,
+        now_us: u64,
+    ) -> Result<StagedChange, RollbackError> {
         if self.active_revision() == to {
             return Err(RollbackError::AlreadyActive(to));
         }
@@ -188,7 +192,8 @@ impl PolicyStore {
     /// Drop every rule, leaving the module with only its default action.
     pub fn prepare_flush(&mut self, now_us: u64) -> Option<StagedChange> {
         let active = self.active.as_ref()?;
-        let mut empty = CompiledPolicy::new(active.policy.name.clone(), active.policy.default_action);
+        let mut empty =
+            CompiledPolicy::new(active.policy.name.clone(), active.policy.default_action);
         empty.network_profile = active.policy.network_profile.clone();
         empty.revision = self.next_revision;
         self.next_revision += 1;
@@ -333,7 +338,12 @@ pub fn describe(delta: &PolicyDelta, old: &CompiledPolicy) -> String {
         ));
     }
     for r in &delta.added {
-        lines.push(format!("  + {} (priority {}, {})", r.name, r.priority, r.effective_action()));
+        lines.push(format!(
+            "  + {} (priority {}, {})",
+            r.name,
+            r.priority,
+            r.effective_action()
+        ));
     }
     for r in &delta.modified {
         let before = old.find(r.id);
@@ -348,7 +358,10 @@ pub fn describe(delta: &PolicyDelta, old: &CompiledPolicy) -> String {
         }
     }
     for id in &delta.removed {
-        let name = old.find(*id).map(|r| r.name.as_str()).unwrap_or("<unknown>");
+        let name = old
+            .find(*id)
+            .map(|r| r.name.as_str())
+            .unwrap_or("<unknown>");
         lines.push(format!("  - {name}"));
     }
     format!(
@@ -363,9 +376,7 @@ pub fn describe(delta: &PolicyDelta, old: &CompiledPolicy) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ufw_shared::policy_types::{
-        Action, Decision, Layer, PortMatch, PortRange, Protocol,
-    };
+    use ufw_shared::policy_types::{Action, Decision, Layer, PortMatch, PortRange, Protocol};
 
     fn rule(name: &str, priority: u16, action: Action) -> CompiledRule {
         let id = ufw_shared::hash::derive_rule_id("test", name);
@@ -386,7 +397,11 @@ mod tests {
     fn first_install_is_a_full_delta() {
         let mut store = PolicyStore::new();
         let staged = store
-            .stage(policy(vec![rule("a", 10, Action::Allow)], Decision::Deny), "file", 1)
+            .stage(
+                policy(vec![rule("a", 10, Action::Allow)], Decision::Deny),
+                "file",
+                1,
+            )
             .expect("staged");
         assert_eq!(staged.revision.revision(), 1);
         assert_eq!(staged.delta.base_revision, 0);
@@ -410,7 +425,11 @@ mod tests {
     fn inserting_a_rule_produces_a_one_rule_delta() {
         let mut store = PolicyStore::new();
         let first = store
-            .stage(policy(vec![rule("b", 20, Action::Allow)], Decision::Deny), "file", 1)
+            .stage(
+                policy(vec![rule("b", 20, Action::Allow)], Decision::Deny),
+                "file",
+                1,
+            )
             .unwrap();
         store.commit(first);
 
@@ -435,11 +454,20 @@ mod tests {
     #[test]
     fn editing_a_rule_shows_up_as_modified() {
         let mut store = PolicyStore::new();
-        let staged = store.stage(policy(vec![rule("a", 10, Action::Allow)], Decision::Deny), "f", 1).unwrap();
+        let staged = store
+            .stage(
+                policy(vec![rule("a", 10, Action::Allow)], Decision::Deny),
+                "f",
+                1,
+            )
+            .unwrap();
         store.commit(staged);
 
         let mut edited = rule("a", 10, Action::Allow);
-        edited.dest_ports = PortMatch { ranges: vec![PortRange::single(443)], negate: false };
+        edited.dest_ports = PortMatch {
+            ranges: vec![PortRange::single(443)],
+            negate: false,
+        };
         let staged = store
             .stage(policy(vec![edited], Decision::Deny), "f", 2)
             .unwrap();
@@ -450,17 +478,23 @@ mod tests {
     #[test]
     fn removing_a_rule_shows_up_as_removed() {
         let mut store = PolicyStore::new();
-        let staged = store.stage(
-                        policy(
-                            vec![rule("a", 10, Action::Allow), rule("b", 20, Action::Deny)],
-                            Decision::Deny,
-                        ),
-                        "f",
-                        1,
-                    ).unwrap();
+        let staged = store
+            .stage(
+                policy(
+                    vec![rule("a", 10, Action::Allow), rule("b", 20, Action::Deny)],
+                    Decision::Deny,
+                ),
+                "f",
+                1,
+            )
+            .unwrap();
         store.commit(staged);
         let staged = store
-            .stage(policy(vec![rule("a", 10, Action::Allow)], Decision::Deny), "f", 2)
+            .stage(
+                policy(vec![rule("a", 10, Action::Allow)], Decision::Deny),
+                "f",
+                2,
+            )
             .unwrap();
         assert_eq!(staged.delta.removed.len(), 1);
     }
@@ -480,7 +514,11 @@ mod tests {
         let mut edited = rule("edit", 20, Action::Deny);
         edited.log = false;
         let mut new = policy(
-            vec![rule("keep", 10, Action::Allow), edited, rule("add", 40, Action::Allow)],
+            vec![
+                rule("keep", 10, Action::Allow),
+                edited,
+                rule("add", 40, Action::Allow),
+            ],
             Decision::Allow,
         );
         new.revision = old.revision + 1;
@@ -496,9 +534,21 @@ mod tests {
     #[test]
     fn rollback_moves_forward_to_a_new_revision() {
         let mut store = PolicyStore::new();
-        let staged = store.stage(policy(vec![rule("a", 10, Action::Allow)], Decision::Deny), "f", 1).unwrap();
+        let staged = store
+            .stage(
+                policy(vec![rule("a", 10, Action::Allow)], Decision::Deny),
+                "f",
+                1,
+            )
+            .unwrap();
         store.commit(staged);
-        let staged = store.stage(policy(vec![rule("b", 10, Action::Deny)], Decision::Deny), "f", 2).unwrap();
+        let staged = store
+            .stage(
+                policy(vec![rule("b", 10, Action::Deny)], Decision::Deny),
+                "f",
+                2,
+            )
+            .unwrap();
         store.commit(staged);
         assert_eq!(store.active_revision(), 2);
 
@@ -515,7 +565,13 @@ mod tests {
     #[test]
     fn rollback_to_an_unknown_or_current_revision_is_refused() {
         let mut store = PolicyStore::new();
-        let staged = store.stage(policy(vec![rule("a", 10, Action::Allow)], Decision::Deny), "f", 1).unwrap();
+        let staged = store
+            .stage(
+                policy(vec![rule("a", 10, Action::Allow)], Decision::Deny),
+                "f",
+                1,
+            )
+            .unwrap();
         store.commit(staged);
         assert_eq!(
             store.prepare_rollback(99, 2),
@@ -533,7 +589,10 @@ mod tests {
         for i in 0..(constants::POLICY_HISTORY_DEPTH + 5) {
             let staged = store
                 .stage(
-                    policy(vec![rule(&format!("r{i}"), 10, Action::Allow)], Decision::Deny),
+                    policy(
+                        vec![rule(&format!("r{i}"), 10, Action::Allow)],
+                        Decision::Deny,
+                    ),
                     "f",
                     i as u64,
                 )
@@ -549,14 +608,16 @@ mod tests {
     #[test]
     fn flush_removes_every_rule_but_keeps_the_default() {
         let mut store = PolicyStore::new();
-        let staged = store.stage(
-                        policy(
-                            vec![rule("a", 10, Action::Allow), rule("b", 20, Action::Deny)],
-                            Decision::Deny,
-                        ),
-                        "f",
-                        1,
-                    ).unwrap();
+        let staged = store
+            .stage(
+                policy(
+                    vec![rule("a", 10, Action::Allow), rule("b", 20, Action::Deny)],
+                    Decision::Deny,
+                ),
+                "f",
+                1,
+            )
+            .unwrap();
         store.commit(staged);
         let staged = store.prepare_flush(2).unwrap();
         assert_eq!(staged.delta.removed.len(), 2);
@@ -590,7 +651,13 @@ mod tests {
 
         let small = policy(
             (0..10)
-                .map(|i| rule(&format!("r{i}"), if i == 0 { 11 } else { 10 }, Action::Allow))
+                .map(|i| {
+                    rule(
+                        &format!("r{i}"),
+                        if i == 0 { 11 } else { 10 },
+                        Action::Allow,
+                    )
+                })
                 .collect(),
             Decision::Deny,
         );
@@ -608,11 +675,17 @@ mod tests {
     #[test]
     fn describe_names_what_changed() {
         let old = policy(
-            vec![rule("keep", 10, Action::Allow), rule("drop", 20, Action::Deny)],
+            vec![
+                rule("keep", 10, Action::Allow),
+                rule("drop", 20, Action::Deny),
+            ],
             Decision::Deny,
         );
         let new = policy(
-            vec![rule("keep", 10, Action::Allow), rule("add", 30, Action::Allow)],
+            vec![
+                rule("keep", 10, Action::Allow),
+                rule("add", 30, Action::Allow),
+            ],
             Decision::Allow,
         );
         let text = describe(&diff(&old, &new), &old);

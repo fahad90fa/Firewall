@@ -94,11 +94,19 @@ impl Backend for LinuxBackend {
                 emit_ebpf_header(policy, &ordered, &offloaded),
             ),
             GeneratedFile::new("linux/ufw_rules.h", emit_module_header(policy, &ordered)),
-            GeneratedFile::new("linux/ufw_policy.json", emit_json(policy, &ordered, &offloaded)),
+            GeneratedFile::new(
+                "linux/ufw_policy.json",
+                emit_json(policy, &ordered, &offloaded),
+            ),
             GeneratedFile::new("linux/ufw.nft", emit_nftables(policy, &ordered)),
         ];
 
-        Artifact { platform: Platform::Linux, files, model, notes }
+        Artifact {
+            platform: Platform::Linux,
+            files,
+            model,
+            notes,
+        }
     }
 }
 
@@ -169,7 +177,11 @@ fn plan_offload(ordered: &[CompiledRule], notes: &mut Diagnostics) -> Vec<u32> {
 // eBPF program header
 // ===========================================================================
 
-fn emit_ebpf_header(policy: &CompiledPolicy, ordered: &[CompiledRule], offloaded: &[u32]) -> String {
+fn emit_ebpf_header(
+    policy: &CompiledPolicy,
+    ordered: &[CompiledRule],
+    offloaded: &[u32],
+) -> String {
     let rules: Vec<&CompiledRule> = ordered
         .iter()
         .filter(|r| offloaded.contains(&r.id))
@@ -328,7 +340,11 @@ fn emit_module_header(policy: &CompiledPolicy, ordered: &[CompiledRule]) -> Stri
         ordered.len()
     );
     s.push_str("#pragma once\n\n#include \"policy_structs.h\"\n\n");
-    let _ = writeln!(s, "#define UFW_ABI_REVISION_EXPECTED {}", constants::ABI_REVISION);
+    let _ = writeln!(
+        s,
+        "#define UFW_ABI_REVISION_EXPECTED {}",
+        constants::ABI_REVISION
+    );
     let _ = writeln!(s, "#define UFW_RULE_COUNT {}", ordered.len());
     let _ = writeln!(
         s,
@@ -421,7 +437,10 @@ fn emit_json(policy: &CompiledPolicy, ordered: &[CompiledRule], offloaded: &[u32
     w.u64_field("format_version", 1);
     w.str_field("policy", &policy.name);
     w.u64_field("revision", policy.revision);
-    w.str_field("ruleset_sha256", &ufw_shared::hash::hex(&policy.ruleset_hash));
+    w.str_field(
+        "ruleset_sha256",
+        &ufw_shared::hash::hex(&policy.ruleset_hash),
+    );
     w.str_field("default_action", policy.default_action.as_str());
     w.str_field("genl_family", constants::LINUX_GENL_FAMILY);
     w.str_field("bpf_pin_dir", constants::LINUX_BPF_PIN_DIR);
@@ -530,7 +549,8 @@ fn emit_nftables(policy: &CompiledPolicy, ordered: &[CompiledRule]) -> String {
                     let _ = writeln!(s, "        {line}");
                 }
                 None => {
-                    let _ = writeln!(
+                    let _ =
+                        writeln!(
                         s,
                         "        # [{}] `{}` needs {} context; enforced by the kernel module only",
                         r.layer.as_str(),
@@ -599,7 +619,11 @@ fn nft_rule(r: &CompiledRule) -> Option<String> {
         Action::Continue => "continue",
     };
     let comment = format!("comment \"{}\"", r.name.replace('"', "'"));
-    Some(format!("{} {verdict} {comment}", parts.join(" ")).trim().to_string())
+    Some(
+        format!("{} {verdict} {comment}", parts.join(" "))
+            .trim()
+            .to_string(),
+    )
 }
 
 #[cfg(test)]
@@ -613,7 +637,10 @@ mod tests {
         r.priority = priority;
         r.protocol = Protocol::Tcp;
         r.direction = dir;
-        r.dest_ports = PortMatch { ranges: vec![PortRange::single(23)], negate: false };
+        r.dest_ports = PortMatch {
+            ranges: vec![PortRange::single(23)],
+            negate: false,
+        };
         r
     }
 
@@ -629,7 +656,11 @@ mod tests {
     fn zone_rule(id: u32, name: &str, priority: u16) -> CompiledRule {
         let mut r = CompiledRule::new(id, name, Layer::Packet, Action::Deny);
         r.priority = priority;
-        r.dest = AddressMatch { cidrs: vec![], zones: vec![Zone::External], negate: false };
+        r.dest = AddressMatch {
+            cidrs: vec![],
+            zones: vec![Zone::External],
+            negate: false,
+        };
         r
     }
 
@@ -727,7 +758,10 @@ mod tests {
         let a = LinuxBackend.generate(&p);
         let h = &a.file("linux/ufw_ebpf_rules.h").unwrap().contents;
         assert!(h.contains("#define UFW_EBPF_RULE_COUNT 0"));
-        assert!(h.contains("ufw_ebpf_rules[1]"), "must not emit a zero-length array");
+        assert!(
+            h.contains("ufw_ebpf_rules[1]"),
+            "must not emit a zero-length array"
+        );
     }
 
     #[test]

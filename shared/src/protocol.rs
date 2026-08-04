@@ -31,8 +31,8 @@
 use crate::constants;
 use crate::identity_types::AppIdentity;
 pub use crate::identity_types::IdentityQuery;
-use crate::policy_types::{CompiledPolicy, CompiledRule, Decision};
 use crate::log_types::LogEvent;
+use crate::policy_types::{CompiledPolicy, CompiledRule, Decision};
 
 use std::fmt;
 
@@ -84,11 +84,15 @@ pub struct Writer {
 
 impl Writer {
     pub fn new() -> Self {
-        Writer { buf: Vec::with_capacity(256) }
+        Writer {
+            buf: Vec::with_capacity(256),
+        }
     }
 
     pub fn with_capacity(n: usize) -> Self {
-        Writer { buf: Vec::with_capacity(n) }
+        Writer {
+            buf: Vec::with_capacity(n),
+        }
     }
 
     pub fn finish(self) -> Vec<u8> {
@@ -329,7 +333,13 @@ impl MessageHeader {
         if payload_len as usize > constants::MAX_MESSAGE_PAYLOAD {
             return Err(ProtoError::TooLarge(payload_len as usize));
         }
-        Ok(MessageHeader { magic, version, msg_type, seq, payload_len })
+        Ok(MessageHeader {
+            magic,
+            version,
+            msg_type,
+            seq,
+            payload_len,
+        })
     }
 
     pub fn write(&self, w: &mut Writer) {
@@ -982,8 +992,12 @@ mod tests {
 
     fn sample_policy() -> CompiledPolicy {
         let mut p = CompiledPolicy::new("sample", Decision::Deny);
-        p.rules
-            .push(CompiledRule::new(7, "allow-loopback", Layer::Packet, Action::Allow));
+        p.rules.push(CompiledRule::new(
+            7,
+            "allow-loopback",
+            Layer::Packet,
+            Action::Allow,
+        ));
         p.finalize();
         p
     }
@@ -1051,7 +1065,10 @@ mod tests {
         let m = Message::PolicyFlush;
         let mut frame = m.encode(1);
         frame[0] ^= 0xFF;
-        assert!(matches!(Message::decode(&frame), Err(ProtoError::BadMagic(_))));
+        assert!(matches!(
+            Message::decode(&frame),
+            Err(ProtoError::BadMagic(_))
+        ));
 
         let mut frame = m.encode(1);
         frame[4] = 0x7F;
@@ -1118,9 +1135,9 @@ mod tests {
             hint_path: Some("/usr/bin/x".into()),
             platform_token: vec![9, 9],
         }));
-        roundtrip(Message::IdentityResponse(Box::new(AppIdentity::unresolved(
-            5, 6,
-        ))));
+        roundtrip(Message::IdentityResponse(Box::new(
+            AppIdentity::unresolved(5, 6),
+        )));
         roundtrip(Message::LogEvents(vec![LogEvent::new(
             1_000,
             "host-a",

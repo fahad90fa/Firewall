@@ -162,7 +162,9 @@ pub fn to_yaml(value: &Json, indent: usize) -> String {
 /// Quote a YAML scalar when leaving it bare would change its meaning.
 fn yaml_scalar(s: &str) -> String {
     let needs_quotes = s.is_empty()
-        || s.chars().next().is_some_and(|c| c.is_ascii_digit() || c == '-')
+        || s.chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit() || c == '-')
         || s.contains(": ")
         || s.contains('\n')
         || s.contains('#')

@@ -190,7 +190,8 @@ impl Analyzer {
                 self.duplicate(&g.name, prev_span, "signature group");
                 continue;
             }
-            self.signature_groups.insert(g.name.value.clone(), g.clone());
+            self.signature_groups
+                .insert(g.name.value.clone(), g.clone());
         }
         for app in &doc.applications {
             if let Some(prev) = self.applications.get(&app.name.value) {
@@ -199,7 +200,8 @@ impl Analyzer {
                 continue;
             }
             self.validate_application(app);
-            self.applications.insert(app.name.value.clone(), app.clone());
+            self.applications
+                .insert(app.name.value.clone(), app.clone());
         }
     }
 
@@ -628,11 +630,7 @@ impl Analyzer {
         // identity rule where identity is not yet known, which can only ever
         // produce a non-match.
         if explicit.stage_index() < earliest.stage_index() {
-            let span = rule
-                .layer
-                .as_ref()
-                .map(|l| l.span)
-                .unwrap_or(rule.span);
+            let span = rule.layer.as_ref().map(|l| l.span).unwrap_or(rule.span);
             let reason = if has_dpi {
                 "a `dpi:` clause needs payload inspection"
             } else {
@@ -647,7 +645,10 @@ impl Analyzer {
                         explicit.as_str()
                     ),
                 )
-                .with_help(format!("use `layer: {}` or remove the explicit layer", required.as_str())),
+                .with_help(format!(
+                    "use `layer: {}` or remove the explicit layer",
+                    required.as_str()
+                )),
             );
             return required;
         }
@@ -781,7 +782,10 @@ impl Analyzer {
             );
         }
 
-        let mut ports = PortMatch { ranges: self.resolve_ports(&ep.ports), negate: false };
+        let mut ports = PortMatch {
+            ranges: self.resolve_ports(&ep.ports),
+            negate: false,
+        };
         ports.normalize();
 
         if !ports.ranges.is_empty() && !protocol.has_ports() && protocol != Protocol::Any {
@@ -1134,7 +1138,10 @@ impl Analyzer {
             self.err(
                 codes::LIMIT_EXCEEDED,
                 app.span,
-                format!("application `{}` has more than {n} patterns", app.name.value),
+                format!(
+                    "application `{}` has more than {n} patterns",
+                    app.name.value
+                ),
             );
         }
         m
@@ -1308,7 +1315,11 @@ impl Analyzer {
             );
             return None;
         }
-        Some(TimeWindow { days, start_minute: start, end_minute: end })
+        Some(TimeWindow {
+            days,
+            start_minute: start,
+            end_minute: end,
+        })
     }
 
     // -----------------------------------------------------------------
@@ -1442,7 +1453,9 @@ impl Analyzer {
             None => {
                 self.unknown_enum(
                     s,
-                    &["tcp", "udp", "icmp", "icmpv6", "sctp", "gre", "esp", "ah", "any"],
+                    &[
+                        "tcp", "udp", "icmp", "icmpv6", "sctp", "gre", "esp", "ah", "any",
+                    ],
                     "protocol",
                 );
                 None
@@ -1750,7 +1763,10 @@ mod tests {
         let mut linux = ufw_shared::identity_types::AppIdentity::unresolved(1, 0);
         linux.path = "/usr/bin/app".into();
         linux.trust = TrustLevel::Trusted;
-        assert!(app.matches(Some(&linux)), "linux binary must match without a signer");
+        assert!(
+            app.matches(Some(&linux)),
+            "linux binary must match without a signer"
+        );
 
         let mut windows = ufw_shared::identity_types::AppIdentity::unresolved(2, 0);
         windows.path = r"C:\app.exe".into();
@@ -1906,7 +1922,9 @@ mod tests {
 
     #[test]
     fn rule_ids_are_stable_across_recompiles() {
-        let src = format!("{BASE}rules:\n  - id: keep-me\n    action: allow\n    destination: 1.2.3.4/32\n");
+        let src = format!(
+            "{BASE}rules:\n  - id: keep-me\n    action: allow\n    destination: 1.2.3.4/32\n"
+        );
         let a = compile_ok(&src);
         let b = compile_ok(&src);
         assert_eq!(a.rules[0].id, b.rules[0].id);

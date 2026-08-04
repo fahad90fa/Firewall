@@ -175,7 +175,10 @@ impl Fields {
     }
 
     pub fn number(&self, field: u32) -> Option<u64> {
-        self.numbers.iter().find(|(f, _)| *f == field).map(|(_, v)| *v)
+        self.numbers
+            .iter()
+            .find(|(f, _)| *f == field)
+            .map(|(_, v)| *v)
     }
 }
 
@@ -202,7 +205,9 @@ pub fn decode_message(mut bytes: &[u8]) -> Result<Fields, ApiError> {
                 bytes = &bytes[n..];
                 let len = len as usize;
                 if len > bytes.len() {
-                    return Err(ApiError::bad_request("length-delimited field runs past the end"));
+                    return Err(ApiError::bad_request(
+                        "length-delimited field runs past the end",
+                    ));
                 }
                 let text = std::str::from_utf8(&bytes[..len])
                     .map_err(|_| ApiError::bad_request("field is not valid UTF-8"))?;
@@ -223,7 +228,9 @@ pub fn decode_message(mut bytes: &[u8]) -> Result<Fields, ApiError> {
                 bytes = &bytes[4..];
             }
             other => {
-                return Err(ApiError::bad_request(format!("wire type {other} is not supported")))
+                return Err(ApiError::bad_request(format!(
+                    "wire type {other} is not supported"
+                )))
             }
         }
     }
@@ -269,7 +276,9 @@ pub fn unframe_message(body: &[u8]) -> Result<&[u8], ApiError> {
     }
     let len = u32::from_be_bytes([body[1], body[2], body[3], body[4]]) as usize;
     if 5 + len > body.len() {
-        return Err(ApiError::bad_request("gRPC-Web frame length exceeds the body"));
+        return Err(ApiError::bad_request(
+            "gRPC-Web frame length exceeds the body",
+        ));
     }
     Ok(&body[5..5 + len])
 }
@@ -294,7 +303,10 @@ pub fn route(path: &str, message: &Fields) -> Result<Request, ApiError> {
         "Status" => Request::Status,
         "Stats" => Request::Stats,
         "ListRules" => Request::ListRules {
-            filter: message.string(1).map(str::to_string).filter(|s| !s.is_empty()),
+            filter: message
+                .string(1)
+                .map(str::to_string)
+                .filter(|s| !s.is_empty()),
         },
         "GetRule" => Request::GetRule {
             key: message
@@ -360,11 +372,7 @@ pub fn handle(
 
     let (code, message, json) = match outcome {
         Ok(response) => (status::OK, String::new(), response.body),
-        Err(e) => (
-            status::from_http(e.status),
-            e.message.clone(),
-            e.to_json(),
-        ),
+        Err(e) => (status::from_http(e.status), e.message.clone(), e.to_json()),
     };
 
     let mut out = frame_message(&encode_reply(&json));
@@ -522,7 +530,9 @@ mod tests {
         // survives as part of the message, flattened onto one line, where it
         // cannot be read as a trailer of its own.
         assert_eq!(
-            text.lines().filter(|l| l.starts_with("grpc-status")).count(),
+            text.lines()
+                .filter(|l| l.starts_with("grpc-status"))
+                .count(),
             1
         );
         assert_eq!(text.lines().count(), 2);
@@ -536,12 +546,16 @@ mod tests {
             (
                 "/ufw.v1.Firewall/ListRules",
                 string_message(1, "dns"),
-                Request::ListRules { filter: Some("dns".into()) },
+                Request::ListRules {
+                    filter: Some("dns".into()),
+                },
             ),
             (
                 "/ufw.v1.Firewall/GetRule",
                 string_message(1, "allow-dns"),
-                Request::GetRule { key: "allow-dns".into() },
+                Request::GetRule {
+                    key: "allow-dns".into(),
+                },
             ),
             (
                 "/ufw.v1.Firewall/Rollback",
@@ -566,10 +580,15 @@ mod tests {
     fn an_unknown_method_or_service_is_not_found() {
         let empty = Fields::default();
         assert_eq!(
-            route("/ufw.v1.Firewall/Teleport", &empty).unwrap_err().status,
+            route("/ufw.v1.Firewall/Teleport", &empty)
+                .unwrap_err()
+                .status,
             404
         );
-        assert_eq!(route("/other.Service/Status", &empty).unwrap_err().status, 404);
+        assert_eq!(
+            route("/other.Service/Status", &empty).unwrap_err().status,
+            404
+        );
     }
 
     #[test]
@@ -611,7 +630,10 @@ mod tests {
             Authority::ReadOnly,
         );
         let t = trailers(&body);
-        assert!(t.contains(&format!("grpc-status:{}", status::PERMISSION_DENIED)), "{t}");
+        assert!(
+            t.contains(&format!("grpc-status:{}", status::PERMISSION_DENIED)),
+            "{t}"
+        );
         assert!(t.contains("administrative authority"));
     }
 
@@ -648,7 +670,10 @@ mod tests {
             "Shutdown",
             "Ping",
         ] {
-            assert!(PROTO.contains(&format!("rpc {method} ")), "{method} missing from PROTO");
+            assert!(
+                PROTO.contains(&format!("rpc {method} ")),
+                "{method} missing from PROTO"
+            );
             // Values valid for every method that takes an argument, so this
             // checks routing rather than validation.
             let fields = Fields {
@@ -666,6 +691,11 @@ mod tests {
     fn the_service_description_is_valid_json() {
         let v = ufw_shared::json::parse(&service_json()).unwrap();
         assert_eq!(v.get("service").unwrap().as_str(), Some("ufw.v1.Firewall"));
-        assert!(v.get("proto").unwrap().as_str().unwrap().contains("service Firewall"));
+        assert!(v
+            .get("proto")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("service Firewall"));
     }
 }

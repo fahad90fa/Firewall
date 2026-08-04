@@ -37,11 +37,17 @@ pub struct LinuxResolver {
 
 impl LinuxResolver {
     pub fn new(options: ResolverOptions) -> Self {
-        LinuxResolver { options, proc_root: PathBuf::from("/proc") }
+        LinuxResolver {
+            options,
+            proc_root: PathBuf::from("/proc"),
+        }
     }
 
     pub fn with_proc_root(options: ResolverOptions, proc_root: impl Into<PathBuf>) -> Self {
-        LinuxResolver { options, proc_root: proc_root.into() }
+        LinuxResolver {
+            options,
+            proc_root: proc_root.into(),
+        }
     }
 
     fn pid_dir(&self, pid: u32) -> PathBuf {
@@ -163,9 +169,7 @@ impl IdentityResolver for LinuxResolver {
         };
 
         identity.path = path.clone();
-        identity.start_time_us = self
-            .start_time_us(query.pid)
-            .unwrap_or(query.start_time_us);
+        identity.start_time_us = self.start_time_us(query.pid).unwrap_or(query.start_time_us);
         identity.user = self.uid_gid(query.pid);
 
         if deleted {
@@ -267,7 +271,11 @@ mod tests {
                 format!("{pid} (probe app) S {}", fields.join(" ")),
             )
             .unwrap();
-            fs::write(dir.join("status"), "Name:\tprobe\nUid:\t1000\t1000\t1000\t1000\nGid:\t100\t100\t100\t100\n").unwrap();
+            fs::write(
+                dir.join("status"),
+                "Name:\tprobe\nUid:\t1000\t1000\t1000\t1000\nGid:\t100\t100\t100\t100\n",
+            )
+            .unwrap();
         }
 
         fn set_label(&self, pid: u32, label: &str) {
@@ -308,7 +316,10 @@ mod tests {
         let id = resolver.resolve(&query(1234), &TrustDatabase::new());
 
         assert!(id.path.ends_with("/app"), "{}", id.path);
-        assert_eq!(id.sha256, Some(ufw_shared::hash::sha256(b"\x7fELF-payload")));
+        assert_eq!(
+            id.sha256,
+            Some(ufw_shared::hash::sha256(b"\x7fELF-payload"))
+        );
         assert_eq!(id.signature_type, SignatureType::ElfContentHash);
         assert!(id.signature_valid);
         assert_eq!(id.user.as_deref(), Some("1000:100"));
@@ -425,7 +436,10 @@ mod tests {
         let bin = write_binary(&proc.root.join("bin"), "big", &vec![0u8; 4096]);
         proc.add_process(21, &bin, 1);
 
-        let options = ResolverOptions { max_hash_bytes: 16, ..Default::default() };
+        let options = ResolverOptions {
+            max_hash_bytes: 16,
+            ..Default::default()
+        };
         let resolver = LinuxResolver::with_proc_root(options, &proc.root);
         let id = resolver.resolve(&query(21), &TrustDatabase::new());
         assert!(id.sha256.is_none());

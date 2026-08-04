@@ -302,8 +302,12 @@ mod tests {
     #[test]
     fn a_pattern_across_hosts_is_correlated() {
         let mut e = engine();
-        assert!(e.observe(&deny("host-a", "/tmp/x", "8.8.8.8", 100)).is_none());
-        assert!(e.observe(&deny("host-b", "/tmp/x", "8.8.8.8", 110)).is_none());
+        assert!(e
+            .observe(&deny("host-a", "/tmp/x", "8.8.8.8", 100))
+            .is_none());
+        assert!(e
+            .observe(&deny("host-b", "/tmp/x", "8.8.8.8", 110))
+            .is_none());
         let c = e
             .observe(&deny("host-c", "/tmp/x", "8.8.8.8", 120))
             .expect("threshold reached");

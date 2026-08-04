@@ -292,7 +292,10 @@ mod tests {
 
         let h = harness();
         let script = b"{\"op\":\"ping\"}\n{\"op\":\"status\"}\n{\"op\":\"list-rules\"}\n".to_vec();
-        let mut duplex = Duplex { input: Cursor::new(script), output: Vec::new() };
+        let mut duplex = Duplex {
+            input: Cursor::new(script),
+            output: Vec::new(),
+        };
         serve_client(&h.router, &mut duplex);
 
         let text = String::from_utf8(duplex.output).unwrap();
@@ -341,10 +344,17 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(socket.exists(), "the listener should have created the socket");
+        assert!(
+            socket.exists(),
+            "the listener should have created the socket"
+        );
 
         let mode = std::fs::metadata(&socket).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600, "the control socket must not be world-reachable");
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "the control socket must not be world-reachable"
+        );
 
         h.state.request_shutdown();
         let _ = server.join();

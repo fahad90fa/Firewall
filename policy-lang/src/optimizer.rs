@@ -695,7 +695,10 @@ mod tests {
         // and the next test covers that.
         let report = optimize(
             &mut p,
-            &OptimizerOptions { eliminate_unreachable: false, ..Default::default() },
+            &OptimizerOptions {
+                eliminate_unreachable: false,
+                ..Default::default()
+            },
         );
         assert_eq!(p.rules.len(), 2);
         assert!(report.removed_duplicates.is_empty());
@@ -746,7 +749,11 @@ mod tests {
         let before = policy_of(vec![wide.clone(), ident.clone()]);
         let mut p = policy_of(vec![wide, ident]);
         let report = optimize(&mut p, &OptimizerOptions::default());
-        assert_eq!(p.rules.len(), 1, "identity rule is unreachable behind a terminal allow");
+        assert_eq!(
+            p.rules.len(),
+            1,
+            "identity rule is unreachable behind a terminal allow"
+        );
         assert_eq!(report.removed_unreachable[0].2, 1);
 
         // Prove it with an actual identity-bearing flow, which the header-only
@@ -831,7 +838,10 @@ mod tests {
         tcp.protocol = Protocol::Tcp;
         let mut udp = rule(2, "udp-dns", 200, Action::Allow);
         udp.protocol = Protocol::Udp;
-        udp.dest_ports = PortMatch { ranges: vec![PortRange::single(53)], negate: false };
+        udp.dest_ports = PortMatch {
+            ranges: vec![PortRange::single(53)],
+            negate: false,
+        };
         let before = policy_of(vec![tcp.clone(), udp.clone()]);
         let mut p = policy_of(vec![tcp, udp]);
         optimize(&mut p, &OptimizerOptions::default());
@@ -845,10 +855,18 @@ mod tests {
     fn merging_is_off_by_default() {
         let mut a = rule(1, "a", 100, Action::Allow);
         a.protocol = Protocol::Tcp;
-        a.dest = AddressMatch { cidrs: vec![cidr("1.1.1.1/32")], zones: vec![], negate: false };
+        a.dest = AddressMatch {
+            cidrs: vec![cidr("1.1.1.1/32")],
+            zones: vec![],
+            negate: false,
+        };
         let mut b = rule(2, "b", 100, Action::Allow);
         b.protocol = Protocol::Tcp;
-        b.dest = AddressMatch { cidrs: vec![cidr("8.8.8.8/32")], zones: vec![], negate: false };
+        b.dest = AddressMatch {
+            cidrs: vec![cidr("8.8.8.8/32")],
+            zones: vec![],
+            negate: false,
+        };
         let mut p = policy_of(vec![a, b]);
         let report = optimize(&mut p, &OptimizerOptions::default());
         assert_eq!(p.rules.len(), 2);
@@ -859,16 +877,27 @@ mod tests {
     fn adjacent_rules_differing_in_one_address_set_merge_when_enabled() {
         let mut a = rule(1, "a", 100, Action::Allow);
         a.protocol = Protocol::Tcp;
-        a.dest = AddressMatch { cidrs: vec![cidr("1.1.1.1/32")], zones: vec![], negate: false };
+        a.dest = AddressMatch {
+            cidrs: vec![cidr("1.1.1.1/32")],
+            zones: vec![],
+            negate: false,
+        };
         let mut b = rule(2, "b", 100, Action::Allow);
         b.protocol = Protocol::Tcp;
-        b.dest = AddressMatch { cidrs: vec![cidr("8.8.8.8/32")], zones: vec![], negate: false };
+        b.dest = AddressMatch {
+            cidrs: vec![cidr("8.8.8.8/32")],
+            zones: vec![],
+            negate: false,
+        };
 
         let before = policy_of(vec![a.clone(), b.clone()]);
         let mut p = policy_of(vec![a, b]);
         let report = optimize(
             &mut p,
-            &OptimizerOptions { merge_adjacent: true, ..Default::default() },
+            &OptimizerOptions {
+                merge_adjacent: true,
+                ..Default::default()
+            },
         );
         assert_eq!(p.rules.len(), 1);
         assert_eq!(p.rules[0].dest.cidrs.len(), 2);
@@ -885,16 +914,33 @@ mod tests {
     fn rules_differing_in_two_fields_do_not_merge() {
         let mut a = rule(1, "a", 100, Action::Allow);
         a.protocol = Protocol::Tcp;
-        a.dest = AddressMatch { cidrs: vec![cidr("1.1.1.1/32")], zones: vec![], negate: false };
-        a.dest_ports = PortMatch { ranges: vec![PortRange::single(80)], negate: false };
+        a.dest = AddressMatch {
+            cidrs: vec![cidr("1.1.1.1/32")],
+            zones: vec![],
+            negate: false,
+        };
+        a.dest_ports = PortMatch {
+            ranges: vec![PortRange::single(80)],
+            negate: false,
+        };
         let mut b = rule(2, "b", 100, Action::Allow);
         b.protocol = Protocol::Tcp;
-        b.dest = AddressMatch { cidrs: vec![cidr("8.8.8.8/32")], zones: vec![], negate: false };
-        b.dest_ports = PortMatch { ranges: vec![PortRange::single(443)], negate: false };
+        b.dest = AddressMatch {
+            cidrs: vec![cidr("8.8.8.8/32")],
+            zones: vec![],
+            negate: false,
+        };
+        b.dest_ports = PortMatch {
+            ranges: vec![PortRange::single(443)],
+            negate: false,
+        };
         let mut p = policy_of(vec![a, b]);
         optimize(
             &mut p,
-            &OptimizerOptions { merge_adjacent: true, ..Default::default() },
+            &OptimizerOptions {
+                merge_adjacent: true,
+                ..Default::default()
+            },
         );
         assert_eq!(p.rules.len(), 2);
     }
@@ -902,13 +948,24 @@ mod tests {
     #[test]
     fn rules_with_different_actions_do_not_merge() {
         let mut a = rule(1, "a", 100, Action::Allow);
-        a.dest = AddressMatch { cidrs: vec![cidr("1.1.1.1/32")], zones: vec![], negate: false };
+        a.dest = AddressMatch {
+            cidrs: vec![cidr("1.1.1.1/32")],
+            zones: vec![],
+            negate: false,
+        };
         let mut b = rule(2, "b", 100, Action::Deny);
-        b.dest = AddressMatch { cidrs: vec![cidr("8.8.8.8/32")], zones: vec![], negate: false };
+        b.dest = AddressMatch {
+            cidrs: vec![cidr("8.8.8.8/32")],
+            zones: vec![],
+            negate: false,
+        };
         let mut p = policy_of(vec![a, b]);
         optimize(
             &mut p,
-            &OptimizerOptions { merge_adjacent: true, ..Default::default() },
+            &OptimizerOptions {
+                merge_adjacent: true,
+                ..Default::default()
+            },
         );
         assert_eq!(p.rules.len(), 2);
     }
@@ -919,7 +976,11 @@ mod tests {
     fn header_only_terminal_rules_are_ebpf_eligible() {
         let mut r = rule(1, "a", 100, Action::Deny);
         r.protocol = Protocol::Tcp;
-        r.dest = AddressMatch { cidrs: vec![cidr("8.8.8.8/32")], zones: vec![], negate: false };
+        r.dest = AddressMatch {
+            cidrs: vec![cidr("8.8.8.8/32")],
+            zones: vec![],
+            negate: false,
+        };
         let mut p = policy_of(vec![r]);
         let report = optimize(&mut p, &OptimizerOptions::default());
         assert!(p.rules[0].ebpf_eligible);

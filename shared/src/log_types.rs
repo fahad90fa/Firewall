@@ -72,13 +72,18 @@ impl FiveTuple {
     }
 
     fn decode(r: &mut Reader<'_>) -> Result<Self, ProtoError> {
-        let protocol =
-            Protocol::from_u16(r.u16()?).ok_or(ProtoError::Malformed("bad protocol"))?;
+        let protocol = Protocol::from_u16(r.u16()?).ok_or(ProtoError::Malformed("bad protocol"))?;
         let src_ip = decode_ip(r)?;
         let src_port = r.u16()?;
         let dst_ip = decode_ip(r)?;
         let dst_port = r.u16()?;
-        Ok(FiveTuple { protocol, src_ip, src_port, dst_ip, dst_port })
+        Ok(FiveTuple {
+            protocol,
+            src_ip,
+            src_port,
+            dst_ip,
+            dst_port,
+        })
     }
 }
 
@@ -334,11 +339,7 @@ impl LogEvent {
         let app = self
             .identity
             .as_ref()
-            .map(|i| {
-                i.sha256_hex
-                    .clone()
-                    .unwrap_or_else(|| i.path.clone())
-            })
+            .map(|i| i.sha256_hex.clone().unwrap_or_else(|| i.path.clone()))
             .unwrap_or_else(|| "-".into());
         format!(
             "{}|{}|{}|{}",
@@ -426,7 +427,11 @@ impl LogEvent {
         format!(
             "<{pri}>1 {ts} {host} {app} - {kind} - {json}",
             ts = format_rfc3339_micros(self.timestamp_us),
-            host = if self.host_id.is_empty() { "-" } else { &self.host_id },
+            host = if self.host_id.is_empty() {
+                "-"
+            } else {
+                &self.host_id
+            },
             app = app_name,
             kind = self.kind.as_str(),
             json = self.to_json(),
@@ -592,7 +597,13 @@ impl LogEvent {
             } else {
                 None
             };
-            Some(IdentitySummary { pid, path, sha256_hex, signer, trust })
+            Some(IdentitySummary {
+                pid,
+                path,
+                sha256_hex,
+                signer,
+                trust,
+            })
         } else {
             None
         };
@@ -637,7 +648,9 @@ fn cef_escape_header(s: &str) -> String {
 }
 
 fn cef_escape_value(s: &str) -> String {
-    s.replace('\\', r"\\").replace('=', r"\=").replace('\n', r"\n")
+    s.replace('\\', r"\\")
+        .replace('=', r"\=")
+        .replace('\n', r"\n")
 }
 
 /// Format microseconds-since-epoch as `YYYY-MM-DDTHH:MM:SS.ffffffZ`.
@@ -753,7 +766,10 @@ mod tests {
             v.get("dpi").unwrap().get("signature").unwrap().as_str(),
             Some("http-exploit-post")
         );
-        assert_eq!(v.get("ts").unwrap().as_str(), Some("2023-11-14T22:13:20.123456Z"));
+        assert_eq!(
+            v.get("ts").unwrap().as_str(),
+            Some("2023-11-14T22:13:20.123456Z")
+        );
     }
 
     #[test]

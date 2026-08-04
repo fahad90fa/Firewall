@@ -278,7 +278,11 @@ impl CompareOp {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Condition {
     /// Compare a decoded protocol field against a constant.
-    Field { field: Field, op: CompareOp, value: u64 },
+    Field {
+        field: Field,
+        op: CompareOp,
+        value: u64,
+    },
     /// Match a literal byte pattern inside a bounded window.
     ///
     /// `offset` and `depth` are mandatory in spirit even though `depth`
@@ -345,14 +349,22 @@ impl Signature {
                     w.str_field("op", op.as_str());
                     w.u64_field("value", *value);
                 }
-                Condition::Content { pattern, offset, depth, nocase } => {
+                Condition::Content {
+                    pattern,
+                    offset,
+                    depth,
+                    nocase,
+                } => {
                     w.str_field("kind", "content");
                     w.str_field("pattern", &ufw_shared::hash::hex(pattern));
                     w.u64_field("offset", *offset as u64);
                     w.u64_field("depth", *depth as u64);
                     w.bool_field("nocase", *nocase);
                 }
-                Condition::Entropy { field, min_centibits } => {
+                Condition::Entropy {
+                    field,
+                    min_centibits,
+                } => {
                     w.str_field("kind", "entropy");
                     w.str_field("field", field.as_str());
                     w.u64_field("min_centibits", *min_centibits as u64);
@@ -417,8 +429,14 @@ impl SignatureSet {
         let mut out: Vec<Pattern> = Vec::new();
         for sig in self.signatures.values() {
             for c in &sig.conditions {
-                if let Condition::Content { pattern, nocase, .. } = c {
-                    let candidate = Pattern { bytes: pattern.clone(), nocase: *nocase };
+                if let Condition::Content {
+                    pattern, nocase, ..
+                } = c
+                {
+                    let candidate = Pattern {
+                        bytes: pattern.clone(),
+                        nocase: *nocase,
+                    };
                     if !out.contains(&candidate) {
                         out.push(candidate);
                     }
@@ -485,14 +503,22 @@ impl SignatureSet {
                         w.u8(*op as u8);
                         w.u64(*value);
                     }
-                    Condition::Content { pattern, offset, depth, nocase } => {
+                    Condition::Content {
+                        pattern,
+                        offset,
+                        depth,
+                        nocase,
+                    } => {
                         w.u32(*offset);
                         w.u32(*depth);
                         w.u8(u8::from(*nocase));
                         w.u32(id_of(pattern, *nocase));
                         w.bytes(pattern);
                     }
-                    Condition::Entropy { field, min_centibits } => {
+                    Condition::Entropy {
+                        field,
+                        min_centibits,
+                    } => {
                         w.u16(*field as u16);
                         w.u32(*min_centibits);
                     }
@@ -537,7 +563,13 @@ pub fn content_holds(
     pattern_id: u32,
     data: &[u8],
 ) -> bool {
-    let Condition::Content { pattern, offset, depth, nocase } = condition else {
+    let Condition::Content {
+        pattern,
+        offset,
+        depth,
+        nocase,
+    } = condition
+    else {
         return false;
     };
     match table {
@@ -744,7 +776,11 @@ fn apply_key(
     errors: &mut Vec<SignatureError>,
 ) {
     let mut fail = |message: String| {
-        errors.push(SignatureError { file: file.to_path_buf(), line, message });
+        errors.push(SignatureError {
+            file: file.to_path_buf(),
+            line,
+            message,
+        });
     };
     match key {
         "id" => b.name = Some(unquote(value).to_string()),
@@ -767,14 +803,13 @@ fn apply_key(
     }
 }
 
-fn finish(
-    set: &mut SignatureSet,
-    b: Builder,
-    file: &Path,
-    errors: &mut Vec<SignatureError>,
-) {
+fn finish(set: &mut SignatureSet, b: Builder, file: &Path, errors: &mut Vec<SignatureError>) {
     let mut fail = |line: u32, message: String| {
-        errors.push(SignatureError { file: file.to_path_buf(), line, message });
+        errors.push(SignatureError {
+            file: file.to_path_buf(),
+            line,
+            message,
+        });
     };
     let Some(name) = b.name else {
         fail(b.line, "signature has no `id:`".into());
@@ -856,11 +891,22 @@ fn finish(
 /// shipped rules use, because a signature people have to read under time
 /// pressure should fit on one line.
 fn parse_condition(text: &str, file: &Path, line: u32) -> Result<Condition, SignatureError> {
-    let err = |message: String| SignatureError { file: file.to_path_buf(), line, message };
-    let body = text.trim().trim_start_matches('{').trim_end_matches('}').trim();
+    let err = |message: String| SignatureError {
+        file: file.to_path_buf(),
+        line,
+        message,
+    };
+    let body = text
+        .trim()
+        .trim_start_matches('{')
+        .trim_end_matches('}')
+        .trim();
 
-    let (key, rest) = split_kv(body)
-        .ok_or_else(|| err(format!("expected `field:`, `content:` or `entropy:`, got `{body}`")))?;
+    let (key, rest) = split_kv(body).ok_or_else(|| {
+        err(format!(
+            "expected `field:`, `content:` or `entropy:`, got `{body}`"
+        ))
+    })?;
 
     match key {
         "field" => {
@@ -873,7 +919,9 @@ fn parse_condition(text: &str, file: &Path, line: u32) -> Result<Condition, Sign
                 let mut op = None;
                 let mut value = None;
                 for part in parts {
-                    let Some((k, v)) = split_kv(part) else { continue };
+                    let Some((k, v)) = split_kv(part) else {
+                        continue;
+                    };
                     match k {
                         "op" => op = CompareOp::parse(unquote(v)),
                         "value" => value = parse_u64(unquote(v)),
@@ -929,7 +977,12 @@ fn parse_condition(text: &str, file: &Path, line: u32) -> Result<Condition, Sign
                     pattern.len()
                 )));
             }
-            Ok(Condition::Content { pattern, offset, depth, nocase })
+            Ok(Condition::Content {
+                pattern,
+                offset,
+                depth,
+                nocase,
+            })
         }
         "entropy" => {
             let mut parts = rest.split(',').map(str::trim);
@@ -938,7 +991,9 @@ fn parse_condition(text: &str, file: &Path, line: u32) -> Result<Condition, Sign
                 .ok_or_else(|| err(format!("`{name}` is not a decoded field")))?;
             let mut min = None;
             for part in parts {
-                let Some((k, v)) = split_kv(part) else { continue };
+                let Some((k, v)) = split_kv(part) else {
+                    continue;
+                };
                 if k == "min" {
                     min = parse_centibits(unquote(v));
                 }
@@ -953,7 +1008,10 @@ fn parse_condition(text: &str, file: &Path, line: u32) -> Result<Condition, Sign
                     min_centibits % 100
                 )));
             }
-            Ok(Condition::Entropy { field, min_centibits })
+            Ok(Condition::Entropy {
+                field,
+                min_centibits,
+            })
         }
         other => Err(err(format!(
             "unknown condition kind `{other}` (expected field, content or entropy)"
@@ -979,8 +1037,8 @@ fn parse_pattern(text: &str) -> Result<Vec<u8>, String> {
     if let Some(inner) = text.strip_prefix('|').and_then(|t| t.strip_suffix('|')) {
         let mut out = Vec::new();
         for byte in inner.split_whitespace() {
-            let v = u8::from_str_radix(byte, 16)
-                .map_err(|_| format!("`{byte}` is not a hex byte"))?;
+            let v =
+                u8::from_str_radix(byte, 16).map_err(|_| format!("`{byte}` is not a hex byte"))?;
             out.push(v);
         }
         return Ok(out);
@@ -1157,7 +1215,9 @@ signatures:
             }
         );
         match &set.by_name("http-post").unwrap().conditions[0] {
-            Condition::Content { pattern, nocase, .. } => {
+            Condition::Content {
+                pattern, nocase, ..
+            } => {
                 assert_eq!(pattern, b"POST /admin");
                 assert!(nocase);
             }
@@ -1175,7 +1235,10 @@ signatures:
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(
             set.by_name("e").unwrap().conditions[0],
-            Condition::Entropy { field: Field::DnsNameLength, min_centibits: 350 }
+            Condition::Entropy {
+                field: Field::DnsNameLength,
+                min_centibits: 350
+            }
         );
     }
 
@@ -1224,7 +1287,9 @@ signatures:
                     conditions:\n      - field: dns.max_label_len >= 40\n";
         let (_, errors) = parse(text);
         assert!(
-            errors[0].message.contains("did you mean `dns.max_label_length`"),
+            errors[0]
+                .message
+                .contains("did you mean `dns.max_label_length`"),
             "{:?}",
             errors[0]
         );
@@ -1238,7 +1303,9 @@ signatures:
                     - field: dns.label_count > 2\n";
         let (set, errors) = parse(text);
         assert_eq!(set.len(), 1);
-        assert!(errors.iter().any(|e| e.message.contains("duplicate definition")));
+        assert!(errors
+            .iter()
+            .any(|e| e.message.contains("duplicate definition")));
     }
 
     #[test]
@@ -1261,7 +1328,10 @@ signatures:
         let (set, errors) = parse(text);
         assert!(!errors.is_empty());
         assert!(set.by_name("good-one").is_some());
-        assert!(set.by_name("good-two").is_some(), "loading continued past the error");
+        assert!(
+            set.by_name("good-two").is_some(),
+            "loading continued past the error"
+        );
     }
 
     #[test]
@@ -1345,7 +1415,10 @@ signatures:
             "http-exploit-post",
             "tls-downgrade-attempt",
         ] {
-            assert!(set.by_name(name).is_some(), "`{name}` is referenced but not defined");
+            assert!(
+                set.by_name(name).is_some(),
+                "`{name}` is referenced but not defined"
+            );
         }
     }
 }

@@ -38,7 +38,11 @@ pub const DEFAULT_ENDPOINT: &str = "/dev/ufw-control";
 
 /// Open the control device.
 pub fn connect(endpoint: &str) -> io::Result<Box<dyn Transport>> {
-    let path = if endpoint.is_empty() { DEFAULT_ENDPOINT } else { endpoint };
+    let path = if endpoint.is_empty() {
+        DEFAULT_ENDPOINT
+    } else {
+        endpoint
+    };
 
     let file = OpenOptions::new()
         .read(true)
@@ -96,7 +100,8 @@ mod tests {
         let err = connect("/nonexistent/ufw-control").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
         assert!(
-            err.to_string().contains("kernel module is probably not loaded"),
+            err.to_string()
+                .contains("kernel module is probably not loaded"),
             "{err}"
         );
     }

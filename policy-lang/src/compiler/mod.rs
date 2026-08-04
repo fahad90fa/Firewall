@@ -53,7 +53,10 @@ pub struct GeneratedFile {
 
 impl GeneratedFile {
     pub fn new(path: impl Into<String>, contents: impl Into<String>) -> Self {
-        GeneratedFile { path: path.into(), contents: contents.into() }
+        GeneratedFile {
+            path: path.into(),
+            contents: contents.into(),
+        }
     }
 }
 
@@ -164,7 +167,10 @@ impl ProtocolScope {
         match self {
             ProtocolScope::Any => "any".into(),
             ProtocolScope::Only(l) => {
-                format!("only {}", l.iter().map(|p| p.as_str()).collect::<Vec<_>>().join("/"))
+                format!(
+                    "only {}",
+                    l.iter().map(|p| p.as_str()).collect::<Vec<_>>().join("/")
+                )
             }
             ProtocolScope::Excluding(l) => format!(
                 "not {}",
@@ -272,9 +278,7 @@ impl DecisionModel {
 /// overtaking a high-priority perimeter rule when both land in the same
 /// platform layer.
 pub fn evaluation_order_key(rule: &CompiledRule) -> u64 {
-    ((rule.layer.stage_index() as u64) << 48)
-        | ((rule.priority as u64) << 32)
-        | (rule.id as u64)
+    ((rule.layer.stage_index() as u64) << 48) | ((rule.priority as u64) << 32) | (rule.id as u64)
 }
 
 /// Rules in reference evaluation order.
@@ -322,8 +326,7 @@ impl Scenario {
     }
 
     pub fn context<'a>(&'a self, profile: &NetworkProfile) -> FlowContext<'a> {
-        let mut ctx =
-            FlowContext::new(profile, self.direction, self.protocol, self.src, self.dst);
+        let mut ctx = FlowContext::new(profile, self.direction, self.protocol, self.src, self.dst);
         ctx.identity = self.identity.as_ref();
         ctx.dpi = self.dpi.clone();
         ctx.interface = self.interface.as_deref();
@@ -383,7 +386,11 @@ impl EquivalenceReport {
                 d.reference.1
             ));
             for (platform, (decision, rule)) in &d.results {
-                let flag = if (*decision, *rule) == d.reference { "  " } else { "<<" };
+                let flag = if (*decision, *rule) == d.reference {
+                    "  "
+                } else {
+                    "<<"
+                };
                 out.push_str(&format!(
                     "    {:<8}: {} (rule {}) {}\n",
                     platform.as_str(),
@@ -502,7 +509,12 @@ pub fn default_scenarios(policy: &CompiledPolicy) -> Vec<Scenario> {
             }));
             // A scan that completed and found nothing is a distinct case from
             // no scan at all.
-            dpi_results.push(Some(DpiScan { l7, hits: vec![], first_hit_offset: 0, truncated: false }));
+            dpi_results.push(Some(DpiScan {
+                l7,
+                hits: vec![],
+                first_hit_offset: 0,
+                truncated: false,
+            }));
         }
         for iface in &rule.interfaces {
             push_unique(&mut interfaces, Some(iface.clone()));
@@ -737,7 +749,10 @@ mod tests {
         dns.priority = 100;
         dns.protocol = Protocol::Udp;
         dns.direction = Direction::Outbound;
-        dns.dest_ports = PortMatch { ranges: vec![PortRange::single(53)], negate: false };
+        dns.dest_ports = PortMatch {
+            ranges: vec![PortRange::single(53)],
+            negate: false,
+        };
 
         let mut web = CompiledRule::new(20, "allow-web", Layer::Packet, Action::AllowInspect);
         web.priority = 200;
@@ -942,7 +957,10 @@ mod tests {
         assert!(report.is_equivalent(), "{}", report.render());
         for artifact in compile_all(&p) {
             assert!(artifact.model.rules.is_empty());
-            assert!(!artifact.files.is_empty(), "backends must still emit a policy file");
+            assert!(
+                !artifact.files.is_empty(),
+                "backends must still emit a policy file"
+            );
         }
     }
 }

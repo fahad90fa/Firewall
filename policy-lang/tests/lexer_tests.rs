@@ -10,7 +10,11 @@ use ufw_policy_lang::lexer::{tokenize, Token, TokenKind};
 
 fn tokens_of(src: &str) -> Vec<Token> {
     let (tokens, diags) = tokenize(src);
-    assert!(!diags.has_errors(), "unexpected errors: {:?}", diags.codes());
+    assert!(
+        !diags.has_errors(),
+        "unexpected errors: {:?}",
+        diags.codes()
+    );
     tokens
 }
 
@@ -109,8 +113,14 @@ fn columns_survive_the_dash_and_multibyte_text() {
 #[test]
 fn values_that_look_like_syntax_stay_values() {
     let cases = [
-        ("path: C:\\Windows\\System32\\svchost.exe", "C:\\Windows\\System32\\svchost.exe"),
-        ("url: https://example.test:8443/a?b=c", "https://example.test:8443/a?b=c"),
+        (
+            "path: C:\\Windows\\System32\\svchost.exe",
+            "C:\\Windows\\System32\\svchost.exe",
+        ),
+        (
+            "url: https://example.test:8443/a?b=c",
+            "https://example.test:8443/a?b=c",
+        ),
         ("hash: sha256:abcdef", "sha256:abcdef"),
         ("time: 08:00", "08:00"),
         ("range: 8000-8100", "8000-8100"),

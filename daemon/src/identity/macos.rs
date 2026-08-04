@@ -87,7 +87,10 @@ pub struct MacOsResolver {
 
 impl MacOsResolver {
     pub fn new(options: ResolverOptions) -> Self {
-        MacOsResolver { options, reader: Box::new(UnavailableReader) }
+        MacOsResolver {
+            options,
+            reader: Box::new(UnavailableReader),
+        }
     }
 
     pub fn with_reader(options: ResolverOptions, reader: Box<dyn CodeSignatureReader>) -> Self {
@@ -358,7 +361,10 @@ mod tests {
 
         let resolver = MacOsResolver::with_reader(
             ResolverOptions::default(),
-            Box::new(StubReader(Some(signed("ABCDE12345", "com.contoso.browser")))),
+            Box::new(StubReader(Some(signed(
+                "ABCDE12345",
+                "com.contoso.browser",
+            )))),
         );
         let id = resolver.resolve(&query(&exe), &db);
 
@@ -405,10 +411,8 @@ mod tests {
             authority: Some("Software Signing".into()),
             ..CodeSignature::unsigned()
         };
-        let resolver = MacOsResolver::with_reader(
-            ResolverOptions::default(),
-            Box::new(StubReader(Some(sig))),
-        );
+        let resolver =
+            MacOsResolver::with_reader(ResolverOptions::default(), Box::new(StubReader(Some(sig))));
         let id = resolver.resolve(&query(&exe), &TrustDatabase::new());
         assert_eq!(id.trust, TrustLevel::System);
         assert!(id.platform_meta.contains_key("platform_binary"));

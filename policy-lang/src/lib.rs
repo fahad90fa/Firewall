@@ -546,7 +546,10 @@ rules:
         let strict = compile_str(
             "t",
             src,
-            &CompileOptions { deny_warnings: true, ..Default::default() },
+            &CompileOptions {
+                deny_warnings: true,
+                ..Default::default()
+            },
         );
         assert!(!strict.is_ok());
         assert!(strict.diagnostics.has_code(codes::WARNINGS_DENIED));
@@ -632,7 +635,10 @@ rules:
                    \x20   destination:\n      addresses: [used]\n";
         let r = compile_with_loader("t", src, &CompileOptions::default(), &MapLoader(map));
         let text = r.render();
-        assert!(!text.contains("`spare`"), "included definitions are a library:\n{text}");
+        assert!(
+            !text.contains("`spare`"),
+            "included definitions are a library:\n{text}"
+        );
         // But one the policy itself declares and never uses is still dead weight.
         assert!(text.contains("`local_spare`"), "{text}");
     }
@@ -640,8 +646,14 @@ rules:
     #[test]
     fn include_cycles_are_reported() {
         let mut map = HashMap::new();
-        map.insert("a.yaml".to_string(), "version: 1\ninclude: [b.yaml]\n".to_string());
-        map.insert("b.yaml".to_string(), "version: 1\ninclude: [a.yaml]\n".to_string());
+        map.insert(
+            "a.yaml".to_string(),
+            "version: 1\ninclude: [b.yaml]\n".to_string(),
+        );
+        map.insert(
+            "b.yaml".to_string(),
+            "version: 1\ninclude: [a.yaml]\n".to_string(),
+        );
         let r = compile_with_loader(
             "t",
             "version: 1\ninclude: [a.yaml]\n",
@@ -670,7 +682,9 @@ rules:
 
     #[test]
     fn includes_cannot_escape_the_policy_directory() {
-        let loader = FsLoader { base: PathBuf::from("/etc/unified-firewall/policies") };
+        let loader = FsLoader {
+            base: PathBuf::from("/etc/unified-firewall/policies"),
+        };
         assert!(loader.load("../../etc/shadow").is_err());
         assert!(loader.load("/etc/shadow").is_err());
         assert!(loader.load(r"..\..\windows\system32\config\sam").is_err());
@@ -700,7 +714,11 @@ rules:
 
     #[test]
     fn no_includes_loader_explains_itself() {
-        let r = compile_str("t", "version: 1\ninclude: [x.yaml]\n", &CompileOptions::default());
+        let r = compile_str(
+            "t",
+            "version: 1\ninclude: [x.yaml]\n",
+            &CompileOptions::default(),
+        );
         assert!(r.diagnostics.has_code(codes::UNRESOLVED_REFERENCE));
         assert!(r.render().contains("filesystem context"));
     }

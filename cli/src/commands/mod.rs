@@ -67,15 +67,20 @@ pub fn help_for(command: &str) -> Option<&'static str> {
         "identity" => identity::HELP,
         "logs" => logs::HELP,
         "debug" => debug::HELP,
-        "shutdown" => "ufwctl shutdown\n\nAsk the daemon to exit. \
-                       The kernel module keeps enforcing the installed policy.\n",
+        "shutdown" => {
+            "ufwctl shutdown\n\nAsk the daemon to exit. \
+                       The kernel module keeps enforcing the installed policy.\n"
+        }
         _ => return None,
     })
 }
 
 /// Whether the first argument asks for help.
 pub fn wants_help(args: &[String]) -> bool {
-    matches!(args.first().map(String::as_str), Some("-h" | "--help" | "help"))
+    matches!(
+        args.first().map(String::as_str),
+        Some("-h" | "--help" | "help")
+    )
 }
 
 /// Commands that never talk to the daemon, so `main` can run them without
@@ -101,7 +106,9 @@ pub fn dispatch_offline(command: &str, args: &[String], options: &GlobalOptions)
         ("policy", Some("validate")) => policy::validate_offline(&args[1..], options),
         ("policy", Some("compile")) => policy::compile_offline(&args[1..], options),
         ("policy", Some("explain")) => policy::explain_offline(&args[1..], options),
-        _ => Err(CliError::Usage(format!("`{command}` needs a running daemon"))),
+        _ => Err(CliError::Usage(format!(
+            "`{command}` needs a running daemon"
+        ))),
     }
 }
 

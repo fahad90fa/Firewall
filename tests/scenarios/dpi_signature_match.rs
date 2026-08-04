@@ -83,10 +83,13 @@ fn a_signature_match_terminates_a_flow_the_packet_stage_permitted() {
     // the packet stage; `block-dns-tunnel` denies it at the stream stage,
     // which only works because the earlier permit was provisional.
     let p = policy(DPI_POLICY);
-    let flow = Flow::udp("1.1.1.1", 53)
-        .with_dpi(L7Protocol::Dns, &[sig("dns-tunnel-long-label")]);
-    assert_decided_by(&p, &flow, "block-dns-tunnel",
-                      "DNS carrying an encoded payload");
+    let flow = Flow::udp("1.1.1.1", 53).with_dpi(L7Protocol::Dns, &[sig("dns-tunnel-long-label")]);
+    assert_decided_by(
+        &p,
+        &flow,
+        "block-dns-tunnel",
+        "DNS carrying an encoded payload",
+    );
 }
 
 #[test]
@@ -95,10 +98,13 @@ fn a_signature_scoped_to_another_protocol_does_not_fire() {
     // scan somehow reported the HTTP signature must not match it — the
     // protocol scope is part of the predicate, not documentation.
     let p = policy(DPI_POLICY);
-    let flow = Flow::udp("1.1.1.1", 53)
-        .with_dpi(L7Protocol::Dns, &[sig("http-exploit-post")]);
-    assert_decided_by(&p, &flow, "allow-dns",
-                      "a DNS flow carrying an HTTP signature id");
+    let flow = Flow::udp("1.1.1.1", 53).with_dpi(L7Protocol::Dns, &[sig("http-exploit-post")]);
+    assert_decided_by(
+        &p,
+        &flow,
+        "allow-dns",
+        "a DNS flow carrying an HTTP signature id",
+    );
 }
 
 #[test]
@@ -108,8 +114,17 @@ fn a_flow_with_no_scan_at_all_is_not_condemned() {
     // reason an application predicate must not match an absent identity.
     let p = policy(DPI_POLICY);
     let flow = Flow::udp("1.1.1.1", 53);
-    assert_allowed(&p, &flow, "a DNS flow before inspection has produced anything");
-    assert_decided_by(&p, &flow, "allow-dns", "the packet-stage permit still applies");
+    assert_allowed(
+        &p,
+        &flow,
+        "a DNS flow before inspection has produced anything",
+    );
+    assert_decided_by(
+        &p,
+        &flow,
+        "allow-dns",
+        "the packet-stage permit still applies",
+    );
 }
 
 #[test]
@@ -120,8 +135,12 @@ fn a_truncated_scan_that_found_nothing_is_not_a_match() {
     // "the firewall breaks large downloads".
     let p = policy(DPI_POLICY);
     let flow = Flow::tcp("93.184.216.34", 443).with_truncated_dpi(L7Protocol::Http);
-    assert_decided_by(&p, &flow, "allow-web",
-                      "a flow too long to inspect fully, with no signature hit");
+    assert_decided_by(
+        &p,
+        &flow,
+        "allow-web",
+        "a flow too long to inspect fully, with no signature hit",
+    );
 }
 
 #[test]
@@ -130,13 +149,17 @@ fn a_truncated_scan_that_did_find_something_still_matches() {
     // the budget ran out fired; the truncation says nothing about what was
     // already seen.
     let p = policy(DPI_POLICY);
-    let mut flow = Flow::tcp("93.184.216.34", 80)
-        .with_dpi(L7Protocol::Http, &[sig("http-exploit-post")]);
+    let mut flow =
+        Flow::tcp("93.184.216.34", 80).with_dpi(L7Protocol::Http, &[sig("http-exploit-post")]);
     if let Some(dpi) = flow.dpi.as_mut() {
         dpi.truncated = true;
     }
-    assert_decided_by(&p, &flow, "block-http-exploits",
-                      "an exploit found before the scan was cut short");
+    assert_decided_by(
+        &p,
+        &flow,
+        "block-http-exploits",
+        "an exploit found before the scan was cut short",
+    );
 }
 
 #[test]
@@ -167,19 +190,25 @@ signatures:
 
     // And the same id, reached from the policy side.
     let p = policy(DPI_POLICY);
-    let rule = p.rules.iter().find(|r| r.name == "block-dns-tunnel").expect("the rule");
+    let rule = p
+        .rules
+        .iter()
+        .find(|r| r.name == "block-dns-tunnel")
+        .expect("the rule");
     let from_policy = rule.dpi.as_ref().expect("a DPI clause");
     assert!(
         from_policy.signatures.contains(&from_signature_file),
         "the policy's signature ids {:?} do not include {} — the policy and the \
          signature file have stopped agreeing on what a name means",
-        from_policy.signatures, from_signature_file
+        from_policy.signatures,
+        from_signature_file
     );
 }
 
 #[test]
 fn an_alert_records_the_match_without_deciding_the_flow() {
-    let p = policy("\
+    let p = policy(
+        "\
 version: 1
 defaults:
   action: deny
@@ -203,12 +232,13 @@ rules:
       signatures: [watch]
       protocols: [http]
       on_match: alert
-");
+",
+    );
     // `alert` is not a verdict. The flow proceeds on the packet-stage permit,
     // and the alert is what reaches the log. A policy that used `alert` and
     // found its traffic blocked would be a policy nobody could tune safely.
-    let flow = Flow::tcp("93.184.216.34", 443)
-        .with_dpi(L7Protocol::Http, &[sig("http-exploit-post")]);
+    let flow =
+        Flow::tcp("93.184.216.34", 443).with_dpi(L7Protocol::Http, &[sig("http-exploit-post")]);
     assert_allowed(&p, &flow, "an alerting signature does not block");
 }
 
@@ -220,8 +250,7 @@ fn a_deny_at_the_stream_stage_beats_an_allow_inspect_at_the_packet_stage() {
     let p = policy(DPI_POLICY);
     assert_denied(
         &p,
-        &Flow::tcp("93.184.216.34", 80)
-            .with_dpi(L7Protocol::Http, &[sig("http-exploit-post")]),
+        &Flow::tcp("93.184.216.34", 80).with_dpi(L7Protocol::Http, &[sig("http-exploit-post")]),
         "an exploit inside a flow the packet stage permitted",
     );
 }
@@ -244,7 +273,9 @@ fn the_shipped_signatures_build_one_shared_automaton() {
     let (set, errors) = signatures::load_dir(&root);
     assert!(errors.is_empty(), "{errors:#?}");
 
-    let automaton = set.automaton().expect("the shipped signatures have content patterns");
+    let automaton = set
+        .automaton()
+        .expect("the shipped signatures have content patterns");
     assert!(
         automaton.patterns().len() >= 3,
         "only {} distinct patterns; the corpus is too thin to prove anything",
@@ -301,7 +332,10 @@ fn the_shared_pass_decides_content_conditions_the_way_a_direct_search_would() {
         for signature in set.signatures.values() {
             for condition in &signature.conditions {
                 let ufw_daemon::signatures::Condition::Content {
-                    pattern, offset, depth, nocase,
+                    pattern,
+                    offset,
+                    depth,
+                    nocase,
                 } = condition
                 else {
                     continue;
