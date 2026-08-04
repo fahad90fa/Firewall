@@ -4,6 +4,7 @@ members = [
     "shared",
     "policy-lang",
     "daemon",
+    "cli",
 ]
 
 [workspace.package]

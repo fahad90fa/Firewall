@@ -1,0 +1,21 @@
+[package]
+name = "ufw-cli"
+description = "ufwctl: the Unified Firewall management CLI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "ufwctl"
+path = "src/main.rs"
+
+[lib]
+name = "ufw_cli"
+path = "src/lib.rs"
+
+[dependencies]
+ufw-shared = { path = "../shared" }
+ufw-policy-lang = { path = "../policy-lang" }
