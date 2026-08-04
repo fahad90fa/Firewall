@@ -575,8 +575,24 @@ fn rule_flags(r: &CompiledRule) -> String {
     if r.dpi.is_some() {
         flags.push("UFW_FLAG_NEEDS_DPI");
     }
-    if r.source.negate || r.dest.negate {
-        flags.push("UFW_FLAG_NEGATED");
+    // Distinct flags per side. Collapsing them into one loses which side was
+    // negated, and the driver has no other way to recover it: a rule reading
+    // "source is not internal" and one reading "destination is not internal"
+    // would arrive identical.
+    if r.source.negate {
+        flags.push("UFW_FLAG_NEGATE_SRC");
+    }
+    if r.dest.negate {
+        flags.push("UFW_FLAG_NEGATE_DST");
+    }
+    if r.app.as_ref().map(|a| a.negate).unwrap_or(false) {
+        flags.push("UFW_FLAG_NEGATE_APP");
+    }
+    if r.schedule.is_some() {
+        flags.push("UFW_FLAG_HAS_SCHEDULE");
+    }
+    if r.app.as_ref().map(|a| a.require_valid_signature).unwrap_or(false) {
+        flags.push("UFW_FLAG_REQUIRE_VALID_SIG");
     }
     if flags.is_empty() {
         "0".into()

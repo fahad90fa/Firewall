@@ -1,0 +1,54 @@
+# Unified Firewall — legacy WDK `sources` file.
+#
+# The supported build is the Makefile (which drives MSBuild against the modern
+# WDK); this file exists for the build-lab flows that still consume `sources`,
+# and for anyone reading the tree who expects to find one.
+#
+# If you are choosing: use `make`. The `sources` path cannot express driver
+# signing or the Static Driver Verifier run, both of which are required before
+# this driver goes anywhere near a production machine.
+
+TARGETNAME=ufw
+TARGETTYPE=DRIVER
+
+# KMDF is not used. This driver's device is a single control device with a
+# handful of IOCTLs and one pended read; WDF's object model and power/PnP
+# machinery would be pure overhead over a WDM device object, and WFP callout
+# registration is outside WDF anyway.
+DRIVERTYPE=WDM
+
+INCLUDES=inc;$(DDK_INC_PATH);$(SDK_INC_PATH)
+
+TARGETLIBS=\
+	$(DDK_LIB_PATH)\fwpkclnt.lib \
+	$(DDK_LIB_PATH)\ndis.lib \
+	$(DDK_LIB_PATH)\uuid.lib \
+	$(DDK_LIB_PATH)\wdmsec.lib
+
+SOURCES=\
+	src\driver.c \
+	src\wfp_engine.c \
+	src\classify.c \
+	src\policy_cache.c \
+	src\stream_reassembly.c \
+	src\dpi_engine.c \
+	src\ipc_handler.c \
+	src\logging.c \
+	src\callouts\ale_connect.c \
+	src\callouts\ale_recv_accept.c \
+	src\callouts\inbound_ipv4.c \
+	src\callouts\outbound_ipv4.c \
+	src\callouts\inbound_ipv6.c \
+	src\callouts\outbound_ipv6.c \
+	src\callouts\stream_v4.c
+
+# /W4 /WX. A driver that compiles with warnings is a driver whose warnings
+# nobody reads, and in kernel mode the ones that matter (uninitialised locals,
+# truncating conversions) are exactly the ones that produce a bugcheck weeks
+# later on a machine nobody can debug.
+MSC_WARNING_LEVEL=/W4 /WX
+
+# Kernel code must not use the FPU without explicit save/restore, and this
+# driver never needs to: the DPI engine's entropy calculation is integer
+# arithmetic precisely so that it matches the other two platforms bit for bit.
+USE_NATIVE_EH=1

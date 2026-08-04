@@ -314,3 +314,110 @@ int main(void)
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn the_generated_windows_header_compiles_against_the_driver_abi() {
+    // `kernel/windows/inc/ipc_ioctl.h` has a UFW_ABI_CHECK mode that supplies
+    // the handful of scalar types the declarations use, so this runs without a
+    // Windows SDK. Without it nothing checks that the Rust emitter and the
+    // driver's structures agree until someone builds the driver on a machine
+    // with the WDK — which is exactly when it is most expensive to find out.
+    let Some(cc) = c_compiler() else {
+        eprintln!("no C compiler found; skipping the Windows ABI check");
+        return;
+    };
+
+    let inc = repo_root().join("kernel/windows/inc");
+    if !inc.join("ipc_ioctl.h").exists() {
+        eprintln!("kernel/windows/inc not present; skipping");
+        return;
+    }
+
+    let result = compile_str("abi-check", POLICY, &CompileOptions::default());
+    assert!(result.is_ok(), "{}", result.render());
+
+    let artifact = result.artifact(Platform::Windows).expect("windows artifact");
+    let dir = scratch("windows");
+    for file in &artifact.files {
+        let name = Path::new(&file.path).file_name().unwrap();
+        std::fs::write(dir.join(name), &file.contents).unwrap();
+    }
+
+    let main = dir.join("win_abi_check.c");
+    std::fs::write(
+        &main,
+        r#"
+#include <stdint.h>
+#include "ipc_ioctl.h"
+#include "ufw_policy_generated.h"
+
+_Static_assert(sizeof(g_ufwGeneratedFilters) / sizeof(g_ufwGeneratedFilters[0]) ==
+                       UFW_GENERATED_FILTER_COUNT,
+               "generated filter count disagrees with the generated table");
+_Static_assert(UFW_GENERATED_ABI_REVISION == UFW_ABI_REVISION,
+               "the compiler generated for a different ABI revision than the "
+               "driver header declares");
+
+int main(void)
+{
+        unsigned i;
+
+        for (i = 0; i < UFW_GENERATED_FILTER_COUNT; i++) {
+                const UFW_FILTER_SPEC *f = &g_ufwGeneratedFilters[i];
+
+                if (f->stage >= UFW_STAGE_COUNT)
+                        return 1;
+                if (f->name == 0 || f->name[0] == '\0')
+                        return 2;
+                /* WFP sorts descending, the reference ascending; the emitted
+                 * weight is UINT64_MAX minus the evaluation key, so a weight
+                 * of zero means the key overflowed. */
+                if (f->weight == 0)
+                        return 3;
+                /* A filter at a flow stage must be scoped to the protocols ALE
+                 * can see, or it would be installed at a layer that never
+                 * fires for it. */
+                if (f->stage >= UFW_STAGE_IDENTITY &&
+                    f->protocolScope == UFW_SCOPE_CONNECTIONLESS)
+                        return 4;
+        }
+        return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(cc)
+        .arg("-std=c11")
+        .arg("-Wall")
+        .arg("-Werror")
+        .arg("-DUFW_ABI_CHECK")
+        .arg("-I")
+        .arg(&inc)
+        .arg("-I")
+        .arg(&dir)
+        .arg("-o")
+        .arg(dir.join("win_abi_check"))
+        .arg(&main)
+        .output()
+        .expect("running the C compiler");
+
+    assert!(
+        output.status.success(),
+        "the generated Windows header does not compile against \
+         kernel/windows/inc/ipc_ioctl.h:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let run = Command::new(dir.join("win_abi_check"))
+        .output()
+        .expect("running the Windows ABI check");
+    assert!(
+        run.status.success(),
+        "the generated filter table failed its checks (exit {:?}); \
+         see the C source in this test for what each code means",
+        run.status.code()
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
