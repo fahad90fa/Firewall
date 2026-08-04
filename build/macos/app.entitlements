@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Entitlements for the containing app.
+
+  The app's only privileged job is to ask the system to activate the extension.
+  It does not filter anything, so it gets nothing else.
+-->
+<plist version="1.0">
+<dict>
+    <!-- Permission to request activation of a system extension. Without this,
+         OSSystemExtensionManager fails with an error that does not name the
+         missing entitlement. -->
+    <key>com.apple.developer.system-extension.install</key>
+    <true/>
+
+    <!-- The app group. Both the app and the extension must carry the same one
+         or the XPC connection between the daemon and the extension is refused
+         with an error that looks like the service does not exist. -->
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.com.unifiedfirewall</string>
+    </array>
+</dict>
+</plist>

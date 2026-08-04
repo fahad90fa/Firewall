@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Entitlements for the Network Extension.
+
+  This is the bundle that actually filters, and these two entries are what let
+  it. Both require an Apple-granted capability on the developer account; a
+  build without them signs cleanly and fails at activation.
+-->
+<plist version="1.0">
+<dict>
+    <!-- The capability itself. `content-filter-provider` is the socket and
+         packet filtering role; `packet-tunnel-provider` and the others are
+         different products and are deliberately not requested. -->
+    <key>com.apple.developer.networking.networkextension</key>
+    <array>
+        <string>content-filter-provider</string>
+    </array>
+
+    <!-- Runs as a system extension rather than an app extension: it must
+         survive the user logging out, and it must see traffic from every user
+         on the machine. -->
+    <key>com.apple.developer.system-extension.install</key>
+    <true/>
+
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.com.unifiedfirewall</string>
+    </array>
+
+    <!-- The extension does not open files the user chose, does not need the
+         camera, and does not need outbound network access of its own. Every
+         entitlement not listed here is one an exploit in the filter cannot
+         reach for. -->
+</dict>
+</plist>

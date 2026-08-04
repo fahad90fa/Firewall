@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Unified Firewall — Windows installer.
+
+  Installs the driver, the daemon service and the CLI. Deliberately does *not*
+  install a policy: see the note on the Policies component below.
+
+  Build with:
+      candle installer.wxs -ext WixUtilExtension
+      light  installer.wixobj -ext WixUtilExtension -o unified-firewall.msi
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+
+  <Product Id="*"
+           Name="Unified Firewall"
+           Language="1033"
+           Version="0.1.0.0"
+           Manufacturer="Unified Firewall Project"
+           UpgradeCode="7E4C1A92-3D8B-4F16-9C2A-5B7E0D4F8A31">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Description="Unified cross-platform kernel-level firewall" />
+
+    <MajorUpgrade
+      DowngradeErrorMessage="A newer version of Unified Firewall is already installed."
+      Schedule="afterInstallInitialize" />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- A driver cannot be installed on a machine that cannot load it. Failing
+         here with a clear message is better than installing successfully and
+         leaving an operator to discover the driver never started. -->
+    <Condition Message="Unified Firewall requires Windows 10 version 1607 or later.">
+      <![CDATA[Installed OR (VersionNT >= 603)]]>
+    </Condition>
+    <Condition Message="Unified Firewall requires a 64-bit version of Windows.">
+      <![CDATA[Installed OR VersionNT64]]>
+    </Condition>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="Unified Firewall">
+          <Directory Id="SIGRULESFOLDER" Name="sig-rules" />
+          <Directory Id="EXAMPLESFOLDER" Name="examples" />
+        </Directory>
+      </Directory>
+      <Directory Id="CommonAppDataFolder">
+        <Directory Id="DATAFOLDER" Name="UnifiedFirewall">
+          <Directory Id="POLICYFOLDER" Name="policies" />
+          <Directory Id="LOGFOLDER" Name="logs" />
+        </Directory>
+      </Directory>
+      <Directory Id="System64Folder">
+        <Directory Id="DRIVERSFOLDER" Name="drivers" />
+      </Directory>
+    </Directory>
+
+    <!-- The driver. Installed as a boot-start service so it is filtering
+         before anything else on the machine has a chance to talk. -->
+    <DirectoryRef Id="DRIVERSFOLDER">
+      <Component Id="DriverComponent" Guid="C1A47E3D-8B25-4E71-A0F6-3D9C2B5E7A14">
+        <File Id="UfwSys" Source="ufw.sys" KeyPath="yes" />
+        <util:EventSource Log="System" Name="ufw" EventMessageFile="[#UfwSys]" />
+        <ServiceInstall Id="DriverService"
+                        Type="kernelDriver"
+                        Name="ufw"
+                        DisplayName="Unified Firewall Driver"
+                        Description="Kernel-level packet and flow filtering"
+                        Start="boot"
+                        ErrorControl="normal"
+                        Vital="yes" />
+        <ServiceControl Id="DriverControl"
+                        Name="ufw"
+                        Stop="both"
+                        Remove="uninstall"
+                        Wait="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="INSTALLFOLDER">
+      <!-- The daemon. Depends on the driver: starting the daemon first would
+           mean it comes up, fails its handshake, and (with the default
+           require_kernel_module) exits — a confusing first-boot experience
+           that the dependency simply prevents. -->
+      <Component Id="DaemonComponent" Guid="D2B58F4E-9C36-4F82-B1A7-4E0D3C6F8B25">
+        <File Id="UfwdExe" Source="ufwd.exe" KeyPath="yes" />
+        <ServiceInstall Id="DaemonService"
+                        Type="ownProcess"
+                        Name="ufwd"
+                        DisplayName="Unified Firewall Daemon"
+                        Description="Compiles policy and manages the Unified Firewall driver"
+                        Start="auto"
+                        ErrorControl="normal"
+                        Account="LocalSystem"
+                        Arguments="--config &quot;[DATAFOLDER]ufwd.toml&quot;"
+                        Vital="yes">
+          <util:ServiceConfig FirstFailureActionType="restart"
+                              SecondFailureActionType="restart"
+                              ThirdFailureActionType="none"
+                              RestartServiceDelayInSeconds="10" />
+          <ServiceDependency Id="ufw" />
+        </ServiceInstall>
+        <!-- Stopped through the control socket, not by killing the process:
+             the daemon has no signal handler, and `ufwctl shutdown` is the
+             documented path. -->
+        <ServiceControl Id="DaemonControl"
+                        Name="ufwd"
+                        Stop="both"
+                        Remove="uninstall"
+                        Wait="yes" />
+      </Component>
+
+      <Component Id="CliComponent" Guid="E3C69A5F-0D47-4093-C2B8-5F1E4D7A9C36">
+        <File Id="UfwctlExe" Source="ufwctl.exe" KeyPath="yes" />
+        <Environment Id="PathEntry"
+                     Name="PATH"
+                     Value="[INSTALLFOLDER]"
+                     Permanent="no"
+                     Part="last"
+                     Action="set"
+                     System="yes" />
+      </Component>
+
+      <Component Id="ConfigComponent" Guid="F4D7AB60-1E58-41A4-D3C9-601F5E8B0D47">
+        <!-- NeverOverwrite: an upgrade must not replace configuration an
+             operator edited. -->
+        <File Id="UfwdToml" Source="ufwd.toml"
+              KeyPath="yes" NeverOverwrite="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!--
+      Example policies, under `examples\`, not installed as the active policy.
+
+      A firewall installer that activates a policy of its own choosing either
+      picks a permissive one — security theatre — or a restrictive one, which
+      takes the machine off the network in the middle of an unattended install.
+      The daemon refuses to start until a policy is named, and the post-install
+      message says so.
+    -->
+    <DirectoryRef Id="EXAMPLESFOLDER">
+      <Component Id="ExamplePolicies" Guid="A5E8BC71-2F69-42B5-E4DA-712A6F9C1E58">
+        <File Id="DefaultDeny" Source="policies\base\default_deny.yaml" KeyPath="yes" />
+        <File Id="DefaultAllow" Source="policies\base\default_allow.yaml" />
+        <File Id="ZeroTrust" Source="policies\hardening\zero_trust.yaml" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="SIGRULESFOLDER">
+      <Component Id="SignatureRules" Guid="B6F9CD82-306A-4306-F5EB-823B7A0D2F69">
+        <File Id="DnsSigs" Source="sig-rules\protocols\dns.yaml" KeyPath="yes" />
+        <File Id="TlsSigs" Source="sig-rules\protocols\tls.yaml" />
+        <File Id="HttpSigs" Source="sig-rules\protocols\http.yaml" />
+        <File Id="SshSigs" Source="sig-rules\protocols\ssh.yaml" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="Complete" Title="Unified Firewall" Level="1" Display="expand">
+      <ComponentRef Id="DriverComponent" />
+      <ComponentRef Id="DaemonComponent" />
+      <ComponentRef Id="CliComponent" />
+      <ComponentRef Id="ConfigComponent" />
+      <ComponentRef Id="ExamplePolicies" />
+      <ComponentRef Id="SignatureRules" />
+    </Feature>
+
+    <UIRef Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
+
+    <Property Id="ARPHELPLINK" Value="https://github.com/fahad90fa/Firewall" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+  </Product>
+</Wix>
