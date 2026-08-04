@@ -179,6 +179,48 @@ never a behavioural one, which is the right way round: a table that silently
 stopped covering some patterns would report a clean scan of a stream nothing
 had looked at.
 
+### Encrypted traffic
+
+Most flows are TLS, and this project does not intercept TLS. A DPI engine that
+can only speak about plaintext can therefore speak about almost nothing — which
+is the honest description of most host firewalls' payload inspection.
+
+What *is* readable is the ClientHello: which ciphers, which extensions, which
+ALPN, in which order. That is a fingerprint of the TLS implementation, and the
+implementation is what separates a browser from a beacon on the same port to
+the same host. The decoders extract:
+
+| Field | |
+| --- | --- |
+| `tls.cipher_hash` | offered cipher suites, in order, GREASE removed |
+| `tls.extension_hash` | offered extension types, in order, GREASE removed |
+| `tls.alpn_hash` | the ALPN protocol list |
+| `tls.ja4` | a packed summary: version, SNI presence, ECH, counts |
+| `tls.grease_count` | how much GREASE; zero means not a mainstream browser |
+| `tls.supported_version` | the *real* version for TLS 1.3 |
+| `tls.ech` | whether the server name was hidden from us |
+
+Three of those need saying out loud.
+
+**The hash is FNV-1a, not MD5 or SHA-256.** JA3 specifies MD5 and JA4
+truncated SHA-256. Neither belongs on the packet path: this runs in softirq
+context on every ClientHello, and a cryptographic digest there is cost bought
+for no security. A fingerprint is an identifier, not a commitment — nobody
+relies on it being hard to collide, because an adversary who wants a different
+fingerprint simply sends a different ClientHello. The consequence is that these
+values are **not** byte-comparable with published JA3/JA4 tables. The log event
+carries the components so a collector can compute the canonical form.
+
+**GREASE is skipped, and counted.** RFC 8701 padding is deliberately random;
+folding it in would give one client a different fingerprint every connection,
+which is what GREASE is for and what a fingerprint must not have. Its *absence*
+is the signal: every modern browser sends it.
+
+**`tls.version` lies on TLS 1.3.** Every 1.3 client pins the legacy field at
+1.2 for middlebox compatibility and puts the truth in `supported_versions`. A
+signature testing `tls.version` alone reads every 1.3 flow as 1.2, so
+`tls.supported_version` exists and the shipped rules use it.
+
 ### Fields, not offsets
 
 A `field:` condition names a value the decoder already extracted —

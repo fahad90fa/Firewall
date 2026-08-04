@@ -93,6 +93,15 @@ static __inline unsigned char BitScanReverse(ULONG *index, ULONG v)
 #define UFW_FIELD_TLS_CIPHER_COUNT  42
 #define UFW_FIELD_TLS_EXT_COUNT     43
 #define UFW_FIELD_TLS_HANDSHAKE     44
+/* Encrypted-traffic classification. See the Linux header for why these exist
+ * and why the hash is FNV-1a rather than the digest JA3 and JA4 specify. */
+#define UFW_FIELD_TLS_CIPHER_HASH   45
+#define UFW_FIELD_TLS_EXT_HASH      46
+#define UFW_FIELD_TLS_ALPN_HASH     47
+#define UFW_FIELD_TLS_JA4           48
+#define UFW_FIELD_TLS_GREASE_COUNT  49
+#define UFW_FIELD_TLS_SUPPORTED_VER 50
+#define UFW_FIELD_TLS_ECH           51
 #define UFW_FIELD_SSH_PROTO_VERSION 60
 #define UFW_FIELD_SSH_BANNER_LEN    61
 #define UFW_FIELD_PAYLOAD_LEN       100
@@ -107,6 +116,27 @@ static __inline unsigned char BitScanReverse(ULONG *index, ULONG v)
 #define UFW_L7_SMTP    5
 #define UFW_L7_QUIC    6
 #endif
+
+/* --- TLS fingerprinting -------------------------------------------------- */
+
+/* FNV-1a, 32-bit. Identical to the Linux header's, including the reasoning:
+ * a cryptographic digest on the packet path is cost bought for no security,
+ * because a fingerprint is an identifier and not a commitment. */
+static __inline UINT32 UfwFnv1a(UINT32 h, UINT8 b)
+{
+	h ^= b;
+	return h * 16777619u;
+}
+
+#define UFW_FNV_OFFSET 2166136261u
+
+/* GREASE (RFC 8701) is deliberate randomness; folding it into a fingerprint
+ * would give one client a different value every connection. Skipped, and
+ * counted, because its absence is itself a signal. */
+static __inline int UfwTlsIsGrease(UINT32 v)
+{
+	return (v & 0x0F0F) == 0x0A0A && ((v >> 8) & 0xFF) == (v & 0xFF);
+}
 
 typedef struct _UFW_DECODED {
 	UINT32 values[128];
@@ -231,6 +261,10 @@ static __inline VOID UfwDecodeTls(_Inout_ UFW_DECODED *d,
 			 _In_reads_bytes_(len) const UINT8 *data, _In_ UINT32 len)
 {
 	UINT32 pos, sessionLen, cipherLen, compLen, extTotal, extEnd, extensions = 0;
+	UINT32 grease = 0, cipherCount = 0;
+	UINT32 cipherHash = UFW_FNV_OFFSET;
+	UINT32 extHash = UFW_FNV_OFFSET;
+	UINT32 alpnHash = UFW_FNV_OFFSET;
 
 	if (len < 6)
 		return;
@@ -255,7 +289,23 @@ static __inline VOID UfwDecodeTls(_Inout_ UFW_DECODED *d,
 		return;
 
 	cipherLen = ((UINT32)data[pos] << 8) | data[pos + 1];
-	UfwDecodedSet(d, UFW_FIELD_TLS_CIPHER_COUNT, cipherLen / 2);
+	{
+		UINT32 c = pos + 2, cend = pos + 2 + cipherLen;
+
+		if (cend > len)
+			cend = len;
+		while (c + 1 < cend) {
+			UINT32 suite = ((UINT32)data[c] << 8) | data[c + 1];
+
+			if (!UfwTlsIsGrease(suite)) {
+				cipherCount++;
+				cipherHash = UfwFnv1a(cipherHash, data[c]);
+				cipherHash = UfwFnv1a(cipherHash, data[c + 1]);
+			}
+			c += 2;
+		}
+	}
+	UfwDecodedSet(d, UFW_FIELD_TLS_CIPHER_COUNT, cipherCount);
 	pos += 2 + cipherLen;
 	if (pos >= len)
 		return;
@@ -272,21 +322,90 @@ static __inline VOID UfwDecodeTls(_Inout_ UFW_DECODED *d,
 		extEnd = len;
 
 	UfwDecodedSet(d, UFW_FIELD_TLS_SNI_LEN, 0);
+	UfwDecodedSet(d, UFW_FIELD_TLS_ECH, 0);
 
 	while (pos + 4 <= extEnd) {
 		UINT32 extType = ((UINT32)data[pos] << 8) | data[pos + 1];
 		UINT32 extLen = ((UINT32)data[pos + 2] << 8) | data[pos + 3];
 
-		extensions++;
+		if (UfwTlsIsGrease(extType)) {
+			grease++;
+		} else {
+			extensions++;
+			extHash = UfwFnv1a(extHash, (UINT8)(extType >> 8));
+			extHash = UfwFnv1a(extHash, (UINT8)extType);
+		}
 		pos += 4;
 		if (pos + extLen > extEnd)
 			break;
 		if (extType == 0 && extLen >= 5)
 			UfwDecodedSet(d, UFW_FIELD_TLS_SNI_LEN,
 				      ((UINT32)data[pos + 3] << 8) | data[pos + 4]);
+
+		if (extType == 16 && extLen >= 3) {
+			UINT32 a = pos + 2, alpnEnd = pos + extLen;
+
+			if (alpnEnd > extEnd)
+				alpnEnd = extEnd;
+			while (a < alpnEnd) {
+				UINT32 n = data[a], k;
+
+				a++;
+				if (a + n > alpnEnd)
+					break;
+				for (k = 0; k < n; k++)
+					alpnHash = UfwFnv1a(alpnHash, data[a + k]);
+				a += n;
+			}
+		}
+
+		/* supported_versions (43) carries the real version for TLS
+		 * 1.3, which pins the legacy field at 1.2. */
+		if (extType == 43 && extLen >= 3) {
+			UINT32 v = pos + 1, vend = pos + extLen, best = 0;
+
+			if (vend > extEnd)
+				vend = extEnd;
+			while (v + 1 < vend) {
+				UINT32 ver = ((UINT32)data[v] << 8) | data[v + 1];
+
+				if (!UfwTlsIsGrease(ver) && ver > best)
+					best = ver;
+				v += 2;
+			}
+			if (best)
+				UfwDecodedSet(d, UFW_FIELD_TLS_SUPPORTED_VER, best);
+		}
+
+		/* encrypted_client_hello. The SNI is inside it and unreadable
+		 * here; recording that it was used beats reporting an empty
+		 * server name, which would read as absence rather than as
+		 * concealment. */
+		if (extType == 0xFE0D)
+			UfwDecodedSet(d, UFW_FIELD_TLS_ECH, 1);
+
 		pos += extLen;
 	}
 	UfwDecodedSet(d, UFW_FIELD_TLS_EXT_COUNT, extensions);
+	UfwDecodedSet(d, UFW_FIELD_TLS_GREASE_COUNT, grease);
+	UfwDecodedSet(d, UFW_FIELD_TLS_CIPHER_HASH, cipherHash);
+	UfwDecodedSet(d, UFW_FIELD_TLS_EXT_HASH, extHash);
+	UfwDecodedSet(d, UFW_FIELD_TLS_ALPN_HASH, alpnHash);
+
+	{
+		UINT32 version = d->present[UFW_FIELD_TLS_SUPPORTED_VER]
+			? d->values[UFW_FIELD_TLS_SUPPORTED_VER]
+			: d->values[UFW_FIELD_TLS_VERSION];
+		UINT32 ja4 = 0;
+
+		ja4 |= (version & 0xFF) << 24;
+		ja4 |= (d->values[UFW_FIELD_TLS_SNI_LEN] ? 1u : 0u) << 23;
+		ja4 |= (d->values[UFW_FIELD_TLS_ECH] ? 1u : 0u) << 22;
+		ja4 |= (cipherCount > 99 ? 99 : cipherCount) << 15;
+		ja4 |= (extensions > 99 ? 99 : extensions) << 8;
+		ja4 |= (alpnHash & 0xFF);
+		UfwDecodedSet(d, UFW_FIELD_TLS_JA4, ja4);
+	}
 }
 
 static __inline VOID UfwDecodeSsh(_Inout_ UFW_DECODED *d,

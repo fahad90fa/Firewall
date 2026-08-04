@@ -1,0 +1,72 @@
+version: 1
+metadata:
+  name: tls-fingerprint
+  description: "How the client asked, not what it sent: cipher, extension and ALPN fingerprints"
+  revision: 1
+  source: unified-firewall
+
+signatures:
+  # A client that sends no GREASE is not Chrome, Firefox, Safari or Edge.
+  # Every modern browser sends it; most malware TLS stacks and most scripting
+  # runtimes do not. On its own this is weak — curl and Go send none either —
+  # so it is scoped tightly and rated for alerting rather than blocking.
+  - id: tls-no-grease-client
+    description: "TLS client sent no GREASE values, so it is not a mainstream browser"
+    protocol: tls
+    severity: low
+    conditions:
+      - field: tls.handshake_type == 1
+      - field: tls.grease_count == 0
+      - field: tls.cipher_count >= 5
+    references: [RFC8701, T1071.001]
+
+  # A ClientHello offering very few ciphers is a minimal TLS stack. Legitimate
+  # ones exist — embedded devices, some agents — which is why this pairs with
+  # a policy that names *which* applications may speak TLS at all.
+  - id: tls-minimal-cipher-set
+    description: "TLS client offered a very small cipher list, typical of a hand-rolled stack"
+    protocol: tls
+    severity: medium
+    conditions:
+      - field: tls.handshake_type == 1
+      - field: tls.cipher_count <= 4
+      - field: tls.extension_count <= 6
+    references: [T1573.002]
+
+  # No SNI on an outbound connection to a public host means the client knows
+  # the address it wants and does not need name resolution at the TLS layer.
+  # That is either a direct-to-IP connection or a deliberate omission, and both
+  # are unusual for user-driven traffic.
+  - id: tls-no-sni
+    description: "TLS ClientHello without a server name"
+    protocol: tls
+    severity: medium
+    conditions:
+      - field: tls.handshake_type == 1
+      - field: tls.sni_length == 0
+      - field: tls.ech == 0
+    references: [T1071.001]
+
+  # Encrypted ClientHello hides the server name from this engine. Not an
+  # attack — it is a privacy feature and will become normal — but a policy
+  # that relied on SNI needs to know its input is gone rather than empty.
+  - id: tls-encrypted-client-hello
+    description: "TLS ClientHello used ECH, so the server name is not visible to policy"
+    protocol: tls
+    severity: info
+    conditions:
+      - field: tls.handshake_type == 1
+      - field: tls.ech == 1
+    references: [draft-ietf-tls-esni]
+
+  # TLS 1.0 and 1.1 are deprecated (RFC 8996). The legacy version field is
+  # pinned at 1.2 by every 1.3 client, so this reads supported_versions when
+  # it is present — testing tls.version alone would misread every 1.3 flow.
+  - id: tls-deprecated-version
+    description: "Negotiated TLS below 1.2"
+    protocol: tls
+    severity: high
+    conditions:
+      - field: tls.handshake_type == 1
+      - field: tls.supported_version <= 770
+    references: [RFC8996]

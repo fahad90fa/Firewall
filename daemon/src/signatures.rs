@@ -119,6 +119,17 @@ pub enum Field {
     TlsCipherCount = 42,
     TlsExtensionCount = 43,
     TlsHandshakeType = 44,
+    // Encrypted-traffic classification. Everything is TLS now, and a DPI
+    // engine that can say nothing about a TLS flow can say nothing about most
+    // flows. These describe *how the client asked* rather than what it sent,
+    // which is available without the interception this project does not do.
+    TlsCipherHash = 45,
+    TlsExtensionHash = 46,
+    TlsAlpnHash = 47,
+    TlsJa4 = 48,
+    TlsGreaseCount = 49,
+    TlsSupportedVersion = 50,
+    TlsEncryptedClientHello = 51,
     // SSH
     SshProtocolVersion = 60,
     SshBannerLength = 61,
@@ -145,6 +156,13 @@ impl Field {
             "tls.cipher_count" => Field::TlsCipherCount,
             "tls.extension_count" => Field::TlsExtensionCount,
             "tls.handshake_type" => Field::TlsHandshakeType,
+            "tls.cipher_hash" => Field::TlsCipherHash,
+            "tls.extension_hash" => Field::TlsExtensionHash,
+            "tls.alpn_hash" => Field::TlsAlpnHash,
+            "tls.ja4" => Field::TlsJa4,
+            "tls.grease_count" => Field::TlsGreaseCount,
+            "tls.supported_version" => Field::TlsSupportedVersion,
+            "tls.ech" => Field::TlsEncryptedClientHello,
             "ssh.protocol_version" => Field::SshProtocolVersion,
             "ssh.banner_length" => Field::SshBannerLength,
             "payload.length" => Field::PayloadLength,
@@ -170,6 +188,13 @@ impl Field {
             Field::TlsCipherCount => "tls.cipher_count",
             Field::TlsExtensionCount => "tls.extension_count",
             Field::TlsHandshakeType => "tls.handshake_type",
+            Field::TlsCipherHash => "tls.cipher_hash",
+            Field::TlsExtensionHash => "tls.extension_hash",
+            Field::TlsAlpnHash => "tls.alpn_hash",
+            Field::TlsJa4 => "tls.ja4",
+            Field::TlsGreaseCount => "tls.grease_count",
+            Field::TlsSupportedVersion => "tls.supported_version",
+            Field::TlsEncryptedClientHello => "tls.ech",
             Field::SshProtocolVersion => "ssh.protocol_version",
             Field::SshBannerLength => "ssh.banner_length",
             Field::PayloadLength => "payload.length",
@@ -178,7 +203,7 @@ impl Field {
     }
 
     /// Every field name, for "did you mean?" suggestions.
-    pub const ALL: [&'static str; 19] = [
+    pub const ALL: [&'static str; 26] = [
         "dns.max_label_length",
         "dns.name_length",
         "dns.label_count",
@@ -194,6 +219,13 @@ impl Field {
         "tls.cipher_count",
         "tls.extension_count",
         "tls.handshake_type",
+        "tls.cipher_hash",
+        "tls.extension_hash",
+        "tls.alpn_hash",
+        "tls.ja4",
+        "tls.grease_count",
+        "tls.supported_version",
+        "tls.ech",
         "ssh.protocol_version",
         "ssh.banner_length",
         "payload.length",
@@ -219,7 +251,14 @@ impl Field {
             | Field::TlsSniLength
             | Field::TlsCipherCount
             | Field::TlsExtensionCount
-            | Field::TlsHandshakeType => L7Protocol::Tls,
+            | Field::TlsHandshakeType
+            | Field::TlsCipherHash
+            | Field::TlsExtensionHash
+            | Field::TlsAlpnHash
+            | Field::TlsJa4
+            | Field::TlsGreaseCount
+            | Field::TlsSupportedVersion
+            | Field::TlsEncryptedClientHello => L7Protocol::Tls,
             Field::SshProtocolVersion | Field::SshBannerLength => L7Protocol::Ssh,
             // Generic fields belong to every protocol.
             Field::PayloadLength | Field::PayloadPrintableRatio => return None,

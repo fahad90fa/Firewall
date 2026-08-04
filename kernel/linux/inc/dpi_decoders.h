@@ -84,6 +84,19 @@ static inline int ufw_hosted_fls(__u32 v)
 #define UFW_FIELD_TLS_CIPHER_COUNT  42
 #define UFW_FIELD_TLS_EXT_COUNT     43
 #define UFW_FIELD_TLS_HANDSHAKE     44
+/* Encrypted-traffic classification. A DPI engine that can say nothing about a
+ * TLS flow can say nothing about most flows, and the payload is not available
+ * without the interception this project does not do. What *is* available is
+ * how the client asked: which ciphers, which extensions, which ALPN, in which
+ * order. That is a fingerprint of the implementation, and implementations are
+ * what separate a browser from a beacon on the same port to the same host. */
+#define UFW_FIELD_TLS_CIPHER_HASH   45
+#define UFW_FIELD_TLS_EXT_HASH      46
+#define UFW_FIELD_TLS_ALPN_HASH     47
+#define UFW_FIELD_TLS_JA4           48
+#define UFW_FIELD_TLS_GREASE_COUNT  49
+#define UFW_FIELD_TLS_SUPPORTED_VER 50
+#define UFW_FIELD_TLS_ECH           51
 #define UFW_FIELD_SSH_PROTO_VERSION 60
 #define UFW_FIELD_SSH_BANNER_LEN    61
 #define UFW_FIELD_PAYLOAD_LEN       100
@@ -108,6 +121,47 @@ static inline int ufw_hosted_fls(__u32 v)
 static inline void ufw_zero(void *p, size_t n)
 {
 	memset(p, 0, n);
+}
+
+
+/* --- TLS fingerprinting -------------------------------------------------- */
+
+/*
+ * FNV-1a, 32-bit.
+ *
+ * # Why not MD5, which is what JA3 specifies
+ *
+ * JA3 hashes its component string with MD5, JA4 with truncated SHA-256.
+ * Neither belongs on the packet path: this runs in softirq context on every
+ * ClientHello, and a cryptographic digest there is cost bought for no
+ * security. The fingerprint is an identifier, not a commitment — nobody
+ * relies on it being hard to collide, because an adversary who wants a
+ * different fingerprint just sends a different ClientHello.
+ *
+ * So the *structure* is JA4's and the hash is FNV-1a. The consequence is
+ * stated rather than hidden: these are not byte-comparable with published
+ * JA3/JA4 tables. The components travel in the log event so a SIEM can compute
+ * the canonical form downstream, and `daemon/src/fingerprint.rs` does it for
+ * the events this host emits.
+ */
+static inline __u32 ufw_fnv1a(__u32 h, __u8 b)
+{
+	h ^= b;
+	return h * 16777619u;
+}
+
+#define UFW_FNV_OFFSET 2166136261u
+
+/*
+ * GREASE (RFC 8701) is random padding a client inserts to keep middleboxes
+ * honest. Including it would give one client a different fingerprint on every
+ * connection — which is what GREASE is for, and what a fingerprint must not
+ * have. Skipped, and counted: the *absence* of GREASE is itself a signal,
+ * because a client that sends none is usually not a browser.
+ */
+static inline int ufw_tls_is_grease(__u32 v)
+{
+	return (v & 0x0F0F) == 0x0A0A && ((v >> 8) & 0xFF) == (v & 0xFF);
 }
 
 /* --- decoded protocol facts --------------------------------------------- */
@@ -253,7 +307,10 @@ static inline void decode_http(struct ufw_decoded *d, const __u8 *data, __u32 le
 static inline void decode_tls(struct ufw_decoded *d, const __u8 *data, __u32 len)
 {
 	__u32 pos, session_len, cipher_len, comp_len, ext_total, ext_end;
-	__u32 extensions = 0;
+	__u32 extensions = 0, grease = 0, cipher_count = 0;
+	__u32 cipher_hash = UFW_FNV_OFFSET;
+	__u32 ext_hash = UFW_FNV_OFFSET;
+	__u32 alpn_hash = UFW_FNV_OFFSET;
 
 	if (len < 6)
 		return;
@@ -282,7 +339,23 @@ static inline void decode_tls(struct ufw_decoded *d, const __u8 *data, __u32 len
 		return;
 
 	cipher_len = ((__u32)data[pos] << 8) | data[pos + 1];
-	decoded_set(d, UFW_FIELD_TLS_CIPHER_COUNT, cipher_len / 2);
+	{
+		__u32 c = pos + 2, cend = pos + 2 + cipher_len;
+
+		if (cend > len)
+			cend = len;
+		while (c + 1 < cend) {
+			__u32 suite = ((__u32)data[c] << 8) | data[c + 1];
+
+			if (!ufw_tls_is_grease(suite)) {
+				cipher_count++;
+				cipher_hash = ufw_fnv1a(cipher_hash, data[c]);
+				cipher_hash = ufw_fnv1a(cipher_hash, data[c + 1]);
+			}
+			c += 2;
+		}
+	}
+	decoded_set(d, UFW_FIELD_TLS_CIPHER_COUNT, cipher_count);
 	pos += 2 + cipher_len;
 	if (pos >= len)
 		return;
@@ -299,12 +372,22 @@ static inline void decode_tls(struct ufw_decoded *d, const __u8 *data, __u32 len
 		ext_end = len;
 
 	decoded_set(d, UFW_FIELD_TLS_SNI_LEN, 0);
+	decoded_set(d, UFW_FIELD_TLS_ECH, 0);
 
 	while (pos + 4 <= ext_end) {
 		__u32 ext_type = ((__u32)data[pos] << 8) | data[pos + 1];
 		__u32 ext_len = ((__u32)data[pos + 2] << 8) | data[pos + 3];
 
-		extensions++;
+		if (ufw_tls_is_grease(ext_type)) {
+			grease++;
+		} else {
+			extensions++;
+			/* Extension *types* in order, GREASE removed. This is
+			 * the half of a JA4 fingerprint that identifies the
+			 * library; the cipher list identifies its version. */
+			ext_hash = ufw_fnv1a(ext_hash, (__u8)(ext_type >> 8));
+			ext_hash = ufw_fnv1a(ext_hash, (__u8)ext_type);
+		}
 		pos += 4;
 		if (pos + ext_len > ext_end)
 			break;
@@ -314,9 +397,82 @@ static inline void decode_tls(struct ufw_decoded *d, const __u8 *data, __u32 len
 			decoded_set(d, UFW_FIELD_TLS_SNI_LEN,
 				    ((__u32)data[pos + 3] << 8) | data[pos + 4]);
 		}
+
+		/* application_layer_protocol_negotiation (16): list length(2)
+		 * then length-prefixed protocol names. `h2` and `http/1.1`
+		 * are the pair a browser sends; a lone `http/1.1` from a
+		 * modern client is worth noticing. */
+		if (ext_type == 16 && ext_len >= 3) {
+			__u32 a = pos + 2, alpn_end = pos + ext_len;
+
+			if (alpn_end > ext_end)
+				alpn_end = ext_end;
+			while (a < alpn_end) {
+				__u32 n = data[a], k;
+
+				a++;
+				if (a + n > alpn_end)
+					break;
+				for (k = 0; k < n; k++)
+					alpn_hash = ufw_fnv1a(alpn_hash, data[a + k]);
+				a += n;
+			}
+		}
+
+		/* supported_versions (43): the real negotiated version lives
+		 * here for TLS 1.3, which pins the legacy field at 1.2. A
+		 * signature testing `tls.version` alone would misread every
+		 * 1.3 flow as 1.2. */
+		if (ext_type == 43 && ext_len >= 3) {
+			__u32 v = pos + 1, vend = pos + ext_len, best = 0;
+
+			if (vend > ext_end)
+				vend = ext_end;
+			while (v + 1 < vend) {
+				__u32 ver = ((__u32)data[v] << 8) | data[v + 1];
+
+				if (!ufw_tls_is_grease(ver) && ver > best)
+					best = ver;
+				v += 2;
+			}
+			if (best)
+				decoded_set(d, UFW_FIELD_TLS_SUPPORTED_VER, best);
+		}
+
+		/* encrypted_client_hello (0xFE0D). The SNI is inside it and
+		 * this engine cannot read it. Recording that the flow *used*
+		 * ECH is the honest alternative to reporting an empty SNI,
+		 * which would read as "no server name" rather than "the server
+		 * name was hidden from us". */
+		if (ext_type == 0xFE0D)
+			decoded_set(d, UFW_FIELD_TLS_ECH, 1);
+
 		pos += ext_len;
 	}
 	decoded_set(d, UFW_FIELD_TLS_EXT_COUNT, extensions);
+	decoded_set(d, UFW_FIELD_TLS_GREASE_COUNT, grease);
+	decoded_set(d, UFW_FIELD_TLS_CIPHER_HASH, cipher_hash);
+	decoded_set(d, UFW_FIELD_TLS_EXT_HASH, ext_hash);
+	decoded_set(d, UFW_FIELD_TLS_ALPN_HASH, alpn_hash);
+
+	/* JA4's `a` segment, packed rather than spelled: transport (TCP here),
+	 * version, whether SNI was present, cipher count, extension count,
+	 * first ALPN byte. One integer a signature can compare, carrying what
+	 * the human-readable prefix carries. */
+	{
+		__u32 version = d->present[UFW_FIELD_TLS_SUPPORTED_VER]
+			? d->values[UFW_FIELD_TLS_SUPPORTED_VER]
+			: d->values[UFW_FIELD_TLS_VERSION];
+		__u32 ja4 = 0;
+
+		ja4 |= (version & 0xFF) << 24;
+		ja4 |= (d->values[UFW_FIELD_TLS_SNI_LEN] ? 1u : 0u) << 23;
+		ja4 |= (d->values[UFW_FIELD_TLS_ECH] ? 1u : 0u) << 22;
+		ja4 |= (cipher_count > 99 ? 99 : cipher_count) << 15;
+		ja4 |= (extensions > 99 ? 99 : extensions) << 8;
+		ja4 |= (alpn_hash & 0xFF);
+		decoded_set(d, UFW_FIELD_TLS_JA4, ja4);
+	}
 }
 
 /* --- SSH ---------------------------------------------------------------- */
