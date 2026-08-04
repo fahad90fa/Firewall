@@ -1,0 +1,207 @@
+# Developer toolchain egress.
+#
+# Developer machines are the hardest case for a host firewall, and pretending
+# otherwise produces a policy that gets disabled in week two. A build pulls
+# from package registries nobody enumerated, a debugger binds an arbitrary
+# high port, and `docker` opens sockets on behalf of processes the firewall
+# never sees. A policy that denies all of that is correct and useless.
+#
+# The position taken here: constrain *who*, be generous about *where*, and
+# inspect what crosses the perimeter. A signed toolchain reaching a package
+# registry is normal. The same registry reached by an unsigned binary that
+# appeared in /tmp an hour ago is the thing worth catching, and the identity
+# stage is what tells them apart — the port cannot.
+#
+# The schedule on `dev-egress` is a deliberate example of a control that
+# looks appealing and usually is not: it fires on a Saturday debugging
+# session and produces a support ticket, not a security outcome. It is here
+# because the language supports it and because the trade-off deserves to be
+# written down somewhere an operator will read it.
+
+version: 1
+
+include: [fragments/common_groups.yaml]
+
+metadata:
+  name: dev-tools-egress
+  description: "Toolchain egress for developer workstations"
+  revision: 2
+  author: platform-engineering
+
+defaults:
+  action: deny
+  log: true
+  priority: 1000
+  stateful: true
+
+applications:
+  vcs:
+    description: "Git and its transports"
+    trust: [">= known"]
+    platforms:
+      linux:
+        paths: [/usr/bin/git, /usr/bin/git-remote-http, /usr/lib/git-core/*]
+      macos:
+        paths: [/usr/bin/git, /Library/Developer/CommandLineTools/usr/bin/git]
+      windows:
+        path: "C:\\Program Files\\Git\\bin\\git.exe"
+
+  package_managers:
+    description: "Language package managers, which fetch from registries"
+    trust: [">= known"]
+    platforms:
+      linux:
+        paths:
+          - /usr/bin/apt
+          - /usr/bin/dnf
+          - /usr/bin/npm
+          - /usr/bin/pip3
+          - /usr/local/bin/cargo
+          - /usr/bin/go
+      macos:
+        paths: [/opt/homebrew/bin/brew, /usr/bin/pip3, /usr/local/bin/cargo]
+      windows:
+        paths:
+          - "C:\\Program Files\\nodejs\\npm.cmd"
+          - "C:\\Users\\*\\.cargo\\bin\\cargo.exe"
+
+  container_runtime:
+    description: "Container engines pull images and proxy container traffic"
+    trust: [">= known"]
+    platforms:
+      linux:
+        paths: [/usr/bin/docker, /usr/bin/podman, /usr/bin/containerd]
+      macos:
+        paths: [/usr/local/bin/docker, /Applications/Docker.app/Contents/MacOS/*]
+      windows:
+        path: "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe"
+
+  ssh_client:
+    trust: [">= known"]
+    platforms:
+      linux:
+        paths: [/usr/bin/ssh, /usr/bin/scp, /usr/bin/sftp]
+      macos:
+        paths: [/usr/bin/ssh, /usr/bin/scp]
+      windows:
+        path: "C:\\Windows\\System32\\OpenSSH\\ssh.exe"
+
+signature_groups:
+  supply_chain:
+    - npm-install-script-egress
+    - pypi-typosquat-domain
+
+address_groups:
+  registries:
+    - 203.0.113.0/24
+    - 198.51.100.0/24
+  build_cache: [10.20.0.0/16]
+
+port_groups:
+  ssh: [22]
+  registry_api: [443]
+  # Local development servers. Bound to loopback by convention, but the
+  # convention is not enforced by anything, so the rule is.
+  dev_servers: [3000-3010, 4200, 5173, 8000-8100]
+
+network_profile:
+  internal: [rfc1918]
+  perimeter: [203.0.113.0/24]
+  dns_servers: [10.10.0.53, 10.10.1.53]
+  perimeter_crossing_requires_dpi: true
+
+rules:
+  # Local development servers, bound to loopback. This is above everything
+  # else because a developer's inner loop should never touch a rule that can
+  # be misconfigured.
+  - id: allow-local-dev-servers
+    description: "Loopback development servers"
+    priority: 10
+    layer: packet
+    action: allow
+    protocol: tcp
+    destination:
+      addresses: [loopback]
+      ports: dev_servers
+
+  - id: vcs-https
+    description: "Git over HTTPS to anywhere: repositories do not live in an enumerable range"
+    priority: 200
+    direction: outbound
+    action: allow
+    protocol: tcp
+    application: vcs
+    destination:
+      ports: web
+
+  - id: vcs-ssh
+    description: "Git over SSH, the other half of the same workflow"
+    priority: 201
+    direction: outbound
+    action: allow
+    protocol: tcp
+    application: vcs
+    destination:
+      ports: ssh
+
+  - id: registry-fetch
+    description: "Package managers reach the mirrors, not the public internet"
+    priority: 210
+    direction: outbound
+    action: allow
+    protocol: tcp
+    application: package_managers
+    destination:
+      addresses: [registries]
+      ports: registry_api
+
+  - id: container-pull
+    description: "Image pulls from the internal registry"
+    priority: 220
+    direction: outbound
+    action: allow
+    protocol: tcp
+    application: container_runtime
+    destination:
+      addresses: [registries, build_cache]
+      ports: web
+
+  - id: dev-egress
+    description: "Interactive SSH, restricted to working hours as an example of the trade-off"
+    priority: 230
+    direction: outbound
+    action: allow
+    protocol: tcp
+    application: ssh_client
+    destination:
+      ports: ssh
+    schedule:
+      days: [weekdays]
+      start: "07:00"
+      end: "20:00"
+
+  - id: supply-chain-watch
+    description: "Install-time scripts reaching the network are how a dependency becomes an intrusion"
+    priority: 300
+    layer: stream
+    action: allow
+    protocol: tcp
+    dpi:
+      signatures: [supply_chain]
+      protocols: [http, tls]
+      on_match: alert
+    tags: [ips, audit]
+
+  # The whole point of the identity rules above. Without this, an unsigned
+  # binary reaching a registry falls through to the baseline deny and the log
+  # says "no rule matched" — true, but it does not say *which* control fired,
+  # and that is the difference between an alert and an investigation.
+  - id: deny-untrusted-toolchain
+    description: "Unsigned binaries do not get toolchain network access"
+    priority: 900
+    direction: outbound
+    action: deny
+    protocol: tcp
+    application:
+      trust: [untrusted]
+    tags: [hardening]

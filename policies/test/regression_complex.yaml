@@ -1,0 +1,262 @@
+# Regression fixture: every construct, and the interactions between them.
+#
+# Where `regression_basic.yaml` is small enough to verify by inspection, this
+# one is deliberately not. It exists to exercise the parts of the pipeline
+# that only fire on complicated input:
+#
+#   - staged evaluation, with rules at all five layers, arranged so that
+#     priority ordering and stage ordering disagree. A compiler that sorted
+#     by priority alone would produce different verdicts here.
+#   - a multi-application rule, which expands to one rule per application.
+#   - an application whose per-platform fingerprints differ in *kind*: a
+#     signer on Windows, bare paths on Linux, a Team ID on macOS. These must
+#     be a disjunction — a Linux binary is not expected to satisfy the
+#     Windows signer requirement.
+#   - negation, on both an endpoint and an application selector.
+#   - a schedule, an interface constraint, and zone predicates.
+#   - `allow` under a `dpi:` clause with `on_match: deny`, which is the
+#     "permit unless the payload trips" shape.
+#   - protocols with no ports, to keep the portless paths honest.
+#
+# The equivalence verifier is the real assertion here: if the three backends
+# agree on every scenario derived from this file, they agree on most things.
+
+version: 1
+
+metadata:
+  name: regression-complex
+  description: "Wide-coverage fixture for the compiler and the equivalence verifier"
+  revision: 7
+  author: test
+
+defaults:
+  action: deny
+  log: true
+  priority: 1000
+  stateful: true
+
+address_groups:
+  rfc1918: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+  corp_dns: [10.10.0.53/32, 10.10.1.53/32]
+  public_dns: [1.1.1.1/32, 8.8.8.8/32, 9.9.9.9/32]
+  all_dns: [corp_dns, public_dns]
+  partners: [203.0.113.0/24, 2001:db8:1::/48]
+  quarantine: [198.51.100.0/24]
+
+port_groups:
+  web: [80, 443]
+  high: [1024-65535]
+  admin: [22, 3389, 5985-5986]
+
+applications:
+  # Fingerprints that differ in kind across platforms. The Linux binary has
+  # no signer and no Team ID; requiring it to satisfy the Windows signer
+  # would make this application unmatchable on Linux.
+  mixed_fingerprint_app:
+    description: "Signed on Windows, path-identified on Linux, Team ID on macOS"
+    trust: [">= known"]
+    platforms:
+      windows:
+        path: "C:\\Program Files\\Contoso\\app.exe"
+        signer: "Contoso Ltd"
+      linux:
+        paths: [/usr/bin/app, /usr/local/bin/app]
+      macos:
+        team_id: ABCDE12345
+        bundle_id: com.contoso.app
+
+  hash_pinned:
+    description: "Identified by content, not by location"
+    platforms:
+      linux:
+        sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      windows:
+        sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      macos:
+        sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+  system_service:
+    trust: [system]
+    platforms:
+      linux:
+        paths: [/usr/lib/systemd/systemd-resolved]
+      macos:
+        path: /usr/libexec/mDNSResponder
+      windows:
+        path: "C:\\Windows\\System32\\svchost.exe"
+        signer: "Microsoft Windows"
+
+signature_groups:
+  exfiltration: [dns-tunnel-long-label, dns-tunnel-high-entropy]
+  exploits: [http-exploit-post, tls-downgrade-attempt]
+  everything: [exfiltration, exploits]
+
+network_profile:
+  internal: [rfc1918]
+  perimeter: [203.0.113.0/24]
+  gateways: [10.0.0.1]
+  dns_servers: [10.10.0.53, 10.10.1.53]
+  perimeter_crossing_requires_dpi: true
+
+rules:
+  # --- Stage ordering versus priority ordering ----------------------------
+  #
+  # `late-packet-allow` has a *higher* priority number than
+  # `early-identity-deny`, so a priority-only sort would evaluate the
+  # identity rule first. Stage ordering puts every packet rule ahead of
+  # every identity rule, so the packet rule wins. The verdict for a
+  # quarantined destination is therefore `allow`, and that is not a mistake:
+  # it is the property being tested.
+
+  - id: late-packet-allow
+    description: "Packet stage, high priority number: still evaluated before any identity rule"
+    priority: 5000
+    layer: packet
+    action: allow
+    protocol: tcp
+    destination:
+      addresses: [quarantine]
+      ports: web
+
+  - id: early-identity-deny
+    description: "Identity stage, low priority number: still evaluated after every packet rule"
+    priority: 15
+    direction: outbound
+    action: deny
+    protocol: tcp
+    application:
+      trust: [untrusted]
+    destination:
+      addresses: [quarantine]
+
+  # --- Negation on both sides ---------------------------------------------
+
+  - id: deny-non-corporate-dns
+    description: "Negated endpoint: any resolver that is not one of ours"
+    priority: 30
+    layer: packet
+    direction: outbound
+    action: deny
+    protocol: udp
+    destination:
+      addresses: [all_dns]
+      ports: [53]
+      negate: true
+
+  - id: alert-non-system-resolution
+    description: "Negated application selector: resolution by anything but the system service"
+    priority: 210
+    direction: outbound
+    action: alert
+    protocol: udp
+    application:
+      names: [system_service]
+      negate: true
+    destination:
+      addresses: [all_dns]
+      ports: [53]
+
+  # --- Multi-application expansion ----------------------------------------
+
+  - id: multi-app-web
+    description: "Three applications, expanded into three rules, each keeping its own trust"
+    priority: 200
+    direction: outbound
+    action: allow
+    protocol: tcp
+    application:
+      names: [mixed_fingerprint_app, hash_pinned, system_service]
+    destination:
+      ports: web
+
+  # --- Zones, schedules and interfaces ------------------------------------
+
+  - id: partner-admin-window
+    description: "Administrative access to partners, weekday mornings, over the VPN only"
+    priority: 220
+    direction: outbound
+    action: allow
+    protocol: tcp
+    application: mixed_fingerprint_app
+    destination:
+      addresses: [partners]
+      ports: admin
+    interfaces: [tun0, utun3]
+    schedule:
+      days: [mon, tue, wed, thu, fri]
+      start: "08:00"
+      end: "12:00"
+
+  - id: external-high-ports
+    description: "Zone predicate rather than an address list"
+    priority: 400
+    layer: packet
+    direction: outbound
+    action: alert
+    protocol: udp
+    destination:
+      zone: external
+      ports: high
+
+  # --- Portless protocols -------------------------------------------------
+  #
+  # These carry no identity or DPI predicate, because neither is observable
+  # for ICMP on all three platforms. The compiler rejects a policy that tries.
+
+  - id: allow-icmp
+    priority: 40
+    layer: packet
+    action: allow
+    protocol: icmp
+
+  - id: deny-icmpv6-external
+    priority: 45
+    layer: packet
+    action: deny
+    protocol: icmpv6
+    destination:
+      zone: external
+
+  # --- Permit-unless-payload-trips ----------------------------------------
+
+  - id: dns-exfiltration
+    description: "`allow` with `on_match: deny`: permitted until the payload says otherwise"
+    priority: 300
+    layer: stream
+    action: allow
+    protocol: udp
+    dpi:
+      signatures: [exfiltration]
+      protocols: [dns]
+      on_match: deny
+    tags: [ips]
+
+  - id: known-exploits
+    priority: 310
+    layer: stream
+    action: allow
+    protocol: tcp
+    dpi:
+      signatures: [everything]
+      protocols: [http, tls]
+      on_match: deny
+    tags: [ips]
+
+  - id: audit-external-tls
+    priority: 800
+    layer: app-dpi
+    action: alert
+    protocol: tcp
+    destination:
+      zone: external
+      ports: [443]
+    dpi:
+      protocols: [tls]
+      on_match: alert
+    tags: [audit]
+
+  # Terminal rule at the last stage, so it cannot pre-empt the stages above.
+  - id: deny-unnamed
+    priority: 9999
+    layer: stream
+    action: deny

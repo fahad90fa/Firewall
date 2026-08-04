@@ -147,7 +147,7 @@ fn plan<'a>(policy: &'a CompiledPolicy, notes: &mut Diagnostics) -> Vec<Placemen
     if dpi_rules > 0 {
         notes.push(
             Diagnostic::note(
-                codes::DPI_WITHOUT_CAPABILITY,
+                codes::DPI_BUFFER_BUDGET,
                 Span::default(),
                 format!(
                     "{dpi_rules} rule(s) need payload inspection; the Network Extension sandbox \
@@ -632,6 +632,6 @@ mod tests {
     #[test]
     fn dpi_rules_produce_a_sandbox_budget_note() {
         let a = MacOsBackend.generate(&policy());
-        assert!(a.notes.has_code(codes::DPI_WITHOUT_CAPABILITY));
+        assert!(a.notes.has_code(codes::DPI_BUFFER_BUDGET));
     }
 }

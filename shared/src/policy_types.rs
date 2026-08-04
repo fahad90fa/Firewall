@@ -1429,6 +1429,11 @@ impl CompiledRule {
     /// the policy so that backends can supply their own (possibly precomputed)
     /// classification without duplicating the network profile.
     pub fn matches(&self, ctx: &FlowContext) -> bool {
+        // A rule cannot match at a stage that does not run for this protocol,
+        // regardless of what its predicates say.
+        if !stage_applies(self.layer, ctx.protocol) {
+            return false;
+        }
         if !self.direction.matches(ctx.direction) {
             return false;
         }
@@ -1638,6 +1643,28 @@ impl CompiledRule {
 /// enforcement contexts always name a protocol.
 pub fn identity_observable(protocol: Protocol) -> bool {
     matches!(protocol, Protocol::Tcp | Protocol::Udp | Protocol::Any)
+}
+
+/// Whether a stage's rules apply to a flow of this protocol at all.
+///
+/// The perimeter and packet stages decide from header fields, which every
+/// protocol has. The identity, app-dpi and stream stages need a socket with an
+/// owning process and a payload to inspect — neither of which exists for ICMP,
+/// and neither of which Windows or macOS can surface for it at any hook.
+///
+/// This is a property of the *stage*, not of the predicate, and the difference
+/// is not academic. A terminal `layer: stream` deny carries no identity or DPI
+/// predicate, so the predicate-level gates above never fire for it; without
+/// this check the reference model would attribute an ICMP denial to that rule
+/// while Windows and macOS attributed it to the default deny. Same verdict,
+/// different rule id in the log — which is precisely the kind of disagreement
+/// cross-platform log correlation cannot tolerate, and precisely the kind a
+/// verdict-only comparison would miss.
+pub fn stage_applies(layer: Layer, protocol: Protocol) -> bool {
+    match layer {
+        Layer::Perimeter | Layer::Packet => true,
+        Layer::Identity | Layer::AppDpi | Layer::Stream => identity_observable(protocol),
+    }
 }
 
 /// Human-readable rendering of an address predicate, used by the CLI and the
@@ -2626,6 +2653,56 @@ mod tests {
             (v4("1.2.3.4"), 0),
         );
         assert_eq!(p.evaluate(&ctx).decision, Decision::Deny);
+    }
+
+    #[test]
+    fn a_flow_stage_rule_does_not_claim_icmp() {
+        // A terminal `layer: stream` deny carries no identity or DPI
+        // predicate, so the predicate-level gates never fire for it. Windows
+        // and macOS install no stream-stage filter for ICMP, so if the
+        // reference model let this rule match, all three would still say
+        // "deny" while disagreeing about *which rule* denied it — a
+        // divergence a verdict-only comparison cannot see, and one that
+        // breaks cross-platform log correlation.
+        let terminal = CompiledRule::new(9999, "deny-unnamed", Layer::Stream, Action::Deny);
+        let terminal_id = terminal.id;
+        let p = build_policy(vec![terminal], Decision::Deny);
+
+        let icmp = FlowContext::new(
+            &p.network_profile,
+            Direction::Outbound,
+            Protocol::Icmp,
+            (v4("10.0.0.5"), 0),
+            (v4("1.2.3.4"), 0),
+        );
+        let verdict = p.evaluate(&icmp);
+        assert_eq!(verdict.decision, Decision::Deny);
+        assert_ne!(
+            verdict.rule_id, terminal_id,
+            "a stream-stage rule must not be credited with an ICMP denial"
+        );
+
+        // The same rule does apply to TCP, which does have a stream.
+        let tcp = FlowContext::new(
+            &p.network_profile,
+            Direction::Outbound,
+            Protocol::Tcp,
+            (v4("10.0.0.5"), 1234),
+            (v4("1.2.3.4"), 443),
+        );
+        assert_eq!(p.evaluate(&tcp).rule_id, terminal_id);
+    }
+
+    #[test]
+    fn header_stages_apply_to_every_protocol() {
+        for protocol in [Protocol::Tcp, Protocol::Udp, Protocol::Icmp, Protocol::Any] {
+            assert!(stage_applies(Layer::Perimeter, protocol), "{protocol:?}");
+            assert!(stage_applies(Layer::Packet, protocol), "{protocol:?}");
+        }
+        for layer in [Layer::Identity, Layer::AppDpi, Layer::Stream] {
+            assert!(!stage_applies(layer, Protocol::Icmp), "{layer:?}");
+            assert!(stage_applies(layer, Protocol::Tcp), "{layer:?}");
+        }
     }
 
     // --- serialization ----------------------------------------------------

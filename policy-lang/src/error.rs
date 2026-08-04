@@ -142,7 +142,6 @@ pub mod codes {
     pub const UNCONSTRAINED_APP_SELECTOR: &str = "W0302";
     pub const UNUSED_DEFINITION: &str = "W0303";
     pub const BROAD_ALLOW: &str = "W0304";
-    pub const DPI_WITHOUT_CAPABILITY: &str = "W0305";
     pub const NEGATED_WILDCARD: &str = "W0306";
 
     // Pipeline / driver
@@ -157,6 +156,12 @@ pub mod codes {
     pub const RULE_ELIMINATED: &str = "N0401";
     pub const EBPF_OFFLOAD: &str = "N0402";
     pub const PERIMETER_UPGRADE: &str = "N0403";
+    /// The macOS reassembly budget. A note, not a warning, and numbered to
+    /// say so: it reports a platform limit the policy has to live within,
+    /// not a defect in the policy. Emitting it as a warning would make
+    /// `--deny-warnings` reject every policy that inspects payload at all,
+    /// which teaches operators to turn the flag off.
+    pub const DPI_BUFFER_BUDGET: &str = "N0404";
 }
 
 /// One diagnostic.
@@ -242,20 +247,26 @@ fn render_snippet(out: &mut String, source: &SourceFile, span: Span, label: Opti
     let Some(line_text) = source.line(span.line) else {
         return;
     };
+    let line_text = line_text.trim_end();
     let gutter_width = span.line.to_string().len().max(2);
     let pad = " ".repeat(gutter_width);
     out.push_str(&format!("{pad} |\n"));
     out.push_str(&format!(
         "{:>width$} | {}\n",
         span.line,
-        line_text.trim_end(),
+        line_text,
         width = gutter_width
     ));
     // Column is 1-based and counted in characters, matching what an editor
     // shows; tabs are rejected in indentation so a space run is faithful.
-    let caret_pad = " ".repeat(span.col.saturating_sub(1) as usize);
-    let caret_len = span.len().max(1) as usize;
-    let carets = "^".repeat(caret_len.min(line_text.chars().count().max(1)));
+    let start_col = span.col.saturating_sub(1) as usize;
+    let caret_pad = " ".repeat(start_col);
+    // A span may cover a construct that runs over several lines — a whole
+    // rule, say. Only the first line is printed, so the underline stops at
+    // the end of it: a caret run trailing off past the text it is supposed to
+    // be pointing at reads as a rendering bug and undermines the diagnostic.
+    let available = line_text.chars().count().saturating_sub(start_col).max(1);
+    let carets = "^".repeat((span.len().max(1) as usize).min(available));
     match label {
         Some(l) => out.push_str(&format!("{pad} | {caret_pad}{carets} {l}\n")),
         None => out.push_str(&format!("{pad} | {caret_pad}{carets}\n")),

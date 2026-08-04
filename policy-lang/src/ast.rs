@@ -29,6 +29,13 @@ pub struct PolicyDocument {
     pub signature_groups: Vec<SignatureGroup>,
     pub network_profile: Option<NetworkProfile>,
     pub rules: Vec<Rule>,
+    /// Names of definitions that arrived through an `include:`.
+    ///
+    /// A shared fragment defines more than any one consumer uses — that is
+    /// what makes it shareable — so "defined and never referenced" is normal
+    /// for these and is not worth reporting. In the file that actually
+    /// defines it, an unreferenced group is dead weight or a typo, and is.
+    pub included_definitions: std::collections::BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -216,6 +223,144 @@ pub struct Schedule {
     /// `HH:MM`, local time.
     pub start: Option<Spanned<String>>,
     pub end: Option<Spanned<String>>,
+}
+
+/// Point every span in a document at one location.
+///
+/// A span is a byte range into *one* file's text. When an included document is
+/// merged into the including one, its spans keep pointing into the fragment's
+/// text while the renderer has only the including file — so a diagnostic about
+/// an included definition renders a caret over whatever unrelated characters
+/// happen to sit at that offset. That is worse than no span at all: it is a
+/// confident, wrong answer to "where is this?".
+///
+/// Retargeting to the `include:` line gives a location that exists in the file
+/// being compiled and is where the operator can act. Which fragment the node
+/// actually came from is not lost — it is in the diagnostic's message.
+pub fn retarget_spans(doc: &mut PolicyDocument, to: Span) {
+    fn one(span: &mut Span, to: Span) {
+        *span = to;
+    }
+    fn scalar(value: &mut Option<Spanned<String>>, to: Span) {
+        if let Some(v) = value {
+            v.span = to;
+        }
+    }
+    fn list(values: &mut [Spanned<String>], to: Span) {
+        for v in values {
+            v.span = to;
+        }
+    }
+    fn endpoint(e: &mut Option<Endpoint>, to: Span) {
+        if let Some(e) = e {
+            one(&mut e.span, to);
+            list(&mut e.addresses, to);
+            list(&mut e.zones, to);
+            list(&mut e.ports, to);
+            scalar(&mut e.negate, to);
+        }
+    }
+
+    one(&mut doc.span, to);
+    scalar(&mut doc.version, to);
+    list(&mut doc.includes, to);
+
+    if let Some(m) = &mut doc.metadata {
+        one(&mut m.span, to);
+        scalar(&mut m.name, to);
+        scalar(&mut m.description, to);
+        scalar(&mut m.revision, to);
+        scalar(&mut m.author, to);
+    }
+    if let Some(d) = &mut doc.defaults {
+        one(&mut d.span, to);
+        scalar(&mut d.action, to);
+        scalar(&mut d.log, to);
+        scalar(&mut d.layer, to);
+        scalar(&mut d.priority, to);
+        scalar(&mut d.stateful, to);
+    }
+    if let Some(n) = &mut doc.network_profile {
+        one(&mut n.span, to);
+        list(&mut n.internal, to);
+        list(&mut n.perimeter, to);
+        list(&mut n.gateways, to);
+        list(&mut n.dns_servers, to);
+        scalar(&mut n.perimeter_crossing_requires_dpi, to);
+    }
+
+    for g in &mut doc.address_groups {
+        one(&mut g.span, to);
+        g.name.span = to;
+        list(&mut g.entries, to);
+    }
+    for g in &mut doc.port_groups {
+        one(&mut g.span, to);
+        g.name.span = to;
+        list(&mut g.entries, to);
+    }
+    for g in &mut doc.signature_groups {
+        one(&mut g.span, to);
+        g.name.span = to;
+        list(&mut g.entries, to);
+    }
+    for a in &mut doc.applications {
+        one(&mut a.span, to);
+        a.name.span = to;
+        scalar(&mut a.description, to);
+        list(&mut a.trust, to);
+        scalar(&mut a.require_valid_signature, to);
+        for p in &mut a.platforms {
+            one(&mut p.span, to);
+            p.platform.span = to;
+            list(&mut p.paths, to);
+            list(&mut p.sha256, to);
+            list(&mut p.signers, to);
+            list(&mut p.team_ids, to);
+            list(&mut p.bundle_ids, to);
+        }
+    }
+
+    for r in &mut doc.rules {
+        one(&mut r.span, to);
+        scalar(&mut r.id, to);
+        scalar(&mut r.description, to);
+        scalar(&mut r.priority, to);
+        scalar(&mut r.layer, to);
+        scalar(&mut r.direction, to);
+        scalar(&mut r.action, to);
+        scalar(&mut r.protocol, to);
+        endpoint(&mut r.source, to);
+        endpoint(&mut r.destination, to);
+        list(&mut r.interfaces, to);
+        scalar(&mut r.log, to);
+        scalar(&mut r.stateful, to);
+        list(&mut r.tags, to);
+        if let Some(a) = &mut r.application {
+            one(&mut a.span, to);
+            list(&mut a.names, to);
+            list(&mut a.paths, to);
+            list(&mut a.sha256, to);
+            list(&mut a.signers, to);
+            list(&mut a.team_ids, to);
+            list(&mut a.bundle_ids, to);
+            list(&mut a.trust, to);
+            scalar(&mut a.require_valid_signature, to);
+            scalar(&mut a.negate, to);
+        }
+        if let Some(d) = &mut r.dpi {
+            one(&mut d.span, to);
+            list(&mut d.signatures, to);
+            list(&mut d.protocols, to);
+            scalar(&mut d.on_match, to);
+        }
+        if let Some(s) = &mut r.schedule {
+            one(&mut s.span, to);
+            list(&mut s.days, to);
+            scalar(&mut s.start, to);
+            scalar(&mut s.end, to);
+        }
+    }
 }
 
 /// Every top-level key the language accepts. Used by the parser to produce

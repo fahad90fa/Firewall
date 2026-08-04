@@ -1,0 +1,151 @@
+# Air-gapped host policy.
+#
+# For a machine that is physically or administratively isolated: an OT
+# controller, an offline signing host, a classified workstation. The network
+# interface exists — the machine still needs to talk to a management VLAN,
+# or it would have no interface at all — but nothing routable is reachable.
+#
+# The distinguishing property of an air-gapped policy is not that it denies
+# more. It is that it *alerts on the attempt*. On a normal workstation a
+# denied connection is noise: something misconfigured, a stale bookmark, a
+# telemetry endpoint nobody disabled. On this host there is no benign
+# explanation for a packet aimed at the internet. Every deny below is
+# therefore paired with an alert, and the alert is the deliverable.
+#
+# The second property: no `application:` rules. Identity resolution is a
+# per-flow cost paid to distinguish between things that are allowed. Here
+# almost nothing is allowed, so the distinction has no work to do, and the
+# rules stay at the packet stage where they are cheapest and can be offloaded
+# to the eBPF fast path. A policy this restrictive should also be this fast.
+
+version: 1
+
+metadata:
+  name: airgapped
+  description: "Isolated host: management VLAN only, and an alert on everything else"
+  revision: 2
+  author: security-engineering
+
+defaults:
+  action: deny
+  log: true
+  priority: 1000
+  stateful: true
+
+address_groups:
+  loopback: [127.0.0.0/8, ::1/128]
+  # The one reachable network. Deliberately a /24: an air-gapped host that
+  # can reach a /8 is not air-gapped, it is optimistic.
+  management_vlan: [10.99.0.0/24]
+  log_collector: [10.99.0.10/32]
+  time_source: [10.99.0.11/32]
+  # Everything else, named so the alert rules can be explicit about what
+  # they are catching rather than relying on a bare catch-all.
+  any_v4: [0.0.0.0/0]
+  any_v6: ["::/0"]
+
+port_groups:
+  ssh: [22]
+  syslog: [514]
+  ntp: [123]
+
+network_profile:
+  internal: [management_vlan]
+  gateways: [10.99.0.1]
+  # No DNS. Name resolution on an isolated host is either a hosts file or a
+  # misconfiguration, and leaving this empty means the compiler will not
+  # quietly treat a resolver as infrastructure.
+  perimeter_crossing_requires_dpi: false
+
+rules:
+  - id: allow-loopback
+    priority: 10
+    layer: packet
+    action: allow
+    destination:
+      addresses: [loopback]
+
+  - id: allow-management-ssh
+    description: "Inbound administration from the management VLAN"
+    priority: 100
+    layer: packet
+    direction: inbound
+    action: allow
+    protocol: tcp
+    source:
+      addresses: [management_vlan]
+    destination:
+      ports: ssh
+
+  - id: allow-log-shipping
+    description: "Outbound syslog. This is the channel the alerts below travel on"
+    priority: 110
+    layer: packet
+    direction: outbound
+    action: allow
+    protocol: udp
+    destination:
+      addresses: [log_collector]
+      ports: syslog
+
+  - id: allow-time-sync
+    description: "Clock from the management VLAN, not from the internet"
+    priority: 120
+    layer: packet
+    direction: outbound
+    action: allow
+    protocol: udp
+    destination:
+      addresses: [time_source]
+      ports: ntp
+
+  - id: allow-management-icmp
+    description: "Reachability checks from the management VLAN"
+    priority: 130
+    layer: packet
+    action: allow
+    protocol: icmp
+    source:
+      addresses: [management_vlan]
+
+  # --- The part that matters ----------------------------------------------
+  #
+  # `alert` is not terminal, so these fire and evaluation continues to the
+  # denies below. That ordering is deliberate: the alert records the attempt
+  # with full context, and the deny is what actually stops it. Collapsing
+  # them into one `deny` with `log: true` would work, but the log line would
+  # be indistinguishable from the routine denies on every other host, and
+  # this host's whole value as a sensor is that its denies are not routine.
+
+  - id: alert-egress-attempt
+    description: "An isolated host tried to reach something. There is no benign version of this"
+    priority: 800
+    layer: packet
+    direction: outbound
+    action: alert
+    destination:
+      addresses: [any_v4, any_v6]
+      negate: false
+    tags: [airgap, alert]
+
+  - id: alert-inbound-attempt
+    description: "Something outside the management VLAN tried to reach this host"
+    priority: 810
+    layer: packet
+    direction: inbound
+    action: alert
+    tags: [airgap, alert]
+
+  - id: deny-egress
+    priority: 9000
+    layer: packet
+    direction: outbound
+    action: deny
+    tags: [airgap]
+
+  - id: deny-inbound
+    priority: 9001
+    layer: packet
+    direction: inbound
+    action: deny
+    tags: [airgap]

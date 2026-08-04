@@ -1,0 +1,153 @@
+# Default-deny baseline.
+#
+# This is the policy every other one in this tree is meant to sit on top of:
+# nothing leaves the host unless a rule names it. It is deliberately small.
+# A baseline that tries to anticipate every application ends up either
+# permanently out of date or so broad that the default stops meaning anything.
+#
+# What it permits is the set a host cannot function without: loopback, DHCP,
+# DNS to the configured resolvers, NTP, and the ICMP that path-MTU discovery
+# and diagnostics depend on. Everything else is denied and logged.
+
+version: 1
+
+metadata:
+  name: default-deny
+  description: "Minimal default-deny baseline: name resolution, time, and nothing else"
+  revision: 1
+  author: security-engineering
+
+defaults:
+  action: deny
+  log: true
+  priority: 1000
+  stateful: true
+
+address_groups:
+  loopback: [127.0.0.0/8, ::1/128]
+  rfc1918: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+  link_local: [169.254.0.0/16, fe80::/10]
+  multicast: [224.0.0.0/4, ff00::/8]
+  dhcp_any: [0.0.0.0/0]
+  resolvers: [10.10.0.53/32, 10.10.1.53/32, 1.1.1.1/32]
+  time_servers: [10.10.0.123/32, 162.159.200.1/32]
+
+port_groups:
+  dns: [53]
+  dhcp: [67, 68]
+  ntp: [123]
+
+network_profile:
+  internal: [rfc1918]
+  dns_servers: [10.10.0.53, 10.10.1.53]
+
+rules:
+  # Loopback first, and cheaply. A host that cannot talk to itself fails in
+  # ways that look nothing like a firewall problem, which is expensive to
+  # diagnose, so this rule sits above everything including the deny-all.
+  - id: allow-loopback
+    description: "Host-local traffic never leaves the machine"
+    priority: 10
+    layer: packet
+    action: allow
+    destination:
+      addresses: [loopback]
+    tags: [baseline]
+
+  # Link-local and multicast: address resolution, router discovery and mDNS
+  # are how the host learns it is on a network at all.
+  - id: allow-link-local
+    priority: 20
+    layer: packet
+    action: allow
+    destination:
+      addresses: [link_local, multicast]
+    tags: [baseline]
+
+  # DHCP is broadcast to 255.255.255.255 before the host has an address, so
+  # it cannot be scoped to a destination group narrower than "anywhere".
+  - id: allow-dhcp
+    description: "Address acquisition, which necessarily precedes every other rule"
+    priority: 30
+    layer: packet
+    action: allow
+    protocol: udp
+    destination:
+      addresses: [dhcp_any]
+      ports: dhcp
+    tags: [baseline]
+
+  # ICMP carries path-MTU discovery. Blocking it produces connections that
+  # complete a handshake and then hang on the first large payload — the
+  # single most commonly self-inflicted firewall failure.
+  - id: allow-icmp
+    description: "Path-MTU discovery and diagnostics"
+    priority: 40
+    layer: packet
+    action: allow
+    protocol: icmp
+    tags: [baseline]
+
+  - id: allow-icmpv6
+    description: "Neighbour discovery; IPv6 does not work without it"
+    priority: 41
+    layer: packet
+    action: allow
+    protocol: icmpv6
+    tags: [baseline]
+
+  - id: allow-dns
+    description: "Name resolution to the configured resolvers only"
+    priority: 100
+    layer: packet
+    direction: outbound
+    action: allow
+    protocol: udp
+    destination:
+      addresses: [resolvers]
+      ports: dns
+    tags: [baseline]
+
+  - id: allow-dns-tcp
+    description: "Fallback for responses too large for a datagram"
+    priority: 101
+    layer: packet
+    direction: outbound
+    action: allow
+    protocol: tcp
+    destination:
+      addresses: [resolvers]
+      ports: dns
+    tags: [baseline]
+
+  - id: allow-ntp
+    description: "Clock skew breaks certificate validation before it breaks anything else"
+    priority: 110
+    layer: packet
+    direction: outbound
+    action: allow
+    protocol: udp
+    destination:
+      addresses: [time_servers]
+      ports: ntp
+    tags: [baseline]
+
+  # Nothing accepts inbound connections on a workstation baseline. Servers
+  # add their listeners in a policy of their own; they do not relax this one.
+  - id: deny-inbound
+    description: "No listeners by default"
+    priority: 900
+    layer: packet
+    direction: inbound
+    action: deny
+    tags: [baseline, hardening]
+
+  # The explicit terminal rule. `defaults.action` already denies, but an
+  # operator reading the compiled rule list should be able to see the last
+  # decision rather than infer it.
+  - id: deny-all
+    description: "Explicit terminal deny, so the rule list ends where the policy does"
+    priority: 9999
+    layer: packet
+    action: deny
+    tags: [baseline]

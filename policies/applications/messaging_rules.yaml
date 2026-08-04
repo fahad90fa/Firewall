@@ -1,0 +1,184 @@
+# Messaging and conferencing clients.
+#
+# These are the applications that make a naive host firewall look bad. A
+# conferencing client negotiates media over UDP on a port range chosen at
+# call setup, falls back to TCP/443 when that fails, and reaches a CDN whose
+# address set changes weekly. Enumerate the destinations and the policy is
+# wrong by Thursday.
+#
+# So the destinations here are deliberately wide and the identity predicate
+# is deliberately strict. The rule that matters is not "port 3478 is open",
+# it is "the signed conferencing client may send UDP, and nothing else may".
+# An attacker who wants that egress path now has to be that binary, which is
+# a materially harder problem than finding an open port.
+
+version: 1
+
+include: [fragments/common_groups.yaml]
+
+metadata:
+  name: messaging-egress
+  description: "Signed messaging and conferencing clients, with media egress"
+  revision: 2
+  author: security-engineering
+
+defaults:
+  action: deny
+  log: true
+  priority: 1000
+  stateful: true
+
+applications:
+  chat_client:
+    description: "Corporate chat"
+    trust: [">= trusted"]
+    require_valid_signature: true
+    platforms:
+      windows:
+        path: "C:\\Program Files\\Contoso Chat\\chat.exe"
+        signer: "Contoso Ltd"
+      linux:
+        paths: [/usr/lib/contoso-chat/chat, /opt/contoso-chat/chat]
+      macos:
+        bundle_id: com.contoso.chat
+        team_id: ABCDE12345
+
+  conferencing:
+    description: "Video conferencing, including its media helper process"
+    trust: [">= trusted"]
+    require_valid_signature: true
+    platforms:
+      windows:
+        paths:
+          - "C:\\Program Files\\Contoso Meet\\meet.exe"
+          - "C:\\Program Files\\Contoso Meet\\media.exe"
+        signer: "Contoso Ltd"
+      linux:
+        paths: [/usr/lib/contoso-meet/*]
+      macos:
+        bundle_ids: [com.contoso.meet, com.contoso.meet.media]
+        team_id: ABCDE12345
+
+  mail_client:
+    trust: [">= trusted"]
+    require_valid_signature: true
+    platforms:
+      windows:
+        path: "C:\\Program Files\\Contoso Mail\\mail.exe"
+        signer: "Contoso Ltd"
+      linux:
+        paths: [/usr/bin/thunderbird, /usr/lib/thunderbird/thunderbird]
+      macos:
+        bundle_id: com.contoso.mail
+        team_id: ABCDE12345
+
+signature_groups:
+  covert_channels:
+    - dns-tunnel-long-label
+    - dns-tunnel-high-entropy
+
+port_groups:
+  # STUN, TURN and the RTP range. Wide, and unavoidably so: the port is
+  # chosen at call setup by a server this policy does not control.
+  media: [3478-3481, 16384-32767]
+  signalling: [443]
+
+network_profile:
+  internal: [rfc1918]
+  dns_servers: [10.10.0.53, 10.10.1.53]
+  perimeter_crossing_requires_dpi: true
+
+rules:
+  - id: chat-signalling
+    description: "Persistent websocket to the chat service"
+    priority: 200
+    direction: outbound
+    action: allow
+    protocol: tcp
+    application: chat_client
+    destination:
+      ports: signalling
+
+  - id: conferencing-signalling
+    description: "Call setup and the TCP/443 fallback path"
+    priority: 210
+    direction: outbound
+    action: allow
+    protocol: tcp
+    application: conferencing
+    destination:
+      ports: signalling
+
+  - id: conferencing-media
+    description: "RTP and STUN. The port range is wide because the callee picks it"
+    priority: 211
+    direction: outbound
+    action: allow
+    protocol: udp
+    application: conferencing
+    destination:
+      ports: media
+
+  # Inbound media for a direct peer connection. Restricted to internal
+  # addresses: a peer on the corporate network is a colleague, a peer on the
+  # internet is a relay the client should be using instead.
+  - id: conferencing-media-inbound
+    description: "Direct peer media on the internal network only"
+    priority: 212
+    direction: inbound
+    action: allow
+    protocol: udp
+    application: conferencing
+    source:
+      addresses: [rfc1918]
+      ports: media
+
+  - id: mail-submission
+    description: "SMTP submission and IMAP, both over TLS"
+    priority: 220
+    direction: outbound
+    action: allow
+    protocol: tcp
+    application: mail_client
+    destination:
+      ports: mail
+
+  - id: messaging-dns
+    priority: 230
+    direction: outbound
+    action: allow
+    protocol: udp
+    application:
+      names: [chat_client, conferencing, mail_client]
+    destination:
+      addresses: [all_dns]
+      ports: dns
+
+  # --- Inspection ---------------------------------------------------------
+
+  - id: dns-tunnel-block
+    description: "A chat client is a plausible cover for a DNS covert channel"
+    priority: 300
+    layer: stream
+    action: allow
+    protocol: udp
+    dpi:
+      signatures: [covert_channels]
+      protocols: [dns]
+      on_match: deny
+    tags: [ips]
+
+  # Media egress is the widest permit in this file, so it gets the narrowest
+  # identity check: anything that is not the signed conferencing binary is
+  # denied on those ports explicitly, rather than falling through.
+  - id: deny-unsigned-media
+    description: "Wide UDP range, narrow identity"
+    priority: 900
+    direction: outbound
+    action: deny
+    protocol: udp
+    application:
+      trust: [untrusted, unknown]
+    destination:
+      ports: media
+    tags: [hardening]

@@ -1,0 +1,79 @@
+# Regression fixture: the smallest policy that still exercises a decision.
+#
+# Not a deployable policy. This one exists so that tests have a stable input
+# whose every verdict can be written down by hand, which is what makes it
+# useful as a regression: if the compiler changes what this file means, the
+# change is visible without anyone having to reason about a large rule set.
+#
+# The expected verdicts, by construction:
+#
+#   udp -> 1.1.1.1:53   outbound   allow   (allow-dns)
+#   udp -> 9.9.9.9:53    outbound  deny    (not in the group)
+#   tcp -> anywhere:23             deny    (block-telnet)
+#   tcp -> 10.0.0.5:443 outbound   allow   (allow-internal-https)
+#   tcp -> 93.184.216.34:443       deny    (default)
+#   icmp -> anywhere               allow   (allow-icmp)
+#
+# Keep those six lines and the rules below in step. A test that asserts them
+# is in `tests/scenarios/`.
+
+version: 1
+
+metadata:
+  name: regression-basic
+  description: "Hand-verifiable fixture for the decision engine"
+  revision: 1
+  author: test
+
+defaults:
+  action: deny
+  log: true
+  priority: 1000
+  stateful: true
+
+address_groups:
+  internal: [10.0.0.0/8]
+  public_dns: [1.1.1.1/32, 8.8.8.8/32]
+
+port_groups:
+  web: [80, 443]
+
+network_profile:
+  internal: [internal]
+  dns_servers: [1.1.1.1]
+
+rules:
+  - id: allow-icmp
+    priority: 10
+    layer: packet
+    action: allow
+    protocol: icmp
+
+  - id: block-telnet
+    description: "Denied everywhere, including internally, and ahead of every allow"
+    priority: 20
+    layer: packet
+    action: deny
+    protocol: tcp
+    destination:
+      ports: [23]
+
+  - id: allow-dns
+    priority: 100
+    layer: packet
+    direction: outbound
+    action: allow
+    protocol: udp
+    destination:
+      addresses: [public_dns]
+      ports: [53]
+
+  - id: allow-internal-https
+    priority: 200
+    layer: packet
+    direction: outbound
+    action: allow
+    protocol: tcp
+    destination:
+      addresses: [internal]
+      ports: web

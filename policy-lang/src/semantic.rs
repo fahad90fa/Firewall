@@ -291,6 +291,13 @@ impl Analyzer {
             return;
         }
         for (name, span, kind) in unused {
+            // A definition that arrived through an `include:` is part of a
+            // shared library, and a library that every consumer used in full
+            // would not be worth sharing. Only unreferenced definitions in
+            // the file that declares them are dead weight.
+            if doc.included_definitions.contains(&name) {
+                continue;
+            }
             self.warn(
                 codes::UNUSED_DEFINITION,
                 span,

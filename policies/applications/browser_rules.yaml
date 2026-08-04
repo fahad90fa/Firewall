@@ -1,0 +1,186 @@
+# Per-application egress for managed web browsers.
+#
+# The point of an identity rule is that it is not a port rule. "Allow 443
+# outbound" permits every exfiltration tool ever written, because every one
+# of them speaks TLS on 443. "Allow 443 outbound from a browser binary that
+# carries a valid signature from the vendor we deployed" is a different
+# statement, and it is the one this file makes.
+#
+# Note what the fingerprints are *not*: a single path. A path alone is
+# satisfied by anything an attacker can write to that path. Each platform
+# block pairs the path with the signing identity the platform can actually
+# verify — Authenticode signer on Windows, Team ID on macOS — so a replaced
+# binary fails the rule rather than inheriting it.
+
+version: 1
+
+include: [fragments/common_groups.yaml]
+
+metadata:
+  name: browser-egress
+  description: "Signed-browser egress, with certificate inspection at the perimeter"
+  revision: 3
+  author: security-engineering
+
+defaults:
+  action: deny
+  log: true
+  priority: 1000
+  stateful: true
+
+applications:
+  managed_browser:
+    description: "The browser deployed by endpoint management"
+    trust: [">= trusted"]
+    require_valid_signature: true
+    platforms:
+      windows:
+        path: "C:\\Program Files\\Contoso Browser\\browser.exe"
+        signer: "Contoso Ltd"
+      linux:
+        paths:
+          - /usr/lib/contoso-browser/browser
+          - /opt/contoso/browser
+      macos:
+        bundle_id: com.contoso.browser
+        team_id: ABCDE12345
+
+  # Helper processes: the network service, the updater, the sandboxed
+  # renderers. They are separate binaries with separate needs, and giving
+  # them the browser's rule would be giving the renderer the browser's
+  # network access, which is the thing the sandbox exists to prevent.
+  browser_updater:
+    trust: [">= trusted"]
+    require_valid_signature: true
+    platforms:
+      windows:
+        path: "C:\\Program Files\\Contoso Browser\\updater.exe"
+        signer: "Contoso Ltd"
+      linux:
+        paths: [/usr/lib/contoso-browser/updater]
+      macos:
+        bundle_id: com.contoso.browser.updater
+        team_id: ABCDE12345
+
+signature_groups:
+  browser_exploits:
+    - http-exploit-post
+    - tls-downgrade-attempt
+  covert_channels:
+    - dns-tunnel-long-label
+    - dns-tunnel-high-entropy
+
+address_groups:
+  update_servers: [203.0.113.0/24, 2001:db8:1::/48]
+
+port_groups:
+  quic: [443]
+
+network_profile:
+  internal: [rfc1918]
+  perimeter: [203.0.113.0/24]
+  dns_servers: [10.10.0.53, 10.10.1.53]
+  perimeter_crossing_requires_dpi: true
+
+rules:
+  - id: browser-web
+    description: "HTTP and HTTPS from the signed browser binary"
+    priority: 200
+    direction: outbound
+    action: allow
+    protocol: tcp
+    application: managed_browser
+    destination:
+      ports: web
+
+  - id: browser-quic
+    description: "HTTP/3. Denying this does not break the browser, it makes it slow and silent"
+    priority: 201
+    direction: outbound
+    action: allow
+    protocol: udp
+    application: managed_browser
+    destination:
+      ports: quic
+
+  - id: browser-dns
+    description: "The browser resolves names itself rather than through the system stub"
+    priority: 210
+    direction: outbound
+    action: allow
+    protocol: udp
+    application: managed_browser
+    destination:
+      addresses: [all_dns]
+      ports: dns
+
+  - id: updater-egress
+    description: "Updates come from the vendor's range and nowhere else"
+    priority: 220
+    direction: outbound
+    action: allow
+    protocol: tcp
+    application: browser_updater
+    destination:
+      addresses: [update_servers]
+      ports: web
+
+  # --- Inspection ---------------------------------------------------------
+  #
+  # These sit at the DPI and stream stages, which run after identity. They
+  # apply to flows the rules above already permitted: a permit is not a
+  # promise that the content is safe.
+
+  - id: browser-exploit-block
+    description: "Terminate a permitted browser flow that carries a known exploit"
+    priority: 300
+    layer: stream
+    action: allow
+    protocol: tcp
+    dpi:
+      signatures: [browser_exploits]
+      protocols: [http, tls]
+      on_match: deny
+    tags: [ips]
+
+  - id: dns-tunnel-block
+    description: "Encoded payloads in DNS labels: the oldest covert channel that still works"
+    priority: 310
+    layer: stream
+    action: allow
+    protocol: udp
+    dpi:
+      signatures: [covert_channels]
+      protocols: [dns]
+      on_match: deny
+    tags: [ips]
+
+  - id: audit-external-tls
+    description: "Record the SNI and certificate chain for flows crossing the perimeter"
+    priority: 800
+    layer: app-dpi
+    action: alert
+    protocol: tcp
+    destination:
+      zone: external
+      ports: [443]
+    dpi:
+      protocols: [tls]
+      on_match: alert
+    tags: [audit]
+
+  # Anything else claiming to be a browser is not one. This is the rule that
+  # gives the fingerprints above their meaning: without it, an unsigned
+  # binary on port 443 simply falls through to the baseline's deny and the
+  # log says "no rule matched" rather than "identity check failed".
+  - id: deny-unsigned-web
+    description: "Web egress from an unsigned or untrusted binary"
+    priority: 900
+    direction: outbound
+    action: deny
+    protocol: tcp
+    application:
+      trust: [untrusted, unknown]
+    destination:
+      ports: web
+    tags: [hardening]

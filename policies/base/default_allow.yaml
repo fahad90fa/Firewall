@@ -1,0 +1,151 @@
+# Default-allow baseline, for the first phase of a rollout.
+#
+# This policy permits egress and denies only what is never legitimate. It
+# exists because default-deny cannot be deployed cold: on a fleet whose
+# traffic has never been catalogued, switching straight to deny produces an
+# outage and a rollback, and the rollback is what people remember.
+#
+# The intended sequence is:
+#
+#   1. Install this policy with the daemon in `monitor` enforcement mode.
+#      Every decision is logged; nothing is blocked.
+#   2. Read the logs. `ufwctl logs --action allow --group-by application`
+#      produces the inventory that a default-deny policy needs.
+#   3. Write the allow rules that inventory implies.
+#   4. Switch to `policies/base/default_deny.yaml`.
+#
+# Do not treat this as a destination. Every rule here is a placeholder for a
+# rule you have not written yet. The `alert` rules mark the traffic that
+# should be gone before step 4.
+
+version: 1
+
+metadata:
+  name: default-allow
+  description: "Permissive baseline for rollout phase one: deny the indefensible, log the rest"
+  revision: 1
+  author: security-engineering
+
+defaults:
+  action: allow
+  log: true
+  priority: 1000
+  stateful: true
+
+address_groups:
+  rfc1918: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+  # Reserved and unroutable ranges. Traffic to these is either misconfigured
+  # or an exfiltration channel testing what gets through.
+  bogons:
+    - 0.0.0.0/8
+    - 192.0.2.0/24
+    - 198.51.100.0/24
+    - 203.0.113.0/24
+    - 240.0.0.0/4
+
+port_groups:
+  # Protocols that authenticate in cleartext or have no business crossing a
+  # network in 2020s infrastructure. Denying these is safe on day one.
+  legacy_cleartext: [21, 23, 69, 79, 512-514]
+  # Windows file sharing and RPC, which should never leave a subnet.
+  smb_rpc: [135, 137-139, 445]
+  database: [1433, 1521, 3306, 5432, 6379, 9200, 27017]
+  remote_desktop: [3389, 5900-5910]
+
+network_profile:
+  internal: [rfc1918]
+  perimeter_crossing_requires_dpi: false
+
+rules:
+  - id: deny-cleartext-protocols
+    description: "Telnet, FTP, TFTP, rsh: credentials on the wire"
+    priority: 10
+    layer: packet
+    action: deny
+    protocol: tcp
+    destination:
+      ports: legacy_cleartext
+    tags: [hardening]
+
+  - id: deny-smb-egress
+    description: "SMB and RPC leaving the host: a hash-capture primitive, not a workflow"
+    priority: 20
+    layer: packet
+    direction: outbound
+    action: deny
+    protocol: tcp
+    destination:
+      zone: external
+      ports: smb_rpc
+    tags: [hardening]
+
+  - id: deny-bogon-egress
+    priority: 30
+    layer: packet
+    direction: outbound
+    action: deny
+    destination:
+      addresses: [bogons]
+    tags: [hardening]
+
+  - id: deny-inbound-remote-desktop
+    description: "Inbound RDP and VNC, the two most-scanned ports on the internet"
+    priority: 40
+    layer: packet
+    direction: inbound
+    action: deny
+    protocol: tcp
+    destination:
+      ports: remote_desktop
+    tags: [hardening]
+
+  # --- Traffic to catalogue before switching to default-deny ---------------
+  #
+  # These alert rather than deny. Each one marks a category that a finished
+  # policy names explicitly; if any of them is still firing at step 3, the
+  # inventory is incomplete.
+
+  - id: audit-database-egress
+    description: "Direct database connections from a workstation are almost always a tool, not an app"
+    priority: 500
+    layer: packet
+    direction: outbound
+    action: alert
+    protocol: tcp
+    destination:
+      zone: external
+      ports: database
+    tags: [audit, rollout]
+
+  - id: audit-unsigned-egress
+    description: "Every unsigned binary reaching the network is a rule you still owe"
+    priority: 510
+    direction: outbound
+    action: alert
+    protocol: tcp
+    application:
+      trust: [untrusted, unknown]
+    tags: [audit, rollout]
+
+  - id: audit-external-egress
+    description: "The catch-all inventory rule: what leaves this host, and who sent it"
+    priority: 990
+    direction: outbound
+    action: alert
+    protocol: tcp
+    destination:
+      zone: external
+    tags: [audit, rollout]
+
+  # `allow-inspect`, not `allow`. A packet-stage `allow` is a final verdict
+  # reached before identity is resolved, so it would shadow every audit rule
+  # above that depends on knowing which binary sent the packet — the exact
+  # rules this phase exists to collect. `allow-inspect` is a provisional
+  # permit: the flow proceeds, and the identity and DPI stages still get to
+  # see it and still get to deny.
+  - id: allow-everything-else
+    description: "Phase one permits by default; this rule is what you delete at step 4"
+    priority: 9999
+    layer: packet
+    action: allow-inspect
+    tags: [rollout]

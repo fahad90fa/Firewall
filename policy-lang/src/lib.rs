@@ -409,11 +409,26 @@ fn resolve_includes(
 /// not a way to silently retarget the policy it is pulled into.
 fn merge_document(
     into: &mut ast::PolicyDocument,
-    from: ast::PolicyDocument,
+    mut from: ast::PolicyDocument,
     origin: &str,
     diagnostics: &mut Diagnostics,
     at: Span,
 ) {
+    // Spans in `from` index the fragment's text, not the text the renderer
+    // will have. Retarget them to the `include:` line before anything can
+    // report against them.
+    ast::retarget_spans(&mut from, at);
+
+    into.included_definitions.extend(
+        from.address_groups
+            .iter()
+            .map(|g| g.name.value.clone())
+            .chain(from.port_groups.iter().map(|g| g.name.value.clone()))
+            .chain(from.signature_groups.iter().map(|g| g.name.value.clone()))
+            .chain(from.applications.iter().map(|a| a.name.value.clone())),
+    );
+    into.included_definitions.extend(from.included_definitions);
+
     into.address_groups.extend(from.address_groups);
     into.port_groups.extend(from.port_groups);
     into.signature_groups.extend(from.signature_groups);
@@ -566,6 +581,60 @@ rules:
         // The include's address group resolved in the including policy.
         let local = policy.rules.iter().find(|x| x.name == "local").unwrap();
         assert_eq!(local.dest.cidrs.len(), 1);
+    }
+
+    #[test]
+    fn diagnostics_about_included_content_point_inside_the_file_being_compiled() {
+        // A span indexes one file's text. Before this was fixed, a diagnostic
+        // about an included definition kept the fragment's byte offsets and
+        // rendered a caret over whatever happened to sit at that offset in
+        // the *including* file — a confident, wrong answer to "where?".
+        let mut map = HashMap::new();
+        map.insert(
+            "lib.yaml".to_string(),
+            // Long enough that the fragment's offsets run past the end of the
+            // short including file, which is what made the bug visible.
+            format!(
+                "# {}\nversion: 1\naddress_groups:\n  wide: [10.0.0.0/8]\n",
+                "x".repeat(400)
+            ),
+        );
+        let src = "version: 1\ndefaults:\n  action: deny\ninclude: [lib.yaml]\n\
+                   rules:\n  - id: local\n    priority: 20\n    action: allow\n    protocol: tcp\n\
+                   \x20   destination:\n      addresses: [wide]\n";
+        let r = compile_with_loader("t", src, &CompileOptions::default(), &MapLoader(map));
+        assert!(r.is_ok(), "{}", r.render());
+        for d in r.diagnostics.iter() {
+            assert!(
+                d.span.end as usize <= src.len(),
+                "{} points at {}..{}, past the end of a {}-byte file",
+                d.code,
+                d.span.start,
+                d.span.end,
+                src.len()
+            );
+        }
+    }
+
+    #[test]
+    fn an_unused_definition_from_an_include_is_not_reported() {
+        // A shared fragment defines more than any one consumer uses. Warning
+        // about that would push every consumer to fork the fragment.
+        let mut map = HashMap::new();
+        map.insert(
+            "lib.yaml".to_string(),
+            "version: 1\naddress_groups:\n  used: [10.0.0.0/8]\n  spare: [192.168.0.0/16]\n"
+                .to_string(),
+        );
+        let src = "version: 1\ndefaults:\n  action: deny\ninclude: [lib.yaml]\n\
+                   address_groups:\n  local_spare: [172.16.0.0/12]\n\
+                   rules:\n  - id: local\n    priority: 20\n    action: allow\n    protocol: tcp\n\
+                   \x20   destination:\n      addresses: [used]\n";
+        let r = compile_with_loader("t", src, &CompileOptions::default(), &MapLoader(map));
+        let text = r.render();
+        assert!(!text.contains("`spare`"), "included definitions are a library:\n{text}");
+        // But one the policy itself declares and never uses is still dead weight.
+        assert!(text.contains("`local_spare`"), "{text}");
     }
 
     #[test]

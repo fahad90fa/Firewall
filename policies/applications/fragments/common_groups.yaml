@@ -1,0 +1,25 @@
+# Shared definitions, included by the application policies.
+#
+# A fragment is not a policy: it has no `defaults:` and no rules that make
+# sense on their own. `include:` merges definitions and rules into the
+# including document, and the including document's own `defaults:` and
+# `metadata:` win, so a fragment deliberately declares neither.
+
+version: 1
+
+address_groups:
+  rfc1918:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+  link_local: [169.254.0.0/16, fe80::/10]
+  loopback: [127.0.0.0/8, ::1/128]
+  corp_dns: [10.10.0.53/32, 10.10.1.53/32]
+  public_dns: [1.1.1.1/32, 8.8.8.8/32, 9.9.9.9/32]
+  all_dns: [corp_dns, public_dns]
+
+port_groups:
+  web: [80, 443]
+  dns: [53]
+  mail: [465, 587, 993]
+  ephemeral: [49152-65535]
