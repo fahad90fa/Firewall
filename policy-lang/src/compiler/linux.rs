@@ -286,23 +286,21 @@ fn direction_macro(d: Direction) -> &'static str {
 /// compiler already enforces `MAX_CIDRS_PER_RULE`, and this pads to the
 /// declared width so the initializer matches the struct.
 fn cidr_list(cidrs: &[Cidr]) -> String {
+    // `struct ufw_ebpf_cidr` is IPv4-only by design; the optimizer refuses to
+    // mark a rule with an IPv6 prefix as eBPF-eligible, so nothing reaching
+    // here should carry one. Skipping rather than asserting keeps a future
+    // caller from emitting an initialiser the struct cannot accept — which is
+    // the failure this used to produce, and it surfaced as the eBPF programs
+    // not compiling rather than as anything a policy test would see.
     cidrs
         .iter()
-        .map(|c| match c.addr() {
-            std::net::IpAddr::V4(a) => format!(
-                "{{ .family = 4, .prefix = {}, .v4 = 0x{:08x} }}",
-                c.prefix(),
-                u32::from(a)
-            ),
-            std::net::IpAddr::V6(a) => {
-                let o = a.octets();
-                let bytes: Vec<String> = o.iter().map(|b| format!("0x{b:02x}")).collect();
-                format!(
-                    "{{ .family = 6, .prefix = {}, .v6 = {{ {} }} }}",
-                    c.prefix(),
-                    bytes.join(", ")
-                )
-            }
+        .filter_map(|c| match c.addr() {
+            std::net::IpAddr::V4(a) => Some(format!(
+                "{{ .addr = 0x{:08x}, .prefix_len = {} }}",
+                u32::from(a),
+                c.prefix()
+            )),
+            std::net::IpAddr::V6(_) => None,
         })
         .collect::<Vec<_>>()
         .join(", ")

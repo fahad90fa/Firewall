@@ -423,3 +423,50 @@ int main(void)
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn the_generated_ebpf_table_carries_no_ipv6_prefix() {
+    // `struct ufw_ebpf_cidr` is IPv4-only, and for a while the emitter wrote
+    // `.family`/`.v6` initialisers into it. The consequence was not a wrong
+    // verdict — it was the eBPF programs failing to compile, which nothing in
+    // this suite noticed because the ABI policy above happens to put no
+    // address-bearing rule in the eligible prefix.
+    //
+    // So this uses a policy that does, and checks the shape of what comes out.
+    let source = "\
+version: 1
+defaults:
+  action: deny
+rules:
+  - id: drop-multicast
+    priority: 10
+    layer: packet
+    direction: inbound
+    action: deny
+    protocol: tcp
+    source:
+      addresses: [224.0.0.0/4, fe80::/10]
+";
+    let result = compile_str("ebpf-cidr", source, &CompileOptions::default());
+    assert!(result.is_ok(), "{}", result.render());
+
+    let artifact = result.artifact(Platform::Linux).expect("linux artifact");
+    let header = &artifact
+        .files
+        .iter()
+        .find(|f| f.path.ends_with("ufw_ebpf_rules.h"))
+        .expect("generated eBPF header")
+        .contents;
+
+    assert!(
+        !header.contains(".family") && !header.contains(".v6"),
+        "the eBPF table uses fields `struct ufw_ebpf_cidr` does not have:\n{header}"
+    );
+    // And the rule must not have been silently narrowed: a rule the fast path
+    // cannot express in full belongs on the slow path entirely, not on the
+    // fast path with half its addresses.
+    assert!(
+        header.contains("#define UFW_EBPF_RULE_COUNT 0"),
+        "a rule with an IPv6 prefix should not be eBPF-eligible at all:\n{header}"
+    );
+}

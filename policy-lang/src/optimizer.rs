@@ -519,6 +519,19 @@ pub fn is_ebpf_expressible(rule: &CompiledRule) -> bool {
     {
         return false;
     }
+    // The fast path's rule table is IPv4-only — see `struct ufw_ebpf_cidr` in
+    // kernel/linux/ebpf/common.h and the note in packet_filter.c. A rule
+    // naming an IPv6 prefix cannot be expressed there.
+    //
+    // This was missing, and the consequence was not a wrong verdict: the
+    // emitter produced an initialiser for a field the struct does not have,
+    // and the eBPF programs failed to compile. Every policy with an IPv6 rule
+    // in the eligible prefix — which `policies/base/default_deny.yaml` is —
+    // broke the build rather than the filtering.
+    let ipv6_cidr = |m: &AddressMatch| m.cidrs.iter().any(|c| c.addr().is_ipv6());
+    if ipv6_cidr(&rule.source) || ipv6_cidr(&rule.dest) {
+        return false;
+    }
     // Only a terminal verdict can be delivered as TC_ACT_OK/TC_ACT_SHOT. A
     // provisional allow has to reach the deeper layers, and attributing it to
     // a rule id requires the slow path.

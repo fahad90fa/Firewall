@@ -68,6 +68,46 @@
  * decided by the module.
  */
 #define UFW_EBPF_MAX_RULES 64
+
+/*
+ * LPM trie keys, for the XDP deny sets in xdp_filter.c.
+ *
+ * `prefixlen` first and in host byte order is the kernel's requirement, not a
+ * choice: BPF_MAP_TYPE_LPM_TRIE reads it from the front of the key. The
+ * address that follows stays in network order, because that is how it arrives
+ * and byte-swapping on the fast path to compare against a table the daemon
+ * could have stored either way is work for nothing.
+ */
+/*
+ * What the LSM hook recorded about the process that opened a socket.
+ *
+ * Deliberately does not carry a path. A path is variable-length and would make
+ * this structure large enough to matter at 65536 entries, and it is also the
+ * thing that can be changed underneath — the inode cannot. The daemon resolves
+ * (device, inode, generation) to a path and a signature when it needs to, and
+ * a replaced binary gets a new inode, which is exactly the change an identity
+ * rule must notice.
+ */
+struct ufw_lsm_identity {
+	__u64 inode;
+	__u64 cgroup_id;
+	__u64 captured_ns;
+	__u32 device;
+	__u32 inode_generation;
+	__u32 pid;
+	__u32 uid;
+	char  comm[16];
+};
+
+struct ufw_lpm_key_v4 {
+	__u32 prefixlen;
+	__u32 addr;
+};
+
+struct ufw_lpm_key_v6 {
+	__u32 prefixlen;
+	__u8  addr[16];
+};
 #define UFW_EBPF_MAX_CIDRS 8
 #define UFW_EBPF_MAX_PORTS 4
 

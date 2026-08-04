@@ -24,15 +24,21 @@ CLANG ?= clang
 BPFTOOL ?= bpftool
 ARCH := $(shell uname -m | sed 's/x86_64/x86/; s/aarch64/arm64/')
 
-EBPF_SRC := ebpf/packet_filter.c ebpf/conntrack.c ebpf/metering.c
+EBPF_SRC := ebpf/packet_filter.c ebpf/conntrack.c ebpf/metering.c ebpf/xdp_filter.c ebpf/identity_lsm.c
 EBPF_OBJ := $(EBPF_SRC:.c=.o)
 
 # -O2 is not optional for eBPF: the verifier rejects unoptimised output,
 # because the patterns it needs to see (bounded loops unrolled, bounds checks
 # hoisted) only appear after optimisation. -g keeps BTF, which the loader
 # needs for CO-RE.
+# See ebpf/Makefile for why the multiarch path is needed on Debian.
+MULTIARCH := $(shell $(CC) -print-multiarch 2>/dev/null)
+ifneq ($(MULTIARCH),)
+BPF_INCLUDES += -I/usr/include/$(MULTIARCH)
+endif
+
 BPF_CFLAGS := -O2 -g -target bpf -D__TARGET_ARCH_$(ARCH) \
-	-I$(PWD)/ebpf -I$(GENERATED) \
+	-I$(PWD)/ebpf -I$(GENERATED) $(BPF_INCLUDES) \
 	-Wall -Werror -Wno-unused-function
 
 .PHONY: all module ebpf install load unload check clean generated

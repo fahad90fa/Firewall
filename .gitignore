@@ -31,3 +31,7 @@ DerivedData/
 .vscode/
 .idea/
 *.swp
+kernel/linux/ebpf/*.o
+fuzz/corpus/
+fuzz/fuzz-*
+fuzz/crash-*

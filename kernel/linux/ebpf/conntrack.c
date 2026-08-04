@@ -88,6 +88,13 @@ static __always_inline __u64 idle_limit(__u8 protocol)
 	return UFW_CT_OTHER_IDLE_NS;
 }
 
+/* `bpf_for_each_map_elem` hands the callback a `struct bpf_map *`, which no
+ * UAPI header declares — it is a kernel-internal type the verifier knows and
+ * C does not. Forward-declaring it here rather than inside the prototype is
+ * what stops -Wvisibility rejecting the file, and -Werror made that fatal:
+ * this program did not build at all on a stock toolchain. */
+struct bpf_map;
+
 static __u64 sweep_one(struct bpf_map *map, struct ufw_flow_key *key,
 		       struct ufw_flow_state *state, struct sweep_ctx *ctx)
 {

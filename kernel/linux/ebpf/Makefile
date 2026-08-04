@@ -35,12 +35,22 @@ GENERATED ?= ../../../build/generated/linux
 #
 # -g keeps BTF, which CO-RE needs to relocate field offsets against the running
 # kernel rather than the one this was compiled against.
+# Debian and Ubuntu put `asm/types.h` under a multiarch directory, and
+# <linux/bpf.h> includes it transitively. Without this the build fails on
+# exactly the distributions docs/development/setup.md tells you to use, with an
+# error that names a header nobody wrote. Harmless where the path does not
+# exist.
+MULTIARCH := $(shell $(CC) -print-multiarch 2>/dev/null)
+ifneq ($(MULTIARCH),)
+INCLUDES += -I/usr/include/$(MULTIARCH)
+endif
+
 CFLAGS := -O2 -g -Wall -Werror \
 	-target bpf \
 	-D__TARGET_ARCH_$(ARCH) \
-	-I. -I$(GENERATED)
+	-I. -I$(GENERATED) $(INCLUDES)
 
-SRCS := packet_filter.c conntrack.c metering.c
+SRCS := packet_filter.c conntrack.c metering.c xdp_filter.c identity_lsm.c
 OBJS := $(SRCS:.c=.o)
 
 .PHONY: all verify dump clean generated
