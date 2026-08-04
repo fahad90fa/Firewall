@@ -192,7 +192,7 @@ port configured as encrypted.
 
 ## Status
 
-Every layer above the kernel boundary is implemented and tested: 676 tests
+Every layer above the kernel boundary is implemented and tested: 687 tests
 covering the compiler, the daemon, the CLI, the wire protocol and end-to-end
 scenarios, plus ABI checks that compile the generated C against the kernel's own
 headers.

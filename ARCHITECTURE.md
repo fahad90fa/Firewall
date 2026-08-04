@@ -450,6 +450,6 @@ worse than a smaller one:
   Throughput numbers belong to a benchmark on known hardware, not to CI, where an
   absolute threshold gets raised until it stops failing and then asserts nothing.
 
-Everything above the kernel boundary is real and tested: 676 tests across the
+Everything above the kernel boundary is real and tested: 687 tests across the
 compiler, daemon, CLI, wire protocol and end-to-end scenarios, plus ABI checks
 that compile the generated C against the kernel's own headers.
