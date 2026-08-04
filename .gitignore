@@ -1,0 +1,33 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock.orig
+
+# Generated policy artifacts
+/build/generated/
+*.generated.h
+*.generated.swift
+
+# Kernel build output
+*.o
+*.ko
+*.mod
+*.mod.c
+*.mod.o
+*.symvers
+*.order
+.tmp_versions/
+*.sys
+*.pdb
+*.obj
+
+# macOS
+.DS_Store
+*.xcuserstate
+xcuserdata/
+DerivedData/
+
+# Editors
+.vscode/
+.idea/
+*.swp

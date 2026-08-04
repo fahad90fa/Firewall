@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+    "shared",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "Apache-2.0"
+repository = "https://github.com/fahad90fa/Firewall"
+authors = ["Unified Firewall Project"]
+
+# The entire workspace is deliberately dependency-free.
+#
+# This is a security product whose output drives kernel-mode filtering
+# decisions on three operating systems. Every third-party crate pulled into
+# the policy compiler or the daemon becomes part of the trusted computing
+# base of the firewall, so the project hand-implements the small amount of
+# infrastructure it needs (YAML-subset parsing, JSON emission, SHA-256,
+# HTTP/1.1, TOML-subset configuration) rather than importing it.
+#
+# Consequence: `cargo build` works offline, reproducibly, on any host with a
+# stock Rust toolchain and no registry access.
+[workspace.dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"
+
+[profile.release.package."*"]
+opt-level = 3
