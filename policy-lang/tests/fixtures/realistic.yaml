@@ -1,0 +1,192 @@
+# Test fixture: a policy shaped like one a real deployment would ship.
+# Exercises every construct in the language so the lexer, parser and analyzer
+# integration tests all have something substantial to chew on.
+
+version: 1
+
+metadata:
+  name: workstation-baseline
+  description: "Default-deny workstation policy with per-application egress"
+  revision: 12
+  author: security-engineering
+
+defaults:
+  action: deny
+  log: true
+  priority: 1000
+  stateful: true
+
+address_groups:
+  rfc1918:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+  corp_dns:
+    - 10.10.0.53/32
+    - 10.10.1.53/32
+  public_dns: [1.1.1.1/32, 8.8.8.8/32, 9.9.9.9/32]
+  # Groups may reference other groups.
+  all_dns: [corp_dns, public_dns]
+  update_servers:
+    - 203.0.113.0/24
+    - 2001:db8:1::/48
+
+port_groups:
+  web: [80, 443]
+  quic: [443]
+  dev_tools: [22, 3000-3010, 8000-8100]
+  ephemeral: [49152-65535]
+
+applications:
+  browser:
+    description: "Managed web browser"
+    trust: [">= trusted"]
+    require_valid_signature: true
+    platforms:
+      windows:
+        path: "C:\\Program Files\\Contoso Browser\\browser.exe"
+        signer: "Contoso Ltd"
+      linux:
+        paths:
+          - /usr/lib/contoso-browser/browser
+          - /opt/contoso/browser
+      macos:
+        bundle_id: com.contoso.browser
+        team_id: ABCDE12345
+
+  package_manager:
+    trust: [system, trusted]
+    platforms:
+      windows:
+        path: "C:\\Windows\\System32\\wuauclt.exe"
+      linux:
+        paths: [/usr/bin/apt, /usr/bin/dnf, /usr/bin/pacman]
+      macos:
+        path: /usr/sbin/softwareupdate
+
+  dev_toolchain:
+    platforms:
+      linux:
+        paths: [/usr/bin/git, /usr/bin/ssh, /usr/local/bin/*]
+      macos:
+        paths: [/usr/bin/git, /usr/bin/ssh]
+      windows:
+        path: "C:\\Program Files\\Git\\bin\\git.exe"
+
+signature_groups:
+  exfiltration: [dns-tunnel-long-label, dns-tunnel-high-entropy]
+  exploits: [http-exploit-post, tls-downgrade-attempt]
+  everything: [exfiltration, exploits]
+
+network_profile:
+  internal: [rfc1918]
+  perimeter: [203.0.113.0/24]
+  gateways: [10.0.0.1]
+  dns_servers: [10.10.0.53, 10.10.1.53]
+  perimeter_crossing_requires_dpi: true
+
+rules:
+  # --- Layer 1/2: cheap header-only rules, evaluated first ---------------
+  - id: allow-loopback
+    priority: 10
+    layer: packet
+    action: allow
+    destination: 127.0.0.0/8
+    tags: [baseline]
+
+  - id: block-telnet
+    priority: 20
+    layer: packet
+    action: deny
+    protocol: tcp
+    destination:
+      ports: [23]
+    tags: [baseline, hardening]
+
+  - id: allow-dns
+    priority: 100
+    layer: packet
+    direction: outbound
+    action: allow
+    protocol: udp
+    destination:
+      addresses: [all_dns]
+      ports: [53]
+    tags: [baseline]
+
+  # --- Layer 4: per-application identity ---------------------------------
+  - id: browser-web
+    priority: 200
+    direction: outbound
+    action: allow
+    protocol: tcp
+    application: browser
+    destination:
+      ports: web
+
+  - id: updates
+    priority: 210
+    direction: outbound
+    action: allow
+    protocol: tcp
+    application: package_manager
+    destination:
+      addresses: [update_servers]
+      ports: web
+
+  - id: dev-egress
+    priority: 220
+    direction: outbound
+    action: allow
+    protocol: tcp
+    application: dev_toolchain
+    destination:
+      ports: dev_tools
+    schedule:
+      days: [weekdays]
+      start: "07:00"
+      end: "20:00"
+
+  - id: deny-unsigned-egress
+    priority: 900
+    direction: outbound
+    action: deny
+    application:
+      trust: [untrusted, unknown]
+    tags: [hardening]
+
+  # --- Layer 3/5: payload inspection -------------------------------------
+  - id: dns-exfiltration
+    priority: 10
+    layer: stream
+    action: allow
+    protocol: udp
+    dpi:
+      signatures: [exfiltration]
+      protocols: [dns]
+      on_match: deny
+    tags: [ips]
+
+  - id: known-exploits
+    priority: 20
+    layer: stream
+    action: allow
+    protocol: tcp
+    dpi:
+      signatures: [exploits]
+      protocols: [http, tls]
+      on_match: deny
+    tags: [ips]
+
+  - id: audit-external-tls
+    priority: 800
+    layer: app-dpi
+    action: alert
+    protocol: tcp
+    destination:
+      zone: external
+      ports: [443]
+    dpi:
+      protocols: [tls]
+      on_match: alert
+    tags: [audit]

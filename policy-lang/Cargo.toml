@@ -1,0 +1,16 @@
+[package]
+name = "ufw-policy-lang"
+description = "The Unified Policy Language compiler: one policy source, three kernel backends"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "ufw_policy_lang"
+path = "src/lib.rs"
+
+[dependencies]
+ufw-shared = { path = "../shared" }

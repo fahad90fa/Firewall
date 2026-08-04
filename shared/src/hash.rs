@@ -26,7 +26,7 @@ const INIT: [u32; 8] = [
 ];
 
 /// Streaming SHA-256 state.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Sha256 {
     state: [u32; 8],
     buf: [u8; 64],
@@ -233,9 +233,34 @@ pub fn derive_rule_id(policy_name: &str, rule_name: &str) -> u32 {
     crate::constants::RULE_ID_BASE + (raw % span)
 }
 
+/// Derive a stable 32-bit signature id from a signature's symbolic name.
+///
+/// Policies reference DPI signatures by name (`http-exploit-post`); the
+/// signature files in `sig-rules/` are keyed the same way. Neither side has to
+/// maintain a shared numbering table because both derive the same id from the
+/// name, and the id is what actually travels to the kernel — where a 32-bit
+/// integer compare is affordable per packet and a string compare is not.
+pub fn derive_signature_id(name: &str) -> u32 {
+    let mut h = Sha256::new();
+    h.update(b"ufw-signature\x1f");
+    h.update(name.as_bytes());
+    let d = h.finalize();
+    let raw = u32::from_be_bytes([d[0], d[1], d[2], d[3]]);
+    // Reserve 0 so "no signature" stays distinguishable from a real id.
+    raw.max(1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signature_ids_are_stable_and_nonzero() {
+        let a = derive_signature_id("http-exploit-post");
+        assert_eq!(a, derive_signature_id("http-exploit-post"));
+        assert_ne!(a, derive_signature_id("http-exploit-get"));
+        assert_ne!(a, 0);
+    }
 
     #[test]
     fn fips_vectors() {

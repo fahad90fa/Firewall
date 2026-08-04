@@ -915,7 +915,7 @@ mod tests {
     use super::*;
     use crate::hash;
     use crate::log_types::{FiveTuple, LogEvent};
-    use crate::policy_types::{Action, CompiledRule, Decision, Direction, Layer, Protocol};
+    use crate::policy_types::{Action, CompiledRule, Decision, Layer};
 
     fn sample_policy() -> CompiledPolicy {
         let mut p = CompiledPolicy::new("sample", Decision::Deny);

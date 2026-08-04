@@ -3,5 +3,12 @@
 version = 3
 
 [[package]]
+name = "ufw-policy-lang"
+version = "0.1.0"
+dependencies = [
+ "ufw-shared",
+]
+
+[[package]]
 name = "ufw-shared"
 version = "0.1.0"

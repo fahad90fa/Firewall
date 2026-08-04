@@ -55,7 +55,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use crate::constants;
 use crate::hash;
-use crate::identity_types::{AppIdentity, TrustLevel, TrustMask};
+use crate::identity_types::{AppIdentity, TrustMask};
 use crate::json::JsonWriter;
 use crate::protocol::{ProtoError, Reader, Writer};
 
@@ -954,82 +954,82 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
     pi == p.len()
 }
 
-/// Predicate over the resolved application identity.
+/// One way to recognize an application.
 ///
-/// Semantics mirror [`AddressMatch`]: union within a kind, intersection across
-/// kinds. A context with no resolved identity never matches, negated or not.
+/// Within a fingerprint the semantics mirror [`AddressMatch`]: union within a
+/// kind, intersection across kinds. So a fingerprint naming two paths and one
+/// signer means "either path, *and* that signer".
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct AppMatch {
+pub struct AppFingerprint {
     pub paths: Vec<PathPattern>,
     pub sha256: Vec<[u8; 32]>,
     pub signers: Vec<String>,
     pub team_ids: Vec<String>,
     pub bundle_ids: Vec<String>,
-    /// Empty mask means "unconstrained" is expressed as [`TrustMask::ANY`];
-    /// an empty mask literally matches nothing and the compiler rejects it.
-    pub trust: TrustMask,
-    pub require_valid_signature: bool,
-    pub negate: bool,
 }
 
-impl AppMatch {
-    pub fn any() -> Self {
-        AppMatch { trust: TrustMask::ANY, ..Default::default() }
-    }
-
-    /// Whether this predicate constrains nothing at all.
-    pub fn is_unconstrained(&self) -> bool {
+impl AppFingerprint {
+    pub fn is_empty(&self) -> bool {
         self.paths.is_empty()
             && self.sha256.is_empty()
             && self.signers.is_empty()
             && self.team_ids.is_empty()
             && self.bundle_ids.is_empty()
-            && self.trust.is_any()
-            && !self.require_valid_signature
     }
 
-    pub fn matches(&self, id: Option<&AppIdentity>) -> bool {
-        let Some(id) = id else {
-            // Fail closed: an identity predicate over an unknown process is
-            // never satisfied, and negating it does not help.
+    pub fn matches(&self, id: &AppIdentity) -> bool {
+        if !self.paths.is_empty() && !self.paths.iter().any(|p| p.matches(&id.path)) {
             return false;
-        };
-
-        let mut hit = true;
-        if !self.paths.is_empty() {
-            hit &= self.paths.iter().any(|p| p.matches(&id.path));
         }
         if !self.sha256.is_empty() {
-            hit &= match &id.sha256 {
-                Some(d) => self.sha256.iter().any(|h| h == d),
-                None => false,
-            };
+            match &id.sha256 {
+                Some(d) => {
+                    if !self.sha256.iter().any(|h| h == d) {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
         }
         if !self.signers.is_empty() {
-            hit &= match &id.signer {
-                Some(s) => self.signers.iter().any(|w| w.eq_ignore_ascii_case(s)),
-                None => false,
-            };
+            match &id.signer {
+                Some(s) => {
+                    if !self.signers.iter().any(|w| w.eq_ignore_ascii_case(s)) {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
         }
         if !self.team_ids.is_empty() {
-            hit &= match &id.team_id {
-                Some(t) => self.team_ids.iter().any(|w| w == t),
-                None => false,
-            };
+            match &id.team_id {
+                Some(t) => {
+                    if !self.team_ids.iter().any(|w| w == t) {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
         }
         if !self.bundle_ids.is_empty() {
-            hit &= match &id.bundle_id {
-                Some(b) => self.bundle_ids.iter().any(|w| w.eq_ignore_ascii_case(b)),
-                None => false,
-            };
+            match &id.bundle_id {
+                Some(b) => {
+                    if !self.bundle_ids.iter().any(|w| w.eq_ignore_ascii_case(b)) {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
         }
-        if !self.trust.is_any() {
-            hit &= self.trust.contains(id.trust);
-        }
-        if self.require_valid_signature {
-            hit &= id.signature_valid;
-        }
-        hit != self.negate
+        true
+    }
+
+    pub fn pattern_count(&self) -> usize {
+        self.paths.len()
+            + self.sha256.len()
+            + self.signers.len()
+            + self.team_ids.len()
+            + self.bundle_ids.len()
     }
 
     pub fn encode(&self, w: &mut Writer) {
@@ -1045,9 +1045,6 @@ impl AppMatch {
         w.string_list(&self.signers);
         w.string_list(&self.team_ids);
         w.string_list(&self.bundle_ids);
-        w.u8(self.trust.0);
-        w.bool(self.require_valid_signature);
-        w.bool(self.negate);
     }
 
     pub fn decode(r: &mut Reader<'_>) -> Result<Self, ProtoError> {
@@ -1071,12 +1068,109 @@ impl AppMatch {
             d.copy_from_slice(r.raw(32)?);
             sha256.push(d);
         }
-        Ok(AppMatch {
+        Ok(AppFingerprint {
             paths,
             sha256,
             signers: r.string_list()?,
             team_ids: r.string_list()?,
             bundle_ids: r.string_list()?,
+        })
+    }
+}
+
+/// Predicate over the resolved application identity.
+///
+/// # Why fingerprints are a disjunction
+///
+/// One logical application is a *different binary* on each platform: a signed
+/// PE at a Windows path, an ELF at a Linux path, a bundle id and Team ID on
+/// macOS. Flattening those into a single fingerprint and intersecting across
+/// kinds is wrong in a way that fails closed and is easy to miss — the Linux
+/// binary has no Authenticode signer, so a signer requirement contributed by
+/// the Windows half of the definition would silently stop the rule matching on
+/// Linux. (That is not hypothetical; it is what the first version of this type
+/// did, and the integration fixture caught it.)
+///
+/// So an `AppMatch` holds a *list* of fingerprints and is satisfied when any
+/// one of them matches. `trust` and `require_valid_signature` sit outside the
+/// list because they are platform-independent properties of the resolved
+/// identity, and they apply to whichever fingerprint matched.
+///
+/// A context with no resolved identity never matches, negated or not.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AppMatch {
+    /// Alternatives. Empty means "no fingerprint constraint", i.e. any
+    /// identified process.
+    pub fingerprints: Vec<AppFingerprint>,
+    /// "Unconstrained" is expressed as [`TrustMask::ANY`]; an empty mask
+    /// literally matches nothing and the compiler rejects it.
+    pub trust: TrustMask,
+    pub require_valid_signature: bool,
+    pub negate: bool,
+}
+
+impl AppMatch {
+    pub fn any() -> Self {
+        AppMatch { trust: TrustMask::ANY, ..Default::default() }
+    }
+
+    /// A predicate with a single fingerprint.
+    pub fn single(fingerprint: AppFingerprint) -> Self {
+        AppMatch { fingerprints: vec![fingerprint], ..AppMatch::any() }
+    }
+
+    /// Whether this predicate constrains nothing at all.
+    pub fn is_unconstrained(&self) -> bool {
+        self.fingerprints.iter().all(|f| f.is_empty())
+            && self.trust.is_any()
+            && !self.require_valid_signature
+    }
+
+    pub fn pattern_count(&self) -> usize {
+        self.fingerprints.iter().map(|f| f.pattern_count()).sum()
+    }
+
+    pub fn matches(&self, id: Option<&AppIdentity>) -> bool {
+        let Some(id) = id else {
+            // Fail closed: an identity predicate over an unknown process is
+            // never satisfied, and negating it does not help.
+            return false;
+        };
+
+        let mut hit = true;
+        if !self.fingerprints.is_empty() {
+            hit &= self.fingerprints.iter().any(|f| f.matches(id));
+        }
+        if !self.trust.is_any() {
+            hit &= self.trust.contains(id.trust);
+        }
+        if self.require_valid_signature {
+            hit &= id.signature_valid;
+        }
+        hit != self.negate
+    }
+
+    pub fn encode(&self, w: &mut Writer) {
+        w.u16(self.fingerprints.len() as u16);
+        for f in &self.fingerprints {
+            f.encode(w);
+        }
+        w.u8(self.trust.0);
+        w.bool(self.require_valid_signature);
+        w.bool(self.negate);
+    }
+
+    pub fn decode(r: &mut Reader<'_>) -> Result<Self, ProtoError> {
+        let n = r.u16()? as usize;
+        if n > constants::MAX_APP_PATTERNS_PER_RULE {
+            return Err(ProtoError::TooLarge(n));
+        }
+        let mut fingerprints = Vec::with_capacity(n);
+        for _ in 0..n {
+            fingerprints.push(AppFingerprint::decode(r)?);
+        }
+        Ok(AppMatch {
+            fingerprints,
             trust: TrustMask(r.u8()?),
             require_valid_signature: r.bool()?,
             negate: r.bool()?,
@@ -1379,11 +1473,33 @@ impl CompiledRule {
             }
         }
         if let Some(app) = &self.app {
+            // Application identity is a property of a *socket*, and only the
+            // connection-oriented protocols have one that all three platforms
+            // can surface at enforcement time. Windows exposes it at the ALE
+            // layers and macOS through `NEFilterFlow.sourceAppAuditToken`;
+            // neither fires for ICMP, and the packet-level hooks that do fire
+            // carry no process context.
+            //
+            // Linux *could* walk `skb->sk` to a task for a locally generated
+            // ICMP packet, so this restriction costs something there. It is
+            // still the right rule: a policy that behaved differently on one
+            // platform would break the guarantee the whole system exists to
+            // provide. The compiler warns when a rule's identity predicate is
+            // narrowed away by this.
+            if !identity_observable(ctx.protocol) {
+                return false;
+            }
             if !app.matches(ctx.identity) {
                 return false;
             }
         }
         if let Some(dpi) = &self.dpi {
+            // Same reasoning for payload inspection: there is a reassembled
+            // byte stream for TCP and a datagram payload for UDP, and nothing
+            // to inspect for ICMP.
+            if !identity_observable(ctx.protocol) {
+                return false;
+            }
             if !dpi.matches(ctx.dpi.as_ref()) {
                 return false;
             }
@@ -1512,6 +1628,16 @@ impl CompiledRule {
         w.str_array_field("tags", self.tags.iter().map(|s| s.as_str()));
         w.end_object();
     }
+}
+
+/// Whether a flow of this protocol carries application identity and
+/// inspectable payload on every supported platform.
+///
+/// `Any` is included because an abstract context (one the caller has not
+/// narrowed to a concrete protocol) must not be excluded by this test; real
+/// enforcement contexts always name a protocol.
+pub fn identity_observable(protocol: Protocol) -> bool {
+    matches!(protocol, Protocol::Tcp | Protocol::Udp | Protocol::Any)
 }
 
 /// Human-readable rendering of an address predicate, used by the CLI and the
@@ -1971,7 +2097,7 @@ impl Evaluation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity_types::SignatureType;
+    use crate::identity_types::{SignatureType, TrustLevel};
 
     fn v4(s: &str) -> IpAddr {
         s.parse().unwrap()
@@ -2113,7 +2239,10 @@ mod tests {
     #[test]
     fn app_match_intersects_across_kinds() {
         let m = AppMatch {
-            paths: vec![PathPattern::new("/usr/bin/*", false)],
+            fingerprints: vec![AppFingerprint {
+                paths: vec![PathPattern::new("/usr/bin/*", false)],
+                ..Default::default()
+            }],
             trust: TrustMask::from_levels([TrustLevel::Trusted]),
             ..AppMatch::any()
         };
@@ -2135,9 +2264,61 @@ mod tests {
 
     #[test]
     fn app_match_absent_field_is_not_a_wildcard() {
-        let m = AppMatch { team_ids: vec!["ABCDE12345".into()], ..AppMatch::any() };
+        let m = AppMatch::single(AppFingerprint {
+            team_ids: vec!["ABCDE12345".into()],
+            ..Default::default()
+        });
         // A Linux identity has no team id, so a team-id rule cannot match it.
         assert!(!m.matches(Some(&identity("/usr/bin/curl", TrustLevel::Trusted))));
+    }
+
+    #[test]
+    fn fingerprints_are_alternatives_not_one_flattened_predicate() {
+        // A cross-platform application: a signed PE on Windows, a bare path on
+        // Linux. Flattening these would make the Linux binary fail the
+        // Windows signer requirement, which is exactly the bug this shape
+        // exists to prevent.
+        let m = AppMatch {
+            fingerprints: vec![
+                AppFingerprint {
+                    paths: vec![PathPattern::new(r"C:\\App\\app.exe", true)],
+                    signers: vec!["Contoso Ltd".into()],
+                    ..Default::default()
+                },
+                AppFingerprint {
+                    paths: vec![PathPattern::new("/usr/bin/app", false)],
+                    ..Default::default()
+                },
+            ],
+            ..AppMatch::any()
+        };
+
+        let mut linux = identity("/usr/bin/app", TrustLevel::Trusted);
+        linux.signer = None;
+        assert!(m.matches(Some(&linux)), "linux binary must match its own fingerprint");
+
+        let mut windows = identity(r"C:\\App\\app.exe", TrustLevel::Trusted);
+        windows.signer = Some("Contoso Ltd".into());
+        assert!(m.matches(Some(&windows)));
+
+        // The Windows path without the signer matches neither alternative.
+        let mut forged = identity(r"C:\\App\\app.exe", TrustLevel::Trusted);
+        forged.signer = Some("Someone Else".into());
+        assert!(!m.matches(Some(&forged)));
+    }
+
+    #[test]
+    fn trust_applies_across_every_fingerprint() {
+        let m = AppMatch {
+            fingerprints: vec![
+                AppFingerprint { paths: vec![PathPattern::new("/a", false)], ..Default::default() },
+                AppFingerprint { paths: vec![PathPattern::new("/b", false)], ..Default::default() },
+            ],
+            trust: TrustMask::from_levels([TrustLevel::System]),
+            ..AppMatch::any()
+        };
+        assert!(m.matches(Some(&identity("/a", TrustLevel::System))));
+        assert!(!m.matches(Some(&identity("/b", TrustLevel::Trusted))));
     }
 
     // --- schedule ---------------------------------------------------------
@@ -2356,6 +2537,68 @@ mod tests {
     }
 
     #[test]
+    fn identity_predicates_do_not_apply_to_portless_protocols() {
+        // Windows ALE and the macOS flow provider never fire for ICMP, so the
+        // reference must agree that an identity rule does not cover it --
+        // otherwise the same policy would behave differently per platform.
+        let mut r = CompiledRule::new(90, "deny-untrusted", Layer::Identity, Action::Deny);
+        r.app = Some(AppMatch {
+            trust: TrustMask::from_levels([TrustLevel::Untrusted]),
+            ..AppMatch::any()
+        });
+        let p = build_policy(vec![r], Decision::Allow);
+        let id = identity("/tmp/x", TrustLevel::Untrusted);
+
+        let icmp = FlowContext::new(
+            &p.network_profile,
+            Direction::Outbound,
+            Protocol::Icmp,
+            (v4("10.0.0.5"), 0),
+            (v4("1.2.3.4"), 0),
+        )
+        .with_identity(&id);
+        assert_eq!(p.evaluate(&icmp).decision, Decision::Allow);
+
+        let tcp = FlowContext::new(
+            &p.network_profile,
+            Direction::Outbound,
+            Protocol::Tcp,
+            (v4("10.0.0.5"), 1),
+            (v4("1.2.3.4"), 443),
+        )
+        .with_identity(&id);
+        assert_eq!(p.evaluate(&tcp).verdict(), (Decision::Deny, 90));
+    }
+
+    #[test]
+    fn dpi_predicates_do_not_apply_to_portless_protocols() {
+        let mut r = CompiledRule::new(91, "sig", Layer::Stream, Action::Allow);
+        r.dpi = Some(DpiMatch { signatures: vec![5], l7: vec![], on_match: Action::Deny });
+        let p = build_policy(vec![r], Decision::Allow);
+        let scan = DpiScan { l7: L7Protocol::Unknown, hits: vec![5], first_hit_offset: 0, truncated: false };
+
+        let icmp = FlowContext::new(
+            &p.network_profile,
+            Direction::Outbound,
+            Protocol::Icmp,
+            (v4("10.0.0.5"), 0),
+            (v4("1.2.3.4"), 0),
+        )
+        .with_dpi(scan.clone());
+        assert_eq!(p.evaluate(&icmp).decision, Decision::Allow);
+
+        let udp = FlowContext::new(
+            &p.network_profile,
+            Direction::Outbound,
+            Protocol::Udp,
+            (v4("10.0.0.5"), 1),
+            (v4("1.2.3.4"), 53),
+        )
+        .with_dpi(scan);
+        assert_eq!(p.evaluate(&udp).verdict(), (Decision::Deny, 91));
+    }
+
+    #[test]
     fn port_constraints_on_portless_protocols_never_match() {
         let mut r = CompiledRule::new(80, "icmp-with-ports", Layer::Packet, Action::Allow);
         r.protocol = Protocol::Icmp;
@@ -2377,11 +2620,19 @@ mod tests {
     fn policy_wire_roundtrip() {
         let mut rule = allow_dns_rule();
         rule.app = Some(AppMatch {
-            paths: vec![PathPattern::new("/usr/lib/systemd/*", false)],
-            sha256: vec![hash::sha256(b"x")],
-            signers: vec!["Example Ltd".into()],
-            team_ids: vec!["TEAM123456".into()],
-            bundle_ids: vec!["com.example.app".into()],
+            fingerprints: vec![
+                AppFingerprint {
+                    paths: vec![PathPattern::new("/usr/lib/systemd/*", false)],
+                    sha256: vec![hash::sha256(b"x")],
+                    ..Default::default()
+                },
+                AppFingerprint {
+                    signers: vec!["Example Ltd".into()],
+                    team_ids: vec!["TEAM123456".into()],
+                    bundle_ids: vec!["com.example.app".into()],
+                    ..Default::default()
+                },
+            ],
             trust: TrustMask::at_least(TrustLevel::Known),
             require_valid_signature: true,
             negate: false,

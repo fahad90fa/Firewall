@@ -55,6 +55,7 @@ pub fn escape(s: &str) -> String {
 /// Nesting is manual (`begin_object` / `end_object`); the writer does not
 /// validate balance, and every emitter in this tree is covered by a test that
 /// round-trips its output through [`parse`].
+#[derive(Debug)]
 pub struct JsonWriter {
     out: String,
     needs_comma: Vec<bool>,
