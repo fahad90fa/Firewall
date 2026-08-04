@@ -189,6 +189,12 @@ pub const LINUX_GENL_LOG_GROUP: &str = "ufw_log";
 /// Linux: bpffs directory the daemon pins eBPF programs and maps under.
 pub const LINUX_BPF_PIN_DIR: &str = "/sys/fs/bpf/unified-firewall";
 
+/// Linux: where the packaged eBPF objects are installed.
+///
+/// `ufwd --load-ebpf` pins the programs and maps from here at boot, before the
+/// main daemon starts. See `build/linux/package.sh` for the unit that does it.
+pub const LINUX_BPF_OBJECT_DIR: &str = "/usr/lib/unified-firewall/bpf";
+
 /// macOS: XPC mach service shared by the daemon and the Network Extension.
 pub const MACOS_XPC_SERVICE: &str = "com.unifiedfirewall.policy.xpc";
 

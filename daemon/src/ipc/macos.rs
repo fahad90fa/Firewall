@@ -18,7 +18,9 @@
 //! identical to the other two platforms — one implementation, one set of
 //! tests, one place for a framing bug to hide. The XPC listener remains for
 //! clients that cannot open a socket in the container, notably a management
-//! tool running outside the group.
+//! tool running outside the group. That direction is one-way: the extension
+//! vends `UFWExtensionProtocol` and calls nothing back, because this daemon
+//! vends no XPC service — everything it needs travels the socket.
 //!
 //! Using a socket does not weaken the peer check. `LOCAL_PEERTOKEN` yields the
 //! connecting process's audit token, which feeds the same

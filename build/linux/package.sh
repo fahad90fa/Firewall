@@ -49,6 +49,7 @@ install -d "$STAGE/usr/sbin" "$STAGE/usr/bin"
 install -d "$STAGE/etc/unified-firewall/policies"
 install -d "$STAGE/etc/unified-firewall/sig-rules"
 install -d "$STAGE/usr/lib/systemd/system"
+install -d "$STAGE/usr/lib/unified-firewall/bpf"
 install -d "$STAGE/usr/src/unified-firewall-${VERSION}"
 
 install -m 0755 "${ROOT}/target/release/ufwd" "$STAGE/usr/sbin/ufwd"
@@ -57,6 +58,17 @@ cp -R "${ROOT}/sig-rules/." "$STAGE/etc/unified-firewall/sig-rules/"
 
 # Module sources for DKMS to rebuild against each kernel.
 cp -R "${ROOT}/kernel/linux/." "$STAGE/usr/src/unified-firewall-${VERSION}/"
+
+# The compiled eBPF objects, if this build produced them. `ufwd --load-ebpf`
+# pins from here; without them the unit fails at boot with a missing-file
+# error rather than a confusing verifier one. Absent on a machine with no BPF
+# toolchain, and that is not fatal: the netfilter table enforces the whole
+# policy on its own, and the daemon reports the fast path as unavailable.
+if compgen -G "${ROOT}/kernel/linux/ebpf/*.o" >/dev/null; then
+    cp "${ROOT}"/kernel/linux/ebpf/*.o "$STAGE/usr/lib/unified-firewall/bpf/"
+else
+    echo "note: no eBPF objects built; packaging without the fast path" >&2
+fi
 cp "${ROOT}/build/linux/dkms.conf" "$STAGE/usr/src/unified-firewall-${VERSION}/dkms.conf"
 
 # --- systemd units -------------------------------------------------------

@@ -74,6 +74,8 @@ OPTIONS:
         --check             Validate the configuration and policy, then exit
         --foreground        Log to stdout as well as the configured sinks
         --mode <MODE>       Override daemon.mode (enforce|monitor|emergency-allow)
+        --load-ebpf         Pin the eBPF programs and maps, then exit
+        --unload-ebpf       Remove those pins, then exit
     -V, --version           Print the version and exit
     -h, --help              Print this help and exit
 
@@ -90,6 +92,15 @@ struct Args {
     check_only: bool,
     foreground: bool,
     mode: Option<EnforcementMode>,
+    /// Pin the eBPF programs and maps, then exit. Run by a `oneshot` unit
+    /// before the daemon proper, so the maps outlive every later restart.
+    ebpf: Option<EbpfAction>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EbpfAction {
+    Load,
+    Unload,
 }
 
 fn parse_args() -> Result<Option<Args>, String> {
@@ -98,6 +109,7 @@ fn parse_args() -> Result<Option<Args>, String> {
         check_only: false,
         foreground: false,
         mode: None,
+        ebpf: None,
     };
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {
@@ -127,6 +139,8 @@ fn parse_args() -> Result<Option<Args>, String> {
                         .ok_or_else(|| format!("`{value}` is not an enforcement mode"))?,
                 );
             }
+            "--load-ebpf" => args.ebpf = Some(EbpfAction::Load),
+            "--unload-ebpf" => args.ebpf = Some(EbpfAction::Unload),
             other => return Err(format!("unknown argument `{other}` (try --help)")),
         }
     }
@@ -157,6 +171,12 @@ fn run() -> Result<(), String> {
 
     if args.check_only {
         return check(&config);
+    }
+
+    // Before anything else, and without touching the policy: this runs as its
+    // own `oneshot` unit ordered ahead of the daemon.
+    if let Some(action) = args.ebpf {
+        return ebpf(action);
     }
 
     // --- logging ---------------------------------------------------------
@@ -528,6 +548,92 @@ fn run() -> Result<(), String> {
 }
 
 /// `--check`: validate configuration and policy without touching the kernel.
+/// Pin the eBPF programs and maps, or remove those pins.
+///
+/// # Why this shells out to bpftool
+///
+/// Loading a BPF program means the `bpf(2)` syscall, and reaching it from Rust
+/// means either `libc` or a hand-written syscall wrapper per architecture.
+/// This workspace takes no dependencies, and hand-rolling architecture-
+/// specific syscall stubs to save one exec is a poor trade: `bpftool` ships
+/// with the kernel's own tooling, is versioned with it, and reports verifier
+/// rejections in the form the kernel meant them.
+///
+/// The daemon still owns *where* things are pinned, because the pin paths are
+/// also what `fast_path_available` looks for, and two places that both know
+/// the layout is one place too many.
+fn ebpf(action: EbpfAction) -> Result<(), String> {
+    use std::process::Command;
+
+    let pin_dir = constants::LINUX_BPF_PIN_DIR;
+
+    if action == EbpfAction::Unload {
+        // Removing a pin does not stop a program that is still attached; it
+        // drops this reference to it. Detaching is the module's business, and
+        // an unload that also detached would leave the machine unfiltered
+        // during a package upgrade.
+        let mut removed = 0usize;
+        for path in ufw_daemon::ipc::linux::bpf_pin_paths() {
+            if std::path::Path::new(&path).exists() {
+                std::fs::remove_file(&path)
+                    .map_err(|e| format!("cannot remove pin {path}: {e}"))?;
+                removed += 1;
+            }
+        }
+        // Not an error when there was nothing to remove: `ExecStop` runs on
+        // every stop, including after a start that never got this far, and a
+        // failing stop leaves the unit in a state an operator has to clear by
+        // hand.
+        println!("removed {removed} pin(s) under {pin_dir}");
+        return Ok(());
+    }
+
+    let object_dir = std::path::Path::new(constants::LINUX_BPF_OBJECT_DIR);
+    if !object_dir.exists() {
+        return Err(format!(
+            "{} does not exist; the eBPF objects are part of the kernel-module \
+             package, so this usually means only the userland half is installed",
+            object_dir.display()
+        ));
+    }
+
+    std::fs::create_dir_all(pin_dir)
+        .map_err(|e| format!("cannot create {pin_dir}: {e} (is /sys/fs/bpf mounted?)"))?;
+
+    let object = object_dir.join("packet_filter.o");
+    if !object.exists() {
+        return Err(format!("{} is missing", object.display()));
+    }
+
+    let output = Command::new("bpftool")
+        .arg("prog")
+        .arg("loadall")
+        .arg(&object)
+        .arg(pin_dir)
+        .arg("pinmaps")
+        .arg(pin_dir)
+        .output()
+        .map_err(|e| {
+            format!(
+                "cannot run bpftool: {e}. It ships with the kernel's tooling \
+                     (linux-tools on Debian, bpftool on Fedora)"
+            )
+        })?;
+
+    if !output.status.success() {
+        // The verifier's own words. Summarising them would throw away the
+        // instruction number, which is the only part that locates the problem.
+        return Err(format!(
+            "bpftool refused {}:\n{}",
+            object.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    println!("pinned the eBPF fast path under {pin_dir}");
+    Ok(())
+}
+
 fn check(config: &Config) -> Result<(), String> {
     println!("configuration: ok");
     println!("  host id        : {}", config.daemon.host_id);

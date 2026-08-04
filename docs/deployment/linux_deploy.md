@@ -94,6 +94,18 @@ Everything else is denied by the unit's sandbox — `ProtectSystem=strict`,
 
 ## eBPF pinning
 
+The `unified-firewall-ebpf.service` unit runs `ufwd --load-ebpf` before the
+daemon starts, and `--unload-ebpf` on stop. Loading shells out to `bpftool`
+rather than linking libbpf: reaching `bpf(2)` from Rust means libc or
+hand-written per-architecture syscall stubs, and `bpftool` ships with the
+kernel's own tooling, is versioned with it, and reports verifier rejections in
+the form the kernel meant them. Install `linux-tools` (Debian) or `bpftool`
+(Fedora) or the unit fails at boot saying so.
+
+Removing a pin does not detach a running program — that is the module's
+business, and an unload that also detached would leave the machine unfiltered
+during a package upgrade.
+
 Maps are pinned under `/sys/fs/bpf/ufw` so they outlive the loader. Restarting
 the daemon should not flush the flow table and re-decide every established
 connection.

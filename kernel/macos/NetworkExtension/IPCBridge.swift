@@ -61,13 +61,11 @@ private let ufwLocalPeerToken: Int32 = 0x006
     func installSignatures(_ payload: Data, withReply reply: @escaping (Bool, String?) -> Void)
     func setEnforcementMode(_ mode: UInt8, withReply reply: @escaping (Bool) -> Void)
     func statistics(withReply reply: @escaping (Data?) -> Void)
-}
-
-/// What the daemon exposes to the extension.
-@objc protocol UFWDaemonProtocol {
-    func reportEvent(_ payload: Data)
-    func requestPolicy(withReply reply: @escaping (Data?) -> Void)
-    func requestSignatures(withReply reply: @escaping (Data?) -> Void)
+    /// Collect and clear the buffered log events. Pull rather than push: an
+    /// extension that pushed would need a client to push *to*, and a client
+    /// that has gone away without invalidating its connection would then get
+    /// events written at it for as long as XPC keeps the name alive.
+    func collectLogEvents(withReply reply: @escaping ([Data]) -> Void)
 }
 
 /// Counters the daemon can ask the extension for.
@@ -127,10 +125,12 @@ final class UFWIPCBridge: NSObject {
 
             let connection = NSXPCConnection(machServiceName: Self.machServiceName,
                                              options: [.privileged])
-            connection.remoteObjectInterface = NSXPCInterface(with: UFWDaemonProtocol.self)
-            // The daemon pushes policy and signatures; without an exported
-            // object those calls reach nothing and fail silently on its side,
-            // which reads as "the extension accepted it".
+            // Exported only. Nothing is called *on* the daemon over XPC: it
+            // vends no XPC service, and an earlier version of this file called
+            // `requestPolicy` on a proxy that reached nothing, which reads in a
+            // log as "the daemon did not answer" rather than as "there is
+            // nobody there". Policy is pulled over the control socket instead,
+            // which is where the daemon actually is.
             connection.exportedInterface = NSXPCInterface(with: UFWExtensionProtocol.self)
             connection.exportedObject = self
             connection.invalidationHandler = { [weak self] in
@@ -145,8 +145,6 @@ final class UFWIPCBridge: NSObject {
             }
             connection.resume()
             self.connection = connection
-
-            self.requestPolicy()
         }
     }
 
@@ -154,27 +152,6 @@ final class UFWIPCBridge: NSObject {
         queue.async { [weak self] in
             self?.connection?.invalidate()
             self?.connection = nil
-        }
-    }
-
-    /// Ask the daemon for the current policy. Called on connect and on
-    /// reconnect, so a daemon restart re-synchronises rather than leaving the
-    /// extension on whatever it last received.
-    private func requestPolicy() {
-        guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ [weak self] error in
-            self?.log.error("requesting policy: \(error.localizedDescription, privacy: .public)")
-        }) as? UFWDaemonProtocol else { return }
-
-        proxy.requestPolicy { [weak self] payload in
-            guard let self, let payload else { return }
-            self.applyPolicy(payload)
-        }
-        // Signatures are pulled alongside, not pushed afterwards. A daemon
-        // restart would otherwise leave the extension enforcing the policy it
-        // re-fetched against whatever signature set it happened to be holding.
-        proxy.requestSignatures { [weak self] payload in
-            guard let self, let payload else { return }
-            self.applySignatures(payload)
         }
     }
 
@@ -220,6 +197,18 @@ final class UFWIPCBridge: NSObject {
 
     // MARK: Outbound
 
+    /// Buffer one event for a management client to collect.
+    ///
+    /// Log events reach the *daemon* over the control socket, in the binary
+    /// form `UFWLogEventWire` produces — the same schema Linux and Windows
+    /// emit, so events from three platforms correlate on rule id without a
+    /// translation step. This queue holds the JSON form for an XPC client that
+    /// asks, and is bounded and lossy: a client that stops reading must not be
+    /// able to slow down a verdict.
+    ///
+    /// Dropped oldest-first. During an incident the interesting events are the
+    /// ones happening now, and a newest-first policy would preferentially drop
+    /// exactly those while keeping a backlog from before anything happened.
     func report(_ decision: UFWDecision, facts: UFWFlowFacts) {
         let event = UFWLogEvent(
             timestampMicros: UInt64(Date().timeIntervalSince1970 * 1_000_000),
@@ -243,10 +232,6 @@ final class UFWIPCBridge: NSObject {
             dpiTruncated: facts.dpi?.truncated ?? false)
 
         guard let payload = try? JSONEncoder().encode(event) else { return }
-        // The XPC queue below carries the JSON form for management clients.
-        // The daemon reads the binary form off the control socket; see
-        // `UFWLogEventWire`, and `UFWFilterDataProvider` for where the two are
-        // driven from.
 
         queue.async { [weak self] in
             guard let self else { return }
@@ -255,19 +240,15 @@ final class UFWIPCBridge: NSObject {
                 self.dropped += 1
             }
             self.pending.append(payload)
-            self.drain()
         }
     }
 
-    private func drain() {
-        guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ _ in })
-            as? UFWDaemonProtocol else {
-            // Nobody listening. Events stay queued up to the bound, so a brief
-            // daemon restart does not lose the events that happened during it.
-            return
-        }
-        while !pending.isEmpty {
-            proxy.reportEvent(pending.removeFirst())
+    /// Hand over everything queued since the last call, newest last.
+    func collectEvents() -> [Data] {
+        queue.sync {
+            let batch = pending
+            pending.removeAll(keepingCapacity: true)
+            return batch
         }
     }
 }
@@ -363,6 +344,10 @@ extension UFWIPCBridge: UFWExtensionProtocol {
             log.notice("enforcement mode is now \(mode.rawValue, privacy: .public)")
         }
         reply(true)
+    }
+
+    func collectLogEvents(withReply reply: @escaping ([Data]) -> Void) {
+        reply(collectEvents())
     }
 
     func statistics(withReply reply: @escaping (Data?) -> Void) {
