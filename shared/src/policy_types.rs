@@ -1901,6 +1901,20 @@ impl CompiledPolicy {
         })
     }
 
+    /// Hash of the policy's *content*, ignoring its revision number.
+    ///
+    /// `ruleset_hash` covers the revision, which is what makes it a fingerprint
+    /// of a specific installation. Deciding whether a freshly compiled policy
+    /// actually differs from the active one needs the opposite: a fingerprint
+    /// that is stable across renumbering, so that recompiling an unchanged file
+    /// does not churn the kernel.
+    pub fn content_hash(&self) -> [u8; 32] {
+        let mut probe = self.clone();
+        probe.revision = 0;
+        probe.ruleset_hash = [0u8; 32];
+        hash::sha256(&probe.encode())
+    }
+
     /// Recompute the hash and compare it against the stored one.
     pub fn verify_hash(&self) -> bool {
         let mut probe = self.clone();

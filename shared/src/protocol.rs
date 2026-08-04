@@ -29,7 +29,8 @@
 //! ```
 
 use crate::constants;
-use crate::identity_types::{AppIdentity, IdentityQuery};
+use crate::identity_types::AppIdentity;
+pub use crate::identity_types::IdentityQuery;
 use crate::policy_types::{CompiledPolicy, CompiledRule, Decision};
 use crate::log_types::LogEvent;
 

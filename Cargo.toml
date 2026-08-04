@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "shared",
     "policy-lang",
+    "daemon",
 ]
 
 [workspace.package]

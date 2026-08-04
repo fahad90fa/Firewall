@@ -1,0 +1,21 @@
+[package]
+name = "ufw-daemon"
+description = "Unified Firewall control daemon: policy management, identity resolution, logging and the management API"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "ufwd"
+path = "src/main.rs"
+
+[lib]
+name = "ufw_daemon"
+path = "src/lib.rs"
+
+[dependencies]
+ufw-shared = { path = "../shared" }
+ufw-policy-lang = { path = "../policy-lang" }

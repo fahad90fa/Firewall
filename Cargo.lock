@@ -3,6 +3,14 @@
 version = 3
 
 [[package]]
+name = "ufw-daemon"
+version = "0.1.0"
+dependencies = [
+ "ufw-policy-lang",
+ "ufw-shared",
+]
+
+[[package]]
 name = "ufw-policy-lang"
 version = "0.1.0"
 dependencies = [
