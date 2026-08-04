@@ -1,0 +1,38 @@
+# Unified Firewall — Linux kernel module build.
+#
+# Invoked by the kernel build system, which is why this is a Kbuild file and
+# not a Makefile: `make -C /lib/modules/$(uname -r)/build M=$(pwd)` reads this
+# from inside the kernel's own build, with all its flags and toolchain
+# settings already established. Trying to compile a module with a hand-rolled
+# gcc line works until the kernel is built with a flag you did not copy, and
+# then it produces a module that loads and misbehaves.
+
+obj-m += ufw.o
+
+ufw-y := \
+	src/module.o \
+	src/netfilter_hooks.o \
+	src/classify.o \
+	src/identity.o \
+	src/stream_reassembly.o \
+	src/dpi_engine.o \
+	src/policy_sync.o \
+	src/logging.o
+
+ccflags-y += -I$(src)/inc
+
+# -Wall and -Wextra come from the kernel build already. These are the ones it
+# does not set that catch the mistakes this code is most exposed to.
+#
+#   -Wvla: a variable-length array on a kernel stack is a stack overflow
+#     waiting for the right input. There are none here and there should never
+#     be one.
+#   -Wframe-larger-than: the kernel's own limit is generous. Anything in this
+#     module holding more than 512 bytes of frame is a structure that belongs
+#     in a per-CPU buffer or on the heap, which is a decision worth being
+#     forced to make consciously.
+ccflags-y += -Wvla -Wframe-larger-than=512
+
+# Fail the build on a warning. A kernel module that compiles with warnings is
+# a kernel module nobody reads the warnings of.
+ccflags-y += -Werror
