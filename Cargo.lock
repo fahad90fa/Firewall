@@ -19,6 +19,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ufw-e2e"
+version = "0.1.0"
+dependencies = [
+ "ufw-daemon",
+ "ufw-policy-lang",
+ "ufw-shared",
+]
+
+[[package]]
 name = "ufw-policy-lang"
 version = "0.1.0"
 dependencies = [

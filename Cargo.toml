@@ -5,6 +5,7 @@ members = [
     "policy-lang",
     "daemon",
     "cli",
+    "tests",
 ]
 
 [workspace.package]

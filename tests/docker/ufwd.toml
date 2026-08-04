@@ -1,0 +1,35 @@
+# Daemon configuration for the containerised traffic tests.
+#
+# Deliberately different from the shipped default in two ways, both because a
+# container is not a host:
+#
+#   - `require_kernel_module = true`. In production this is also the default,
+#     but here it matters more: the whole point of this container is to test
+#     the module, so starting without it would produce a green run that tested
+#     nothing.
+#   - Logging to stdout only. A container's logs are its stdout; writing to
+#     /var/log inside a container that is discarded at the end of the run is
+#     writing to nowhere.
+
+[daemon]
+host_id = "docker-enforcer"
+mode = "enforce"
+require_kernel_module = true
+
+[policy]
+path = "/src/tests/docker/test-policy.yaml"
+signature_dir = "/src/sig-rules"
+watch = true
+
+[ipc]
+endpoint = "netlink:ufw_ctrl"
+connect_timeout_ms = 5000
+
+[logging]
+stdout = true
+level = "debug"
+
+[api]
+# Loopback only. A management API reachable from the test network would let
+# the driver container change the policy it is supposed to be testing.
+bind = "127.0.0.1:0"

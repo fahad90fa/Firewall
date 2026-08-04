@@ -1,0 +1,111 @@
+# Unified Firewall — multi-service test orchestration.
+#
+# Three profiles, because they need different privileges and answer different
+# questions. Running them all by default would mean the cheapest check is gated
+# behind the most demanding one.
+#
+#   docker compose --profile build up      # compiles everything (no privileges)
+#   docker compose --profile verify up     # + runs the eBPF verifier (privileged)
+#   docker compose --profile traffic up    # + loads the module, moves packets
+#
+# The traffic profile needs a privileged container and a kernel matching the
+# image's headers. It will not run on every CI provider, and that is expected:
+# `build` and `verify` are the ones that gate a merge.
+
+name: unified-firewall-tests
+
+services:
+  # ---------------------------------------------------------------------
+  # Compile everything. No privileges, runs anywhere, gates the merge.
+  # ---------------------------------------------------------------------
+  build:
+    profiles: ["build", "verify", "traffic"]
+    build:
+      context: ../..
+      dockerfile: tests/docker/Dockerfile.linux
+    image: unified-firewall-test:latest
+    command: >
+      sh -c "cargo test --workspace --locked &&
+             make -C kernel/linux ebpf &&
+             make -C kernel/linux module"
+
+  # ---------------------------------------------------------------------
+  # Run the real eBPF verifier.
+  #
+  # Privileged because the verifier runs in the kernel and needs bpf(2). This
+  # is the check that catches an instruction-budget overrun, which is otherwise
+  # only discovered at load time on a production host.
+  # ---------------------------------------------------------------------
+  verify:
+    profiles: ["verify", "traffic"]
+    image: unified-firewall-test:latest
+    depends_on:
+      build:
+        condition: service_completed_successfully
+    privileged: true
+    volumes:
+      - /sys/fs/bpf:/sys/fs/bpf
+      - /sys/kernel/debug:/sys/kernel/debug
+    command: verify-ebpf
+
+  # ---------------------------------------------------------------------
+  # Load the module and move real packets through it.
+  #
+  # The only test in this tree that exercises the C on a live kernel. Needs a
+  # privileged container whose kernel matches the image's headers, which is not
+  # a given on shared CI — hence the separate profile.
+  # ---------------------------------------------------------------------
+  enforcer:
+    profiles: ["traffic"]
+    image: unified-firewall-test:latest
+    depends_on:
+      verify:
+        condition: service_completed_successfully
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - BPF
+      - SYS_MODULE
+    volumes:
+      - /lib/modules:/lib/modules:ro
+      - /sys/fs/bpf:/sys/fs/bpf
+    networks:
+      testnet:
+        ipv4_address: 172.28.0.10
+    command: >
+      sh -c "insmod kernel/linux/ufw.ko &&
+             ./target/debug/ufwd --config tests/docker/ufwd.toml --foreground"
+
+  # A peer to send traffic to and from. Plain, unprivileged, and deliberately
+  # dumb: the assertions are about what the enforcer permits, so this end only
+  # has to be reachable or not.
+  peer:
+    profiles: ["traffic"]
+    image: unified-firewall-test:latest
+    networks:
+      testnet:
+        ipv4_address: 172.28.0.20
+    command: sh -c "nc -l -k -p 8080 >/dev/null"
+
+  # Drives the traffic and asserts on the outcome.
+  driver:
+    profiles: ["traffic"]
+    image: unified-firewall-test:latest
+    depends_on:
+      - enforcer
+      - peer
+    networks:
+      testnet:
+        ipv4_address: 172.28.0.30
+    command: >
+      sh -c "cargo test --package ufw-e2e --locked -- --ignored live_traffic"
+
+networks:
+  testnet:
+    driver: bridge
+    ipam:
+      config:
+        # A fixed subnet so the test policy can name it. Chosen outside the
+        # ranges the example policies use, so a stray rule from a shipped
+        # policy cannot accidentally match test traffic.
+        - subnet: 172.28.0.0/16

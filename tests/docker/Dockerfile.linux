@@ -1,0 +1,85 @@
+# Unified Firewall — Linux test environment.
+#
+# This image answers the one question the Rust test suite cannot: does the
+# kernel C actually compile, and do the eBPF programs pass the verifier?
+#
+# It deliberately does *not* try to load the module. Loading needs a privileged
+# container with the host's kernel headers and a matching kernel, which ties
+# the test to whatever kernel the CI runner happens to be running — and a test
+# that only passes on one kernel version teaches people to skip it. What this
+# image checks is that the sources are buildable and verifier-clean, which is
+# a real property, checkable anywhere, and the one that breaks most often.
+#
+# Loading and traffic tests live in docker-compose.yml, which needs --privileged
+# and says so.
+
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# clang for the eBPF target, bpftool to run the real verifier, and the kernel
+# headers to compile the module against. `linux-headers-amd64` is a
+# meta-package that tracks the distribution kernel, so this does not pin a
+# version the image would then rot against.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        clang \
+        llvm \
+        libbpf-dev \
+        bpftool \
+        linux-headers-amd64 \
+        pkg-config \
+        curl \
+        ca-certificates \
+        iproute2 \
+        iputils-ping \
+        netcat-openbsd \
+        tcpdump \
+    && rm -rf /var/lib/apt/lists/*
+
+# Rust, for the compiler and the daemon. Pinned to the workspace's
+# rust-version rather than to `stable`, so a toolchain release does not change
+# what CI tests without anybody deciding to.
+ARG RUST_VERSION=1.74.0
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --default-toolchain ${RUST_VERSION} --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+WORKDIR /src
+
+# The build is split so that a source change does not re-fetch the toolchain,
+# and so a failure names which half broke.
+COPY . /src
+
+# 1. The Rust workspace, including the ABI tests that compile the generated
+#    headers against the kernel's own structures.
+RUN cargo build --workspace --locked && cargo test --workspace --locked
+
+# 2. Generate a policy, so the eBPF program has a rule table to compile
+#    against. `packet_filter.c` includes the generated header; without it the
+#    build fails with a missing-file error rather than anything informative.
+RUN make generate POLICY=policies/test/regression_complex.yaml
+
+# 3. The eBPF programs, through clang's bpf target.
+RUN make -C kernel/linux ebpf
+
+# 4. The real verifier. This is the check worth having: an eBPF program that
+#    compiles but exceeds the instruction budget or fails a bounds proof is a
+#    program that will be rejected at load time on a production host, and
+#    finding that out here costs seconds instead of an incident.
+#
+#    Needs /sys/fs/bpf, so it runs under `docker run --privileged` rather than
+#    at build time. See docker-compose.yml.
+RUN echo '#!/bin/sh' > /usr/local/bin/verify-ebpf \
+    && echo 'set -e' >> /usr/local/bin/verify-ebpf \
+    && echo 'mount -t bpf bpf /sys/fs/bpf 2>/dev/null || true' >> /usr/local/bin/verify-ebpf \
+    && echo 'exec make -C /src/kernel/linux check' >> /usr/local/bin/verify-ebpf \
+    && chmod +x /usr/local/bin/verify-ebpf
+
+# 5. The kernel module. Compiled, not loaded — see the header.
+RUN make -C kernel/linux module || \
+    (echo "The kernel module failed to build. If this is a headers mismatch," \
+          "the image's linux-headers-amd64 does not match its kernel; that is" \
+          "an image problem, not a source problem." && exit 1)
+
+CMD ["/bin/bash"]

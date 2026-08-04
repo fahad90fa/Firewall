@@ -1,0 +1,59 @@
+# The policy the containerised traffic tests enforce.
+#
+# Written to be falsifiable from outside: every rule has a corresponding
+# reachability check the driver container can make, and the expected outcomes
+# are stated here so the policy and the assertions cannot drift apart silently.
+#
+#   172.28.0.20:8080  reachable      (allow-peer-http)
+#   172.28.0.20:23    refused        (block-telnet)
+#   172.28.0.20:9999  refused        (no rule)
+#   172.28.0.20 ICMP  reachable      (allow-icmp)
+
+version: 1
+
+metadata:
+  name: docker-traffic-test
+  description: "Falsifiable from the driver container"
+
+defaults:
+  action: deny
+  log: true
+
+address_groups:
+  testnet: [172.28.0.0/16]
+  loopback: [127.0.0.0/8]
+
+network_profile:
+  internal: [testnet]
+
+rules:
+  - id: allow-loopback
+    priority: 10
+    layer: packet
+    action: allow
+    destination:
+      addresses: [loopback]
+
+  - id: allow-icmp
+    priority: 20
+    layer: packet
+    action: allow
+    protocol: icmp
+
+  - id: block-telnet
+    priority: 30
+    layer: packet
+    action: deny
+    protocol: tcp
+    destination:
+      ports: [23]
+
+  - id: allow-peer-http
+    priority: 100
+    layer: packet
+    direction: outbound
+    action: allow
+    protocol: tcp
+    destination:
+      addresses: [testnet]
+      ports: [8080]

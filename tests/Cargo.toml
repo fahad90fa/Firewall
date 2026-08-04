@@ -1,0 +1,55 @@
+# End-to-end scenario tests.
+#
+# A separate crate rather than tests inside daemon/ or policy-lang/, because
+# these compose several crates at once: a scenario drives the compiler, the
+# policy store, the IPC layer and a mock kernel module together. Putting them
+# in any one crate's test directory would make that crate depend on the others
+# for testing only, and would put the shared harness somewhere arbitrary.
+#
+# The layout mirrors the blueprint: `harness/` is the library, `scenarios/` are
+# the tests. Each scenario is its own test binary so a failure names the
+# scenario, and so one scenario hanging does not take the others' output with
+# it.
+
+[package]
+name = "ufw-e2e"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "ufw_e2e"
+path = "harness/mod.rs"
+
+[dependencies]
+ufw-shared = { path = "../shared" }
+ufw-policy-lang = { path = "../policy-lang" }
+ufw-daemon = { path = "../daemon" }
+
+[[test]]
+name = "basic_allow_deny"
+path = "scenarios/basic_allow_deny.rs"
+
+[[test]]
+name = "application_identity"
+path = "scenarios/application_identity.rs"
+
+[[test]]
+name = "policy_hot_reload"
+path = "scenarios/policy_hot_reload.rs"
+
+[[test]]
+name = "stream_reassembly"
+path = "scenarios/stream_reassembly.rs"
+
+[[test]]
+name = "dpi_signature_match"
+path = "scenarios/dpi_signature_match.rs"
+
+[[test]]
+name = "cross_platform_equivalence"
+path = "scenarios/cross_platform_equivalence.rs"
+
+[[test]]
+name = "performance_under_load"
+path = "scenarios/performance_under_load.rs"
