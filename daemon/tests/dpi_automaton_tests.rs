@@ -22,6 +22,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ufw_daemon::automaton::{self, Automaton, Pattern};
 
@@ -54,10 +55,17 @@ fn c_compiler() -> Option<&'static str> {
 }
 
 fn scratch(name: &str) -> PathBuf {
+    // The same label (e.g. "linux") is used by more than one test, and those run
+    // on parallel threads sharing this pid; `now_us()` is only microsecond-
+    // resolved, so two of them can otherwise collide on one directory and clobber
+    // each other's source and binary. A process-wide counter keeps every scratch
+    // path unique regardless of timing.
+    static SEQ: AtomicU64 = AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "ufw-ac-{}-{}-{name}",
+        "ufw-ac-{}-{}-{}-{name}",
         std::process::id(),
-        ufw_shared::now_us()
+        ufw_shared::now_us(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&dir).expect("scratch directory");
     dir

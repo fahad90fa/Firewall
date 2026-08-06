@@ -16,6 +16,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -47,10 +48,18 @@ fn run(body: &str) -> Option<String> {
     if !inc.join("evasion.h").exists() {
         return None;
     }
+    // These cases run on parallel threads that all share this process's pid,
+    // and `now_us()` is only microsecond-resolved — two threads entering here in
+    // the same microsecond would otherwise land on the same directory and clobber
+    // each other's `t.c` and `t` binary (a corrupt source, or a case running the
+    // wrong binary). A process-wide counter makes every invocation's path unique
+    // regardless of timing.
+    static SEQ: AtomicU64 = AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "ufw-evade-{}-{}",
+        "ufw-evade-{}-{}-{}",
         std::process::id(),
-        ufw_shared::now_us()
+        ufw_shared::now_us(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let source = dir.join("t.c");
