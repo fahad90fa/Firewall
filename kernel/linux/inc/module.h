@@ -206,9 +206,13 @@ void ufw_dpi_exit(void);
 /* Install the signature set received from the daemon. Takes ownership. */
 int ufw_dpi_install(const __u8 *encoded, size_t len);
 
-/* Identify the application protocol of a payload. Cheap prefix checks only;
- * a full parse happens in the per-protocol decoders. */
-__u8 ufw_dpi_identify(const __u8 *data, size_t len, __u16 dst_port);
+/*
+ * ufw_dpi_identify() — cheap prefix-based protocol identification — is a
+ * header-only `static inline` in inc/dpi_decoders.h (shared verbatim with the
+ * differential test), not an exported symbol. It is intentionally not declared
+ * here: a translation unit that calls it includes dpi_decoders.h directly, so
+ * an extern prototype would clash with that inline definition.
+ */
 
 /* Run the signature set against a decoded payload. */
 int ufw_dpi_scan(__u8 l7, const __u8 *data, size_t len,

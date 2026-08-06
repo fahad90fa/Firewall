@@ -32,6 +32,8 @@
 
 #include "../inc/module.h"
 #include "../inc/stream.h"
+/* ufw_dpi_identify() is a header-only inline; include its definition. */
+#include "../inc/dpi_decoders.h"
 
 static struct hlist_head ufw_stream_table[UFW_STREAM_BUCKETS];
 static DEFINE_SPINLOCK(ufw_stream_lock);
