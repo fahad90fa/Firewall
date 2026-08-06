@@ -36,6 +36,7 @@ pub mod hash;
 pub mod identity_types;
 pub mod json;
 pub mod log_types;
+pub mod manifest;
 pub mod policy_types;
 pub mod protocol;
 

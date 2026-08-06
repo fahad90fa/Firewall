@@ -102,9 +102,19 @@ a thing a person can install, run, or recover from. Shipping means:
 
 - **Signed installers, notarization, driver signing.** An unsigned kernel
   driver will not load on a stock Windows or macOS machine — Secure Boot and
-  the macOS kext/system-extension approval flow refuse it. This is not a
-  missing feature; it is a *will-not-start* gap. Today there is no signing
-  pipeline.
+  the macOS kext/system-extension approval flow refuse it, and on Linux
+  `insmod` is rejected under Secure Boot. This is not a missing feature; it is a
+  *will-not-start* gap. The signing *procedure* now exists for all three
+  platforms (`build/windows/driver_signing.ps1`, `build/macos/signing.sh` +
+  `notarize.sh`, and a new `build/linux/sign-module.sh` for the Secure Boot
+  MOK path), plus a signed cross-platform release manifest
+  (`shared/src/manifest.rs` + the `ufw-manifest` tool, tested) that proves a
+  deployer received exactly the released set — see
+  [`../deployment/signing.md`](../deployment/signing.md). What is **still
+  missing** is the keys and the pipeline that runs it: signing needs real
+  certificates in a secrets store, which cannot live here, so these are
+  documented, tooled, and unit-tested procedures rather than an executed,
+  key-in-hand release.
 - **Crash telemetry and safe-mode recovery.** *Partly built.* The control
   plane now supervises the data path: a fail-safe watchdog
   (`daemon/src/watchdog.rs`) detects a crash-loop — repeated data-path faults

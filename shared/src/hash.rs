@@ -372,6 +372,22 @@ pub fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
     sha256(&outer)
 }
 
+/// Compare two byte slices without leaking, through timing, where they first
+/// differ. Unequal lengths compare unequal, but the equal-length path folds
+/// every byte before returning, so an attacker cannot binary-search a tag or a
+/// key one position at a time. Use this to check a MAC or any secret-dependent
+/// value; `==` on `&[u8]` short-circuits and must not be used there.
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for i in 0..a.len() {
+        diff |= a[i] ^ b[i];
+    }
+    diff == 0
+}
+
 #[cfg(test)]
 mod hmac_tests {
     use super::*;
@@ -417,5 +433,19 @@ mod hmac_tests {
         let a = hmac_sha256(key, b"rules: []");
         let b = hmac_sha256(key, b"rules: []\n  - id: theirs\n");
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn constant_time_eq_matches_logical_equality() {
+        assert!(constant_time_eq(b"", b""));
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        // A difference in the first byte and one in the last are both caught —
+        // the loop folds every position rather than returning at the first.
+        assert!(!constant_time_eq(b"Xbc", b"abc"));
+        assert!(!constant_time_eq(b"abX", b"abc"));
+        // Different lengths are unequal.
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+        assert!(!constant_time_eq(b"abcd", b"abc"));
     }
 }
