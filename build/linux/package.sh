@@ -146,11 +146,11 @@ UNIT
 cat > "$STAGE/etc/unified-firewall/ufwd.toml" <<'CONF'
 # Unified Firewall daemon configuration.
 #
-# `policy.path` is deliberately left pointing at a file that does not exist.
-# The daemon will refuse to start until you put a policy there, which is the
-# intended behaviour: a firewall package must not choose your policy for you.
+# `policy.dir` starts empty. The daemon refuses to start until you put a policy
+# there, which is the intended behaviour: a firewall package must not choose
+# your policy for you.
 #
-# To get started, copy one of the shipped examples:
+# To get started, copy one of the shipped examples into the directory:
 #
 #   # A rollout, in the order that does not cause an outage:
 #   cp /usr/share/unified-firewall/policies/base/default_allow.yaml \
@@ -160,28 +160,35 @@ cat > "$STAGE/etc/unified-firewall/ufwd.toml" <<'CONF'
 #      /etc/unified-firewall/policies/active.yaml
 
 [daemon]
-host_id = ""            # empty means "use the system hostname"
+# host_id is omitted, so it defaults to the system hostname.
 mode = "enforce"
 require_kernel_module = true
 
 [policy]
-path = "/etc/unified-firewall/policies/active.yaml"
+# Every *.yaml in this directory is loaded; drop your active policy here.
+dir = "/etc/unified-firewall/policies"
 signature_dir = "/etc/unified-firewall/sig-rules"
-watch = true
+hot_reload = true
 
 [ipc]
-endpoint = "netlink:ufw_ctrl"
+# Empty endpoint means the platform default (/dev/ufw-control on Linux).
+endpoint = ""
 connect_timeout_ms = 5000
 
 [logging]
 level = "info"
-file = "/var/log/unified-firewall/events.log"
+
+[logging.file]
+path = "/var/log/unified-firewall/events.jsonl"
 
 [api]
-# Loopback only by default. Binding this to a routable address without an
-# auth_token is refused at startup, because a management API that can install
+# Loopback only by default — this also serves the web dashboard at
+# http://127.0.0.1:9443/. Binding to a routable address without an auth_token
+# and TLS is refused at startup, because a management API that can install
 # policy is a remote code path into the kernel.
-bind = "127.0.0.1:9443"
+rest_bind = "127.0.0.1:9443"
+# To view several hosts in one dashboard, list the origin you open it from:
+# cors_origins = ["https://ops-laptop.local:9443"]
 CONF
 
 install -d "$STAGE/usr/share/unified-firewall"

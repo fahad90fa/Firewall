@@ -17,12 +17,14 @@ mode = "enforce"
 require_kernel_module = true
 
 [policy]
-path = "/src/tests/docker/test-policy.yaml"
+dir = "/src/tests/docker"
+files = ["test-policy.yaml"]
 signature_dir = "/src/sig-rules"
-watch = true
+hot_reload = true
 
 [ipc]
-endpoint = "netlink:ufw_ctrl"
+# Empty means the platform default (/dev/ufw-control on Linux).
+endpoint = ""
 connect_timeout_ms = 5000
 
 [logging]
@@ -32,4 +34,4 @@ level = "debug"
 [api]
 # Loopback only. A management API reachable from the test network would let
 # the driver container change the policy it is supposed to be testing.
-bind = "127.0.0.1:0"
+rest_bind = "127.0.0.1:0"
