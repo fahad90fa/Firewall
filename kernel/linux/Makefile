@@ -41,7 +41,7 @@ BPF_CFLAGS := -O2 -g -target bpf -D__TARGET_ARCH_$(ARCH) \
 	-I$(PWD)/ebpf -I$(GENERATED) $(BPF_INCLUDES) \
 	-Wall -Werror -Wno-unused-function
 
-.PHONY: all module ebpf install load unload check clean generated
+.PHONY: all module ebpf install load unload check clean generated rust rust-check
 
 all: module ebpf
 
@@ -99,6 +99,25 @@ load: module
 
 unload:
 	rmmod ufw || true
+
+# --- Rust-for-Linux data path ---------------------------------------------
+#
+# The memory-safe replacement for the C parsers. `rust-check` runs on any
+# machine — it is what verifies ufw_kcore, the part that actually handles
+# hostile bytes. `rust` builds the kernel module, and needs a CONFIG_RUST
+# kernel tree (KDIR must point at one, kernels 6.1+ with `rustavailable`).
+rust-check:
+	cargo test -p ufw-kcore
+
+rust:
+	@if ! $(MAKE) -C $(KDIR) rustavailable >/dev/null 2>&1; then \
+		echo "This kernel tree ($(KDIR)) is not built with CONFIG_RUST."; \
+		echo "ufw_kcore — the verified, memory-safe core — still builds and"; \
+		echo "tests everywhere: run 'make -C kernel/linux rust-check'."; \
+		exit 1; \
+	fi
+	$(MAKE) -C $(KDIR) M=$(PWD)/rust modules
+
 
 clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean

@@ -6,6 +6,7 @@ members = [
     "daemon",
     "cli",
     "tests",
+    "kernel/linux/rust/ufw_kcore",
 ]
 
 [workspace.package]

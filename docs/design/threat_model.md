@@ -63,7 +63,12 @@ Three boundaries, in order of how much a mistake costs:
 An auditor with a week should spend it here, in this order:
 
 1. `kernel/{linux,windows}/inc/dpi_decoders.h` — attacker-controlled parsing in
-   ring 0. Highest risk in the project by a wide margin.
+   ring 0. Highest risk in the project by a wide margin. On Linux this C is
+   now mirrored by memory-safe Rust (`kernel/linux/rust/ufw_kcore`) proven to
+   behave identically, so an auditor's time on the Linux path is better spent
+   confirming the differential test's corpus is broad enough than hunting
+   overreads the type system already precludes. The Windows C has no such
+   backstop.
 2. `kernel/{linux,windows}/src/stream_reassembly.c` — per-flow state driven by
    attacker-chosen sequence numbers, and *not yet fuzzed* because it needs a
    stateful harness.
@@ -82,9 +87,16 @@ only what is handled is marketing.
 
 - **No runtime hours.** No kernel module here has filtered a real packet. This
   is the dominant risk and no code change addresses it.
-- **11k lines of hand-written C in ring 0.** Fuzzed at the decoders, not
-  elsewhere. A Rust-for-Linux port would change the class of bug available;
-  the Windows driver has no such path.
+- **Hand-written C in ring 0.** The Linux DPI decoders — the highest-risk
+  parsers — have been ported to memory-safe `no_std` Rust in
+  `kernel/linux/rust/ufw_kcore`, which forbids `unsafe`, reads every byte
+  through `slice::get`, and is checked byte-for-byte against the C it replaces.
+  That removes the memory-safety class of bug from the parsing on Linux. The
+  Rust-for-Linux module glue around it builds only in a `CONFIG_RUST` kernel
+  tree. The **Windows driver has no Rust path** and remains hand-written C —
+  fuzzed at the decoders, and that is the mitigation, not memory safety. The
+  reassembler and the netlink/IOCTL message decoders are still C on both
+  platforms and are not yet ported.
 - **The Swift is not compiled by this workspace's tests.** Pinned by
   `shared/tests/macos_wire_contract.rs` and type-checked by the `macos-extension`
   CI job, which is weaker than a full build.

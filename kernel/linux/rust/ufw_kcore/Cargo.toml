@@ -1,0 +1,28 @@
+# The memory-safe core of the Linux data path.
+#
+# `no_std`, no allocator, no `unsafe`. This is the code that parses
+# attacker-chosen bytes in ring 0, and it is Rust rather than C for exactly one
+# reason: in C an out-of-bounds read is a kernel memory disclosure, and here it
+# is a `None` from `slice::get`. The compiler enforces what the hand-written
+# bounds checks in `dpi_decoders.h` had to get right by inspection.
+#
+# It is a workspace member so `cargo test` fuzzes it and checks it against the
+# C byte for byte. It compiles to the kernel target because it touches nothing
+# but `core`.
+[package]
+name = "ufw-kcore"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0"
+
+[lib]
+# rlib for the host tests; the Rust-for-Linux module links it as a normal
+# dependency inside the kernel build.
+crate-type = ["rlib"]
+
+[dependencies]
+
+[features]
+# Off in the kernel, on for the host test harness. Nothing in the decode path
+# uses it — it only lets the tests pull in std.
+default = []

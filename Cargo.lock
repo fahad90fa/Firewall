@@ -144,6 +144,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ufw-kcore"
+version = "0.1.0"
+
+[[package]]
 name = "ufw-policy-lang"
 version = "0.1.0"
 dependencies = [

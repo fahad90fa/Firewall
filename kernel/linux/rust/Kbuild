@@ -1,0 +1,23 @@
+# Kbuild for the Rust-for-Linux data path.
+#
+# Built only inside a kernel source tree with CONFIG_RUST=y. The kernel's own
+# build system compiles module.rs against the in-tree `kernel` crate and links
+# ufw_kcore as a dependency. There is nothing to build here on a machine
+# without such a tree, which is why `ufw_kcore` — the part that matters and the
+# part that is verified — is a normal cargo crate that builds and tests
+# everywhere.
+#
+#   Load path (inside a configured kernel tree):
+#     make -C /path/to/linux M=$(pwd) rust-analyzer   # editor support
+#     make -C /path/to/linux M=$(pwd) modules
+#     insmod ufw.ko
+#
+# The daemon reports whether this module or the C one is loaded; they are
+# alternatives, not a stack, and a host runs one.
+
+obj-m += ufw.o
+
+# The Rust module's single translation unit. The kernel build turns module.rs
+# into ufw.o; ufw_kcore is pulled in as a crate dependency declared in
+# module.rs's use statements and resolved from ufw_kcore/.
+ufw-y := module.o
