@@ -44,6 +44,9 @@ const MAX_HEADERS: usize = 64;
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// The fleet dashboard, embedded so the daemon serves it with no external file.
+const DASHBOARD_HTML: &str = include_str!("dashboard.html");
+
 /// A parsed request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpRequest {
@@ -293,15 +296,28 @@ pub fn authorize(
 
 /// Serialize a JSON response.
 pub fn render_response(status: u16, body: &str) -> Vec<u8> {
-    render_response_with(status, body, "application/json")
+    render_response_full(status, body, "application/json", "")
 }
 
 /// Serialize a response with an explicit content type. Used by the Prometheus
 /// scrape endpoint, which must be `text/plain` — a scraper that receives
 /// `application/json` for `/metrics` rejects the target.
 pub fn render_response_with(status: u16, body: &str, content_type: &str) -> Vec<u8> {
+    render_response_full(status, body, content_type, "")
+}
+
+/// Serialize a response with a content type and any extra header lines (each
+/// terminated with `\r\n`, or empty). The extra lines are where CORS headers go
+/// for the fleet dashboard.
+pub fn render_response_full(
+    status: u16,
+    body: &str,
+    content_type: &str,
+    extra_headers: &str,
+) -> Vec<u8> {
     let reason = match status {
         200 => "OK",
+        204 => "No Content",
         400 => "Bad Request",
         401 => "Unauthorized",
         403 => "Forbidden",
@@ -313,7 +329,7 @@ pub fn render_response_with(status: u16, body: &str, content_type: &str) -> Vec<
         503 => "Service Unavailable",
         _ => "Error",
     };
-    let mut out = Vec::with_capacity(body.len() + 256);
+    let mut out = Vec::with_capacity(body.len() + 256 + extra_headers.len());
     out.extend_from_slice(
         format!(
             "HTTP/1.1 {status} {reason}\r\n\
@@ -322,6 +338,7 @@ pub fn render_response_with(status: u16, body: &str, content_type: &str) -> Vec<
              Connection: close\r\n\
              Cache-Control: no-store\r\n\
              X-Content-Type-Options: nosniff\r\n\
+             {extra_headers}\
              \r\n",
             body.len()
         )
@@ -329,6 +346,34 @@ pub fn render_response_with(status: u16, body: &str, content_type: &str) -> Vec<
     );
     out.extend_from_slice(body.as_bytes());
     out
+}
+
+/// The CORS header lines to grant a browser at `origin` read access to this
+/// API, or empty if the origin is not allowed. Empty `allowed` means CORS is
+/// off — the default — so a device is not exposed cross-origin until an operator
+/// opts in by listing the dashboard's origin.
+///
+/// The specific origin is echoed rather than `*`, so it composes with the bearer
+/// token a cross-origin fetch carries (the wildcard is disallowed alongside
+/// credentials) and so a device is only ever readable by the origins named.
+pub fn cors_headers(origin: Option<&str>, allowed: &[String]) -> String {
+    let Some(origin) = origin else {
+        return String::new();
+    };
+    if allowed.is_empty() {
+        return String::new();
+    }
+    let permitted = allowed.iter().any(|a| a == "*" || a == origin);
+    if !permitted {
+        return String::new();
+    }
+    format!(
+        "Access-Control-Allow-Origin: {origin}\r\n\
+         Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
+         Access-Control-Allow-Headers: Authorization, Content-Type\r\n\
+         Access-Control-Max-Age: 600\r\n\
+         Vary: Origin\r\n"
+    )
 }
 
 /// Handle one connection end to end.
@@ -349,28 +394,58 @@ pub fn handle_connection<S: Read + Write>(
     // property that belongs to the socket, and the handshake itself needs them
     // in place before this function is reached.
     let bytes = match read_request(&mut *stream, config.max_body_bytes) {
-        Ok(request) => match authorize(config, peer, &request) {
-            // The Prometheus scrape endpoint sits beside the JSON RPC surface,
-            // not inside it: its body is `text/plain`, and threading a content
-            // type through the whole Response/dispatch machinery for one route
-            // would be more surface than a firewall's management plane should
-            // carry. It is still gated by the same authorization as `status` —
-            // a scrape reveals traffic counts and process memory, which a remote
-            // caller has no more business reading unauthenticated than status.
-            Ok(authority) => {
-                let path = request.path.trim_end_matches('/');
-                if request.method == "GET" && matches!(path, "/metrics" | "/v1/metrics") {
-                    let body = crate::metrics::prometheus(router.state());
-                    render_response_with(200, &body, "text/plain; version=0.0.4; charset=utf-8")
-                } else {
-                    match route(&request).and_then(|op| router.dispatch(op, authority)) {
-                        Ok(Response { status, body }) => render_response(status, &body),
-                        Err(e) => render_response(e.status, &e.to_json()),
+        Ok(request) => {
+            // CORS is decided from the request's Origin and the allow-list, and
+            // attached to every response below.
+            let cors = cors_headers(request.header("origin"), &config.cors_origins);
+            let path = request.path.trim_end_matches('/');
+
+            if request.method == "OPTIONS" {
+                // The browser's cross-origin preflight, before a GET that carries
+                // a token. Answered without auth — it is asking whether it may
+                // send the real request, and it carries no credentials of its own.
+                render_response_full(204, "", "text/plain", &cors)
+            } else if request.method == "GET" && matches!(path, "" | "/" | "/dashboard") {
+                // The dashboard page: static HTML with no secrets, served without
+                // auth so a browser can load it by navigation (which cannot send
+                // a bearer token). The DATA it then fetches goes through
+                // `authorize` like everything else.
+                render_response_full(200, DASHBOARD_HTML, "text/html; charset=utf-8", &cors)
+            } else {
+                match authorize(config, peer, &request) {
+                    // The Prometheus scrape endpoint sits beside the JSON RPC
+                    // surface, not inside it: its body is `text/plain`. It is
+                    // still gated by the same authorization as `status` — a scrape
+                    // reveals traffic counts and process memory.
+                    Ok(authority) => {
+                        if request.method == "GET" && matches!(path, "/metrics" | "/v1/metrics") {
+                            let body = crate::metrics::prometheus(router.state());
+                            render_response_full(
+                                200,
+                                &body,
+                                "text/plain; version=0.0.4; charset=utf-8",
+                                &cors,
+                            )
+                        } else {
+                            match route(&request).and_then(|op| router.dispatch(op, authority)) {
+                                Ok(Response { status, body }) => {
+                                    render_response_full(status, &body, "application/json", &cors)
+                                }
+                                Err(e) => render_response_full(
+                                    e.status,
+                                    &e.to_json(),
+                                    "application/json",
+                                    &cors,
+                                ),
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        render_response_full(e.status, &e.to_json(), "application/json", &cors)
                     }
                 }
             }
-            Err(e) => render_response(e.status, &e.to_json()),
-        },
+        }
         Err(e) => render_response(e.status, &e.to_json()),
     };
     let _ = stream.write_all(&bytes);
@@ -475,6 +550,7 @@ mod tests {
             allow_from: Vec::new(),
             auth_token: None,
             max_body_bytes: 64 * 1024,
+            cors_origins: Vec::new(),
         }
     }
 
@@ -736,5 +812,86 @@ mod tests {
         // no such route, rather than silently scraping.
         let r = request("POST /metrics HTTP/1.1\r\n\r\n").unwrap();
         assert_eq!(route(&r).unwrap_err().status, 404);
+    }
+
+    fn serve(config: &ApiConfig, raw: &str) -> String {
+        let h = harness();
+        let mut stream = MockStream {
+            input: Cursor::new(raw.as_bytes().to_vec()),
+            output: Vec::new(),
+        };
+        handle_connection(&h.router, config, loopback(), &mut stream);
+        String::from_utf8_lossy(&stream.output).into_owned()
+    }
+
+    #[test]
+    fn the_dashboard_is_served_at_root_and_dashboard() {
+        for path in ["/", "/dashboard"] {
+            let text = serve(
+                &config(),
+                &format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n"),
+            );
+            assert!(text.starts_with("HTTP/1.1 200 OK\r\n"), "{path}: {}", &text[..40]);
+            assert!(text.contains("Content-Type: text/html"), "{path} content type");
+            assert!(text.contains("Unified Firewall"), "{path} body content");
+        }
+    }
+
+    #[test]
+    fn cors_headers_respect_the_allow_list() {
+        let allow = vec!["https://dash.example".to_string()];
+        assert!(cors_headers(Some("https://dash.example"), &allow)
+            .contains("Access-Control-Allow-Origin: https://dash.example"));
+        // Off by default (empty list), unlisted origin, and no origin: all empty.
+        assert!(cors_headers(Some("https://dash.example"), &[]).is_empty());
+        assert!(cors_headers(Some("https://evil.example"), &allow).is_empty());
+        assert!(cors_headers(None, &allow).is_empty());
+        // A wildcard echoes the specific origin, never a bare "*" — which would
+        // be rejected alongside the bearer token a fetch carries.
+        let star = vec!["*".to_string()];
+        let h = cors_headers(Some("https://anything"), &star);
+        assert!(h.contains("Access-Control-Allow-Origin: https://anything"));
+        assert!(!h.contains("Allow-Origin: *"));
+    }
+
+    #[test]
+    fn a_listed_origin_is_granted_cors_and_a_preflight() {
+        let mut cfg = config();
+        cfg.cors_origins = vec!["https://dash.example".to_string()];
+
+        // The preflight is answered 204 with the grant, without auth.
+        let pre = serve(
+            &cfg,
+            "OPTIONS /v1/status HTTP/1.1\r\nOrigin: https://dash.example\r\n\r\n",
+        );
+        assert!(pre.starts_with("HTTP/1.1 204 No Content\r\n"), "{}", &pre[..40]);
+        assert!(pre.contains("Access-Control-Allow-Origin: https://dash.example"));
+
+        // The real GET carries the grant too (loopback, so authorized).
+        let get = serve(
+            &cfg,
+            "GET /v1/status HTTP/1.1\r\nOrigin: https://dash.example\r\n\r\n",
+        );
+        assert!(get.contains("Access-Control-Allow-Origin: https://dash.example"));
+
+        // An origin not on the list gets no grant — so the browser refuses to
+        // read the response, which is the point.
+        let denied = serve(
+            &cfg,
+            "GET /v1/status HTTP/1.1\r\nOrigin: https://evil.example\r\n\r\n",
+        );
+        assert!(!denied.contains("Access-Control-Allow-Origin"));
+    }
+
+    #[test]
+    fn cors_is_absent_by_default() {
+        // Default config lists no origins, so even a well-formed Origin gets no
+        // CORS grant: a device is not cross-origin readable until an operator
+        // opts in.
+        let text = serve(
+            &config(),
+            "GET /v1/status HTTP/1.1\r\nOrigin: https://dash.example\r\n\r\n",
+        );
+        assert!(!text.contains("Access-Control-Allow-Origin"));
     }
 }

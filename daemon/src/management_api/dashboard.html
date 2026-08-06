@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<!--
+  Unified Firewall — fleet monitoring dashboard.
+
+  One self-contained file: no external scripts, stylesheets, fonts or images, in
+  keeping with the rest of this project. It is embedded in the daemon binary and
+  served at GET / and GET /dashboard.
+
+  It reads the same read-only API a person could curl: /v1/status for the
+  structured state, /v1/stats to refresh the kernel's traffic counters, and
+  /metrics for process memory. By default it monitors the daemon that served it
+  (same origin). Add more devices — a Mac, a Linux box, a Windows host — and it
+  polls each and shows them side by side; those daemons must list this page's
+  origin in `api.cors_origins` for the browser to read them cross-origin.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unified Firewall — Fleet</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --ink: #1a1c1f; --muted: #616873;
+    --line: #e2e5ea; --accent: #2b6cb0;
+    --ok: #2f855a; --ok-bg: #e6f4ec;
+    --warn: #b7791f; --warn-bg: #fdf3e0;
+    --bad: #c53030; --bad-bg: #fbeaea;
+    --idle: #718096; --idle-bg: #edf0f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a; --panel: #1d2026; --ink: #e6e8ec; --muted: #9aa2ae;
+      --line: #2b2f37; --accent: #63b3ed;
+      --ok: #68d391; --ok-bg: #1c3026;
+      --warn: #f6ad55; --warn-bg: #35291479;
+      --bad: #fc8181; --bad-bg: #3a1d1d;
+      --idle: #a0aec0; --idle-bg: #262b33;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 10; background: var(--panel);
+    border-bottom: 1px solid var(--line); padding: 12px 18px;
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 650; }
+  header .spacer { flex: 1; }
+  .summary { display: flex; gap: 14px; flex-wrap: wrap; }
+  .summary .stat { display: flex; flex-direction: column; align-items: flex-start; }
+  .summary .stat b { font-size: 18px; font-variant-numeric: tabular-nums; }
+  .summary .stat span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  button, input, select {
+    font: inherit; color: var(--ink); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 7px; padding: 6px 10px;
+  }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  main { padding: 18px; display: grid; gap: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    overflow: hidden; display: flex; flex-direction: column;
+  }
+  .card.stale { opacity: .55; }
+  .card-head {
+    display: flex; align-items: center; gap: 10px; padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .card-head .os { font-size: 20px; }
+  .card-head .id { display: flex; flex-direction: column; min-width: 0; }
+  .card-head .id b { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card-head .id small { color: var(--muted); font-size: 11px; }
+  .card-head .spacer { flex: 1; }
+  .badge {
+    font-size: 11px; font-weight: 650; padding: 3px 9px; border-radius: 999px;
+    text-transform: uppercase; letter-spacing: .03em; white-space: nowrap;
+  }
+  .b-ok { color: var(--ok); background: var(--ok-bg); }
+  .b-warn { color: var(--warn); background: var(--warn-bg); }
+  .b-bad { color: var(--bad); background: var(--bad-bg); }
+  .b-idle { color: var(--idle); background: var(--idle-bg); }
+  .rows { padding: 6px 14px 12px; }
+  .section-title {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); margin: 12px 0 4px; font-weight: 650;
+  }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
+  .row .k { color: var(--muted); }
+  .row .v { font-variant-numeric: tabular-nums; text-align: right; }
+  .row .v.warn { color: var(--warn); font-weight: 600; }
+  .row .v.bad { color: var(--bad); font-weight: 600; }
+  .remove { color: var(--muted); border: none; background: none; font-size: 16px; padding: 0 4px; }
+  .remove:hover { color: var(--bad); }
+  .err { color: var(--bad); padding: 14px; font-size: 13px; }
+  dialog {
+    border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
+    color: var(--ink); padding: 0; max-width: 420px; width: 92%;
+  }
+  dialog::backdrop { background: rgba(0,0,0,.45); }
+  .dlg-body { padding: 18px; display: flex; flex-direction: column; gap: 10px; }
+  .dlg-body h2 { margin: 0 0 4px; font-size: 15px; }
+  .dlg-body label { font-size: 12px; color: var(--muted); }
+  .dlg-body input { width: 100%; }
+  .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+  .muted { color: var(--muted); }
+  .foot { padding: 4px 18px 22px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🛡️ Unified Firewall</h1>
+  <div class="summary" id="summary"></div>
+  <div class="spacer"></div>
+  <div class="controls">
+    <label class="muted" for="interval">refresh</label>
+    <select id="interval">
+      <option value="2000">2s</option>
+      <option value="5000" selected>5s</option>
+      <option value="15000">15s</option>
+      <option value="60000">1m</option>
+      <option value="0">off</option>
+    </select>
+    <button id="add">+ Device</button>
+    <button id="refresh" class="primary">Refresh</button>
+  </div>
+</header>
+
+<main id="grid"></main>
+<div class="foot" id="foot"></div>
+
+<dialog id="dlg">
+  <form method="dialog" class="dlg-body" id="dlgForm">
+    <h2>Add a device</h2>
+    <div>
+      <label for="dUrl">Base URL</label>
+      <input id="dUrl" placeholder="https://mac-01.local:8443" required>
+    </div>
+    <div>
+      <label for="dName">Label (optional)</label>
+      <input id="dName" placeholder="Mia's MacBook">
+    </div>
+    <div>
+      <label for="dToken">Bearer token (if the device requires one)</label>
+      <input id="dToken" placeholder="leave blank for loopback / no-auth">
+    </div>
+    <p class="muted" style="font-size:12px;margin:2px 0 0">
+      That device's daemon must list this page's origin in
+      <code>api.cors_origins</code> for the browser to read it.
+    </p>
+    <div class="dlg-actions">
+      <button value="cancel">Cancel</button>
+      <button value="ok" class="primary" id="dlgOk">Add</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+"use strict";
+
+// --- device list, persisted -------------------------------------------------
+// The daemon that served this page is always present as "this host" (same
+// origin, empty base URL). Extra devices live in localStorage.
+const SELF = { id: "self", url: "", name: "This host", token: "" };
+function loadDevices() {
+  let extra = [];
+  try { extra = JSON.parse(localStorage.getItem("ufw.devices") || "[]"); } catch (_) {}
+  return [SELF, ...extra];
+}
+function saveDevices(list) {
+  localStorage.setItem("ufw.devices", JSON.stringify(list.filter(d => d.id !== "self")));
+}
+let devices = loadDevices();
+
+// --- formatting -------------------------------------------------------------
+const nf = new Intl.NumberFormat();
+const num = n => (n === undefined || n === null) ? "—" : nf.format(n);
+function bytes(b) {
+  if (b === undefined || b === null) return "—";
+  const u = ["B", "KB", "MB", "GB"]; let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return b.toFixed(i ? 1 : 0) + " " + u[i];
+}
+function uptime(s) {
+  if (s === undefined || s === null) return "—";
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600),
+        m = Math.floor(s % 3600 / 60);
+  if (d) return `${d}d ${h}h`; if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${s % 60}s`; return `${s}s`;
+}
+const OS = {
+  linux:   { icon: "🐧", name: "Linux" },
+  windows: { icon: "🪟", name: "Windows" },
+  macos:   { icon: "🍎", name: "macOS" },
+  darwin:  { icon: "🍎", name: "macOS" },
+  mock:    { icon: "🧪", name: "Mock" },
+};
+function osOf(p) { return OS[(p || "").toLowerCase()] || { icon: "❔", name: p || "unknown" }; }
+
+const HEALTH = {
+  enforcing: "b-ok", degraded: "b-bad", "safe-mode": "b-bad",
+  starting: "b-idle", stopping: "b-idle",
+};
+const WD = { nominal: "b-ok", recovering: "b-warn", "safe-mode": "b-bad" };
+
+// --- fetching ---------------------------------------------------------------
+function headers(token) { return token ? { Authorization: "Bearer " + token } : {}; }
+async function getJSON(base, path, token) {
+  const r = await fetch(base + path, { headers: headers(token), cache: "no-store" });
+  if (!r.ok) throw new Error(path + " → HTTP " + r.status);
+  return r.json();
+}
+async function getRSS(base, token) {
+  try {
+    const r = await fetch(base + "/metrics", { headers: headers(token), cache: "no-store" });
+    if (!r.ok) return null;
+    const m = (await r.text()).match(/^ufw_process_resident_memory_bytes\s+(\d+)/m);
+    return m ? parseInt(m[1], 10) : null;
+  } catch (_) { return null; }
+}
+
+async function pollDevice(dev) {
+  // Refresh the kernel's traffic counters first, then read the full status, so
+  // the traffic block is fresh in the same cycle. Both are best-effort past the
+  // status read, which is the one that must succeed.
+  try { await getJSON(dev.url, "/v1/stats", dev.token); } catch (_) {}
+  const status = await getJSON(dev.url, "/v1/status", dev.token);
+  const rss = await getRSS(dev.url, dev.token);
+  return { status, rss };
+}
+
+// --- rendering --------------------------------------------------------------
+function row(k, v, cls) {
+  return `<div class="row"><span class="k">${k}</span><span class="v ${cls || ""}">${v}</span></div>`;
+}
+function el(html) { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstChild; }
+
+function renderCard(dev, data, err) {
+  const os = osOf(data && data.status && data.status.kernel && data.status.kernel.platform);
+  const s = data && data.status;
+  const removable = dev.id !== "self";
+  const rm = removable ? `<button class="remove" data-rm="${dev.id}" title="remove">✕</button>` : "";
+
+  if (err || !s) {
+    return el(`<div class="card stale">
+      <div class="card-head"><span class="os">${os.icon}</span>
+        <div class="id"><b>${dev.name || dev.url || "device"}</b><small>${dev.url || "same origin"}</small></div>
+        <div class="spacer"></div><span class="badge b-bad">unreachable</span>${rm}
+      </div>
+      <div class="err">${(err && err.message) || "no data"}</div>
+    </div>`);
+  }
+
+  const k = s.kernel || {}, w = s.watchdog || {}, p = s.policy || {},
+        id = s.identity || {}, lg = s.logging || {}, t = s.traffic || {};
+  const denied = t.flows_denied || 0;
+  const wdCls = WD[w.state] || "b-idle";
+  const hCls = HEALTH[s.health] || "b-idle";
+
+  return el(`<div class="card">
+    <div class="card-head">
+      <span class="os" title="${os.name}">${os.icon}</span>
+      <div class="id"><b>${s.host_id || dev.name || "host"}</b>
+        <small>${os.name} · v${s.version || "?"} · ${dev.url || "same origin"}</small></div>
+      <div class="spacer"></div>
+      <span class="badge ${hCls}">${s.health}</span>${rm}
+    </div>
+    <div class="rows">
+      ${row("Mode", s.mode)}
+      ${row("Uptime", uptime(s.uptime_secs))}
+      ${row("Memory (RSS)", bytes(data.rss))}
+
+      <div class="section-title">Kernel</div>
+      ${row("Connected", k.connected ? "yes" : "NO", k.connected ? "" : "bad")}
+      ${row("Module", k.module_version || "—")}
+      ${row("Capabilities", (k.capabilities || []).join(", ") || "—")}
+      ${k.last_error ? row("Last error", k.last_error, "bad") : ""}
+
+      <div class="section-title">Watchdog</div>
+      ${row("State", w.state || "—", wdCls === "b-bad" ? "bad" : wdCls === "b-warn" ? "warn" : "")}
+      ${row("Faults (window / total)", num(w.faults_in_window) + " / " + num(w.total_faults),
+             (w.faults_in_window || 0) > 0 ? "warn" : "")}
+      ${row("Safe-mode entries", num(w.safe_mode_entries), (w.safe_mode_entries || 0) > 0 ? "bad" : "")}
+
+      <div class="section-title">Policy</div>
+      ${row("Revision", num(p.revision))}
+      ${row("Rules", num(p.rules))}
+      ${row("Reloads (ok / failed)", num(p.reloads) + " / " + num(p.failed_reloads),
+             (p.failed_reloads || 0) > 0 ? "warn" : "")}
+      ${p.origin ? row("Source", p.origin) : ""}
+
+      <div class="section-title">Traffic</div>
+      ${row("Flows seen", num(t.flows_seen))}
+      ${row("Allowed / Denied", num(t.flows_allowed) + " / " + num(denied), denied > 0 ? "warn" : "")}
+      ${row("Packets", num(t.packets_seen))}
+      ${row("DPI scans / hits", num(t.dpi_scans) + " / " + num(t.dpi_hits))}
+      ${row("Conntrack entries", num(t.conntrack_entries))}
+      ${row("eBPF fast-path", num(t.ebpf_fastpath_decisions))}
+
+      <div class="section-title">Identity</div>
+      ${row("Resolver", id.resolver || "—")}
+      ${row("Queries", num(id.queries))}
+      ${row("Cache hit rate", id.cache_hit_rate !== undefined ? (id.cache_hit_rate * 100).toFixed(1) + "%" : "—")}
+
+      <div class="section-title">Logging</div>
+      ${row("Received / written", num(lg.received) + " / " + num(lg.written))}
+      ${row("Dropped (queue full)", num(lg.dropped_queue_full), (lg.dropped_queue_full || 0) > 0 ? "bad" : "")}
+      ${row("Sink errors", num(lg.sink_errors), (lg.sink_errors || 0) > 0 ? "warn" : "")}
+    </div>
+  </div>`);
+}
+
+function renderSummary(results) {
+  const total = results.length;
+  let online = 0, enforcing = 0, degraded = 0, denied = 0;
+  for (const r of results) {
+    if (r.data && r.data.status) {
+      online++;
+      const s = r.data.status;
+      if (s.health === "enforcing") enforcing++;
+      if (s.health === "degraded" || s.health === "safe-mode") degraded++;
+      denied += (s.traffic && s.traffic.flows_denied) || 0;
+    }
+  }
+  const stat = (b, s, cls) =>
+    `<div class="stat"><b class="${cls || ""}">${b}</b><span>${s}</span></div>`;
+  document.getElementById("summary").innerHTML =
+    stat(online + "/" + total, "online") +
+    stat(enforcing, "enforcing") +
+    stat(degraded, "degraded") +
+    stat(num(denied), "flows denied");
+}
+
+// --- main loop --------------------------------------------------------------
+let timer = null;
+async function refresh() {
+  devices = loadDevices();
+  const grid = document.getElementById("grid");
+  const results = await Promise.all(devices.map(async dev => {
+    try { return { dev, data: await pollDevice(dev), err: null }; }
+    catch (err) { return { dev, data: null, err }; }
+  }));
+  grid.innerHTML = "";
+  for (const r of results) grid.appendChild(renderCard(r.dev, r.data, r.err));
+  renderSummary(results);
+  document.getElementById("foot").textContent =
+    "Updated " + new Date().toLocaleTimeString() + " · " + devices.length + " device(s)";
+  grid.querySelectorAll("[data-rm]").forEach(btn => btn.onclick = () => {
+    devices = loadDevices().filter(d => d.id !== btn.dataset.rm);
+    saveDevices(devices); refresh();
+  });
+}
+
+function scheduleTimer() {
+  if (timer) clearInterval(timer);
+  const ms = parseInt(document.getElementById("interval").value, 10);
+  if (ms > 0) timer = setInterval(refresh, ms);
+}
+
+document.getElementById("refresh").onclick = refresh;
+document.getElementById("interval").onchange = scheduleTimer;
+document.getElementById("add").onclick = () => document.getElementById("dlg").showModal();
+document.getElementById("dlgForm").onsubmit = () => {
+  // The dialog closes via method="dialog"; only act on the OK button.
+  const ok = document.activeElement && document.activeElement.id === "dlgOk";
+  const url = document.getElementById("dUrl").value.trim().replace(/\/$/, "");
+  if (ok && url) {
+    const list = loadDevices();
+    list.push({ id: "d" + Date.now(), url,
+                name: document.getElementById("dName").value.trim(),
+                token: document.getElementById("dToken").value.trim() });
+    saveDevices(list);
+    document.getElementById("dUrl").value = "";
+    document.getElementById("dName").value = "";
+    document.getElementById("dToken").value = "";
+    refresh();
+  }
+};
+
+refresh();
+scheduleTimer();
+</script>
+</body>
+</html>

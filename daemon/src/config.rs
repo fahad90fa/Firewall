@@ -558,6 +558,13 @@ pub struct ApiConfig {
     /// on the path reads it and then owns the machine's filtering policy. So a
     /// non-loopback bind wants both, and `validate()` says so.
     pub tls: crate::tls::TlsConfig,
+    /// Browser origins allowed to read this daemon's API cross-origin, for the
+    /// fleet dashboard. Empty (the default) means no CORS: the dashboard served
+    /// by this daemon can still read *this* host same-origin, but a dashboard on
+    /// another host cannot pull this device's data into a single-pane fleet view
+    /// until its origin is listed here. A single `"*"` allows any origin, which
+    /// is only sensible behind a token or on a trusted network.
+    pub cors_origins: Vec<String>,
 }
 
 impl Default for Config {
@@ -616,6 +623,7 @@ impl Default for Config {
                 max_body_bytes: constants::MAX_API_BODY,
                 allow_plaintext: false,
                 tls: crate::tls::TlsConfig::default(),
+                cors_origins: Vec::new(),
             },
             watchdog: WatchdogConfig {
                 enabled: true,
@@ -685,6 +693,7 @@ const KNOWN_KEYS: &[&str] = &[
     "api.tls_key",
     "api.tls_client_ca",
     "api.allow_plaintext",
+    "api.cors_origins",
     "watchdog.enabled",
     "watchdog.max_faults",
     "watchdog.window_secs",
@@ -898,6 +907,7 @@ impl Config {
         if let Some(v) = doc.bool("api.allow_plaintext")? {
             c.api.allow_plaintext = v;
         }
+        c.api.cors_origins = doc.string_array("api.cors_origins")?;
         if let Some(v) = doc.u64("api.max_body_bytes")? {
             c.api.max_body_bytes = (v as usize).min(constants::MAX_API_BODY);
         }
@@ -1294,6 +1304,20 @@ cli_socket = "/run/ufw.sock"
     fn siem_sink_requires_an_address() {
         let e = Config::parse("[logging.siem]\nenabled = true\n").unwrap_err();
         assert!(e.message.contains("address"));
+    }
+
+    #[test]
+    fn cors_origins_parse_and_default_empty() {
+        // Off by default: no cross-origin exposure until asked for.
+        assert!(Config::parse("").unwrap().api.cors_origins.is_empty());
+        let c = Config::parse(
+            "[api]\ncors_origins = [\"https://dash.example\", \"http://localhost:5173\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            c.api.cors_origins,
+            vec!["https://dash.example", "http://localhost:5173"]
+        );
     }
 
     #[test]
