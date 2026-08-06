@@ -158,15 +158,22 @@ security-response process. Mostly engineering, none of it research.
 ## 4. The macOS path is the weakest leg
 
 The Windows and Linux backends are the more exercised of the three; the macOS
-Network Extension side is the newest and least-tested. Its Swift is not compiled
-by this workspace's tests — it is pinned by `shared/tests/macos_wire_contract.rs`
-and type-checked by the `macos-extension` CI job, which is weaker than a full
-build and much weaker than a run. "Cross-platform" is only as strong as its
-weakest platform, and macOS has not yet earned the trust the other two have
-begun to.
+Network Extension side is the newest. It is now materially closer to parity: the
+decision core (`RuleEngine.swift` — address parsing, CIDR containment, zone
+classification, staged evaluation, the fail-closed identity asymmetry) imports
+only Foundation, so a runtime harness (`kernel/macos/Tests/RuleEngineHarness.swift`)
+compiles it into a standalone binary and *runs* it against hand-checked
+expectations in CI, the same discipline as the C backends' hosted tests — not
+just a type-check. Fixing that also surfaced a latent CI bug: the
+`macos-extension` job never generated the compiled-in policy it references, so
+its type-check could not resolve `UFWGeneratedPolicy`; the job now runs
+`make generate` first, like its Linux and eBPF siblings.
 
-**What closes it:** bring the macOS path to parity — full build in CI, a runtime
-harness, and its share of the soak hours from gap 1.
+**What is still open:** the framework-linked files (`NEFilterDataProvider`,
+`IPCBridge`, the identity resolver) still only type-check — they need a real
+Network Extension host to run — and macOS still owes its share of the soak hours
+from gap 1. "Cross-platform" is only as strong as its weakest platform, and while
+macOS's *logic* now runs under test, its *integration* does not.
 
 ## Why 3, and not 1, and not 6
 

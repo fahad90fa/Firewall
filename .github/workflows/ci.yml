@@ -28,24 +28,44 @@ jobs:
       - run: cargo test -p ufw-daemon --features tls
       - run: make policies
 
-  # The one thing the Rust tests cannot check: that the Swift compiles at all.
-  # Everything else in this repository is verified by a test that runs;
-  # `shared/tests/macos_wire_contract.rs` pins the values the Swift decoder
-  # mirrors, but pinning a constant is not compiling a file.
+  # The macOS backend, brought to parity with the other two: not just
+  # type-checked, but a decoder that actually runs. `RuleEngine.swift` imports
+  # only Foundation, so its decision core — address parsing, CIDR containment,
+  # zone classification, staged evaluation, the fail-closed identity asymmetry —
+  # compiles into a plain executable and is exercised against hand-checked
+  # expectations, the same way the C backends are checked by hosted tests.
   macos-extension:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Type-check the Network Extension
+      # The extension references the compiled-in policy (`UFWGeneratedPolicy`),
+      # which is generated, not committed — so, like the eBPF and kernel-linux
+      # jobs, generate it before touching the Swift.
+      - run: make generate
+      - name: Type-check the full extension
         run: |
           # Not a full Xcode build — that needs a signing identity and a
-          # provisioning profile, which a fork's CI does not have. Type
-          # checking catches what actually breaks: a renamed symbol, a changed
-          # signature, a decoder that no longer compiles.
+          # provisioning profile a fork's CI does not have. Type checking the
+          # framework-linked files (NetworkExtension, SystemExtension) catches a
+          # renamed symbol or a changed signature. The generated policy is
+          # included so `UFWGeneratedPolicy` resolves.
           swiftc -typecheck -sdk "$(xcrun --show-sdk-path)" \
                  -target arm64-apple-macos13 \
+                 build/generated/macos/UFWPolicy.generated.swift \
                  kernel/macos/NetworkExtension/*.swift \
                  kernel/macos/SystemExtension/*.swift
+      - name: Build and run the RuleEngine harness
+        run: |
+          # The runtime half. RuleEngine.swift has no framework dependency, so it
+          # links into a standalone binary with the harness (which supplies its
+          # own minimal UFWGeneratedPolicy). The binary exits non-zero, naming
+          # the property, if the engine disagrees with a checked expectation.
+          swiftc -O -sdk "$(xcrun --show-sdk-path)" \
+                 -target arm64-apple-macos13 \
+                 -o "$RUNNER_TEMP/ruleengine_harness" \
+                 kernel/macos/NetworkExtension/RuleEngine.swift \
+                 kernel/macos/Tests/RuleEngineHarness.swift
+          "$RUNNER_TEMP/ruleengine_harness"
       - run: cargo test --workspace
 
   # The eBPF programs, through clang's bpf target. Compilation is meaningful
