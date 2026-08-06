@@ -10,10 +10,12 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/netfilter.h>
 #include <linux/percpu.h>
 #include <linux/skbuff.h>
+#include <linux/spinlock.h>
 #include <linux/string.h>
 #include <net/sock.h>
 
@@ -118,6 +120,77 @@ void ufw_set_mode(enum ufw_mode mode)
 	ufw_log_note("enforcement mode is now %d", (int)mode);
 }
 
+/* --- ring-0 fault latch -------------------------------------------------- */
+/*
+ * The latch bounds a bug in the module's own data path. The decision logic —
+ * "too many faults too fast?" — is the kernel-free, hosted-tested state machine
+ * in boot_watchdog.h; this is only the wiring: a fast-path flag read on every
+ * packet, and the slow, rare fault path taken under a lock.
+ *
+ * `ufw_latched` is a separate atomic from the struct's own `latched` field so
+ * the per-packet check is a single relaxed read with no lock. The struct is
+ * touched only when a fault is actually recorded, which on a healthy module is
+ * never.
+ */
+static struct ufw_fault_latch ufw_latch;
+static DEFINE_SPINLOCK(ufw_latch_lock);
+static atomic_t ufw_latched = ATOMIC_INIT(0);
+static enum ufw_latch_action ufw_latch_action_cfg = UFW_LATCH_BYPASS;
+
+void ufw_latch_setup(__u32 max_faults, __u64 window_ns,
+		     enum ufw_latch_action action, bool force)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&ufw_latch_lock, flags);
+	ufw_latch_init(&ufw_latch, max_faults, window_ns);
+	ufw_latch_action_cfg = action;
+	if (force)
+		ufw_latch_force(&ufw_latch);
+	spin_unlock_irqrestore(&ufw_latch_lock, flags);
+
+	atomic_set(&ufw_latched, force ? 1 : 0);
+}
+
+bool ufw_latch_tripped(void)
+{
+	return atomic_read(&ufw_latched) != 0;
+}
+
+/* The verdict a latched module returns for every packet, without classifying. */
+static unsigned int ufw_latch_verdict(void)
+{
+	return (ufw_latch_action_cfg == UFW_LATCH_FAIL_CLOSED) ? NF_DROP : NF_ACCEPT;
+}
+
+/*
+ * Record one internal fault. Called only off the rare error path — a classifier
+ * that produced an impossible verdict — so the lock is uncontended in practice.
+ * Logs exactly once, on the transition into the latched state.
+ */
+static void ufw_note_fault(void)
+{
+	unsigned long flags;
+	__u8 tripped;
+	__u64 total;
+
+	spin_lock_irqsave(&ufw_latch_lock, flags);
+	tripped = ufw_latch_on_fault(&ufw_latch, ktime_get_boottime_ns());
+	total = ufw_latch.total_faults;
+	spin_unlock_irqrestore(&ufw_latch_lock, flags);
+
+	if (tripped && atomic_xchg(&ufw_latched, 1) == 0) {
+		pr_crit(UFW_MODULE_NAME
+			": data-path fault latch TRIPPED after %llu internal fault(s); "
+			"the classifier is disabled and the module is now %s. "
+			"Reload a fixed module to re-arm enforcement.\n",
+			total,
+			ufw_latch_action_cfg == UFW_LATCH_FAIL_CLOSED
+				? "dropping all traffic (fail-closed)"
+				: "passing all traffic — the host stays reachable");
+	}
+}
+
 /* --- the handler --------------------------------------------------------- */
 
 /*
@@ -143,6 +216,15 @@ static unsigned int ufw_handle(void *priv, struct sk_buff *skb,
 
 	if (!skb)
 		return NF_ACCEPT;
+
+	/*
+	 * The fault latch, first and cheapest: if the module's own data path has
+	 * proven itself broken, we are out of the packet path entirely and return
+	 * a single known-safe verdict rather than run a classifier we no longer
+	 * trust. One relaxed atomic read on the healthy fast path.
+	 */
+	if (unlikely(atomic_read(&ufw_latched)))
+		return ufw_latch_verdict();
 
 	mode = ufw_get_mode();
 	if (mode == UFW_MODE_EMERGENCY_ALLOW)
@@ -185,6 +267,20 @@ static unsigned int ufw_handle(void *priv, struct sk_buff *skb,
 		ufw_stream_observe(skb, facts);
 
 	ufw_classify(facts, &decision);
+
+	/*
+	 * The classifier must produce a verdict in the enum. Anything else is a
+	 * bug or memory corruption, not a policy outcome — feed the latch and, for
+	 * this packet, take the configured safe action rather than trust a value
+	 * the switch below would silently treat as "allow". This is the only fault
+	 * source: unambiguous, and impossible on a healthy classifier, so it never
+	 * fires on real traffic.
+	 */
+	if (unlikely(decision.verdict > UFW_VERDICT_REJECT)) {
+		ufw_note_fault();
+		put_cpu_ptr(&ufw_facts_scratch);
+		return ufw_latch_verdict();
+	}
 
 	if (decision.logged)
 		ufw_log_decision(facts, &decision);

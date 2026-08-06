@@ -28,6 +28,7 @@
 #include <net/sock.h>
 
 #include "policy_structs.h"
+#include "boot_watchdog.h"
 
 #define UFW_MODULE_NAME "ufw"
 #define UFW_MODULE_VERSION "0.1.0"
@@ -247,6 +248,20 @@ bool ufw_daemon_connected(void);
 
 int ufw_hooks_init(void);
 void ufw_hooks_exit(void);
+
+/* --- ring-0 fault latch (see boot_watchdog.h) -------------------------- */
+
+/*
+ * Configure the data-path fault latch, before the hooks register. `force`
+ * trips it immediately — the boot-recovery path, so a host with a broken
+ * firewall still boots reachable when the operator adds the bypass parameter
+ * on the kernel command line.
+ */
+void ufw_latch_setup(__u32 max_faults, __u64 window_ns,
+		     enum ufw_latch_action action, bool force);
+
+/* Whether the latch has tripped — for stats and the daemon's status. */
+bool ufw_latch_tripped(void);
 
 /* --- helpers ----------------------------------------------------------- */
 

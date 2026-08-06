@@ -30,6 +30,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
+#include <linux/ktime.h>
 #include <linux/moduleparam.h>
 
 #include "../inc/module.h"
@@ -46,6 +47,39 @@ module_param(log_queue_size, uint, 0444);
 MODULE_PARM_DESC(log_queue_size,
 		 "Bounded log event queue depth. Full means the oldest event "
 		 "is dropped and counted, never that a packet waits.");
+
+/*
+ * Ring-0 fault latch (see boot_watchdog.h). These bound a bug in the module's
+ * own data path, and give an operator a way to boot past one.
+ */
+static bool bypass;
+module_param(bypass, bool, 0444);
+MODULE_PARM_DESC(bypass,
+		 "Boot recovery: load the module already out of the packet path "
+		 "(latched), so a host with a broken firewall still boots "
+		 "reachable. Add `ufw.bypass=1` on the kernel command line, then "
+		 "reload the module without it to re-arm enforcement.");
+
+static unsigned int fault_max = 8;
+module_param(fault_max, uint, 0444);
+MODULE_PARM_DESC(fault_max,
+		 "Internal classifier faults within fault_window_ms that trip "
+		 "the data-path latch, disabling the classifier (default 8). "
+		 "A healthy module never faults, so this only ever fires on a "
+		 "bug.");
+
+static unsigned int fault_window_ms = 10000;
+module_param(fault_window_ms, uint, 0444);
+MODULE_PARM_DESC(fault_window_ms,
+		 "Sliding window over which data-path faults are counted "
+		 "(default 10000 ms).");
+
+static bool fault_fail_closed;
+module_param(fault_fail_closed, bool, 0444);
+MODULE_PARM_DESC(fault_fail_closed,
+		 "When the data-path latch trips, drop all traffic (sealed) "
+		 "rather than pass it (reachable). Default: pass, so a data-path "
+		 "bug never costs an operator remote access to the host.");
 
 static int __init ufw_init(void)
 {
@@ -79,6 +113,18 @@ static int __init ufw_init(void)
 			": loaded with fail_closed=0 — NOTHING IS BEING FILTERED "
 			"until the daemon installs a policy and sets a mode\n");
 	}
+
+	/*
+	 * Arm the fault latch before the hooks go live, so its flag is coherent on
+	 * the very first packet. `bypass` trips it immediately — the recovery path.
+	 */
+	ufw_latch_setup(fault_max, (__u64)fault_window_ms * NSEC_PER_MSEC,
+			fault_fail_closed ? UFW_LATCH_FAIL_CLOSED : UFW_LATCH_BYPASS,
+			bypass);
+	if (bypass)
+		pr_warn(UFW_MODULE_NAME
+			": loaded with bypass=1 — the module is out of the packet "
+			"path (RECOVERY). Reload without bypass to enforce.\n");
 
 	/* Last. From here, packets arrive. */
 	err = ufw_hooks_init();

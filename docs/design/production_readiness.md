@@ -114,14 +114,23 @@ a thing a person can install, run, or recover from. Shipping means:
   host*. A reconnect is fail-closed: the daemon returns to `enforcing` only
   after a successful full reinstall into the reconnected module, so a freshly
   reloaded module is never presented as enforcing while its tables are empty.
-  The state is exported in `ufwctl status` (`watchdog.state`, fault counts) so a
-  headless server's monitoring can tell "up" from "up, but crash-looping". What
-  is **still open** is the other half — *ring-0 boot survival*: if the kernel
-  module itself panics on boot, is there a kernel-side watchdog that disables
-  the filter so the machine still boots to a reachable state? That belongs in
-  the module, not the daemon, and is not done. Until it is, the daemon-side
-  supervision keeps a *running* host reachable; it cannot rescue one wedged
-  before userspace starts.
+  The state is exported in `ufwctl status` (`watchdog.state`, fault counts) and
+  at `GET /metrics` so a headless server's monitoring can tell "up" from
+  "up, but crash-looping". The ring-0 half now exists too: a **fault latch** in
+  the Linux module (`kernel/linux/inc/boot_watchdog.h`, wired into the hook
+  path) bounds a bug in the module's *own* data path — if the classifier
+  repeatedly produces an impossible verdict, the latch trips, pulls the module
+  out of the packet path, and returns a single known-safe verdict (accept by
+  default, so the host stays reachable) instead of trusting a classifier that
+  has demonstrably broken. A boot-command-line `ufw.bypass=1` gives an operator
+  a way to boot a host straight past a broken firewall. The latch logic is
+  hosted-tested (`daemon/tests/boot_watchdog_tests.rs`).
+
+  What is **still open** here: the latch catches *soft* faults (a corrupted
+  decision), not a hard kernel *oops* — a genuine panic inside the hook is the
+  kernel's to handle, and no module can self-recover from it. The equivalent
+  latch exists only on Linux so far; the Windows callout and macOS extension
+  have no counterpart yet.
 - **Field update and rollback.** The fleet code (`daemon/src/fleet.rs`) is
   well-built — HMAC-signed bundles, hash-based canaries, rate-based automatic
   rollback — but it has never pushed a bundle to a machine it did not already
