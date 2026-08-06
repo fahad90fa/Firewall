@@ -63,9 +63,20 @@ This is the same risk `threat_model.md` records as "No runtime hours"; it is
 repeated here because it is the largest single reason the product score is what
 it is, and it deserves to be stated where the product question is being asked.
 
-**What closes it:** a soak-test runbook — 30+ days on live Windows, Linux, and
-macOS kernels under representative traffic, watching RSS, latency percentiles,
-and lock stats. Wall-clock and hardware bound, not code bound.
+**What is built:** the *instrument* to measure this now exists. The daemon
+exports a Prometheus exposition at `GET /metrics` — including
+`ufw_process_resident_memory_bytes`, the leak signal — and a tested leak
+detector (`daemon/src/metrics.rs`) fits a trend line through RSS samples and
+returns a verdict. A soak harness (`daemon/tests/soak.rs`) drives the real data
+path against the loopback kernel and applies it. The full runbook, including the
+production pass/fail criteria, is [`soak_testing.md`](soak_testing.md).
+
+**What is still open:** the run itself — 30+ days on live Windows, Linux, and
+macOS kernels under representative traffic. That is wall-clock and hardware
+bound, not code bound, and no commit can contain it. The change here is that the
+gap is now *measurable* rather than merely acknowledged: the question has an
+instrument pointed at it, it just has not been left running long enough to
+answer.
 
 ## 2. No independent audit
 

@@ -291,8 +291,15 @@ pub fn authorize(
     }
 }
 
-/// Serialize a response.
+/// Serialize a JSON response.
 pub fn render_response(status: u16, body: &str) -> Vec<u8> {
+    render_response_with(status, body, "application/json")
+}
+
+/// Serialize a response with an explicit content type. Used by the Prometheus
+/// scrape endpoint, which must be `text/plain` — a scraper that receives
+/// `application/json` for `/metrics` rejects the target.
+pub fn render_response_with(status: u16, body: &str, content_type: &str) -> Vec<u8> {
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
@@ -310,7 +317,7 @@ pub fn render_response(status: u16, body: &str) -> Vec<u8> {
     out.extend_from_slice(
         format!(
             "HTTP/1.1 {status} {reason}\r\n\
-             Content-Type: application/json\r\n\
+             Content-Type: {content_type}\r\n\
              Content-Length: {}\r\n\
              Connection: close\r\n\
              Cache-Control: no-store\r\n\
@@ -341,14 +348,29 @@ pub fn handle_connection<S: Read + Write>(
     // wrapping. Setting them here would mean reaching through the wrapper for a
     // property that belongs to the socket, and the handshake itself needs them
     // in place before this function is reached.
-    let outcome = read_request(&mut *stream, config.max_body_bytes).and_then(|request| {
-        let authority = authorize(config, peer, &request)?;
-        let op = route(&request)?;
-        router.dispatch(op, authority)
-    });
-
-    let bytes = match outcome {
-        Ok(Response { status, body }) => render_response(status, &body),
+    let bytes = match read_request(&mut *stream, config.max_body_bytes) {
+        Ok(request) => match authorize(config, peer, &request) {
+            // The Prometheus scrape endpoint sits beside the JSON RPC surface,
+            // not inside it: its body is `text/plain`, and threading a content
+            // type through the whole Response/dispatch machinery for one route
+            // would be more surface than a firewall's management plane should
+            // carry. It is still gated by the same authorization as `status` —
+            // a scrape reveals traffic counts and process memory, which a remote
+            // caller has no more business reading unauthenticated than status.
+            Ok(authority) => {
+                let path = request.path.trim_end_matches('/');
+                if request.method == "GET" && matches!(path, "/metrics" | "/v1/metrics") {
+                    let body = crate::metrics::prometheus(router.state());
+                    render_response_with(200, &body, "text/plain; version=0.0.4; charset=utf-8")
+                } else {
+                    match route(&request).and_then(|op| router.dispatch(op, authority)) {
+                        Ok(Response { status, body }) => render_response(status, &body),
+                        Err(e) => render_response(e.status, &e.to_json()),
+                    }
+                }
+            }
+            Err(e) => render_response(e.status, &e.to_json()),
+        },
         Err(e) => render_response(e.status, &e.to_json()),
     };
     let _ = stream.write_all(&bytes);
@@ -662,5 +684,57 @@ mod tests {
         let response = h.router.dispatch(route(&r).unwrap(), authority).unwrap();
         let v = ufw_shared::json::parse(&response.body).unwrap();
         assert_eq!(v.get("host_id").unwrap().as_str(), Some("host-a"));
+    }
+
+    /// A read/write pair over in-memory buffers, so a full `handle_connection`
+    /// can be exercised without a socket.
+    struct MockStream {
+        input: Cursor<Vec<u8>>,
+        output: Vec<u8>,
+    }
+
+    impl Read for MockStream {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.input.read(buf)
+        }
+    }
+
+    impl Write for MockStream {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.output.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_metrics_endpoint_serves_a_prometheus_exposition() {
+        let h = harness();
+        let mut stream = MockStream {
+            input: Cursor::new(b"GET /metrics HTTP/1.1\r\nHost: x\r\n\r\n".to_vec()),
+            output: Vec::new(),
+        };
+        handle_connection(&h.router, &config(), loopback(), &mut stream);
+        let text = String::from_utf8_lossy(&stream.output);
+
+        // A scraper rejects the target unless the body is text/plain.
+        assert!(
+            text.contains("Content-Type: text/plain"),
+            "wrong content type in:\n{text}"
+        );
+        // The exposition itself is present and well-formed.
+        assert!(text.contains("# TYPE ufw_up gauge\r\n") || text.contains("# TYPE ufw_up gauge\n"));
+        assert!(text.contains("ufw_up 1"));
+        assert!(text.contains("ufw_watchdog_state{state=\"nominal\"} 1"));
+    }
+
+    #[test]
+    fn the_metrics_endpoint_is_not_reachable_by_post() {
+        // Read-only surface: POST must fall through to the JSON router, which has
+        // no such route, rather than silently scraping.
+        let r = request("POST /metrics HTTP/1.1\r\n\r\n").unwrap();
+        assert_eq!(route(&r).unwrap_err().status, 404);
     }
 }
