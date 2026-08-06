@@ -401,43 +401,124 @@ fn cells(policy: &CompiledPolicy) -> Cells {
 /// enumerations that drifted apart would mean each check covered a space the
 /// other did not, and neither would say so.
 pub fn equivalence_classes(policy: &CompiledPolicy) -> impl Iterator<Item = Scenario> + '_ {
-    let cells = cells(policy);
-    let mut out = Vec::new();
-    for protocol in &cells.protocols {
-        for direction in &cells.directions {
-            for src in &cells.addresses {
-                for dst in &cells.addresses {
-                    if src.is_ipv4() != dst.is_ipv4() {
-                        continue;
-                    }
-                    for sport in &cells.ports {
-                        for dport in &cells.ports {
-                            for identity in &cells.identities {
-                                for scan in &cells.scans {
-                                    out.push(Scenario {
-                                        name: format!(
-                                            "{:?}/{}/{src}:{sport}->{dst}:{dport}",
-                                            protocol,
-                                            direction.as_str()
-                                        ),
-                                        direction: *direction,
-                                        protocol: *protocol,
-                                        src: (*src, *sport),
-                                        dst: (*dst, *dport),
-                                        identity: identity.clone(),
-                                        dpi: scan.clone(),
-                                        interface: None,
-                                        minute_of_week: None,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
+    ClassIter::new(cells(policy))
+}
+
+/// Lazy enumeration of the cartesian product: the same scenarios, in the same
+/// order, as the nested loops it replaces — but produced one at a time.
+///
+/// Materialising the whole product first was a latent out-of-memory. A wide
+/// policy has hundreds of millions of equivalence classes, each scenario
+/// carries a heap-allocated name, and a caller that only wants a bounded
+/// prefix — `equivalence_classes(p).take(n)` — still paid for the entire
+/// product up front, because the `impl Iterator` return type hid that the Vec
+/// was already built. An odometer over the cell indices makes the memory, and
+/// with `take` the time, proportional to what is actually consumed.
+struct ClassIter {
+    cells: Cells,
+    // One index per dimension, most-significant (slowest) first:
+    // protocol, direction, src, dst, sport, dport, identity, scan — matching
+    // the loop nesting, so scan (last) advances fastest.
+    idx: [usize; 8],
+    done: bool,
+}
+
+impl ClassIter {
+    fn new(cells: Cells) -> Self {
+        // An empty dimension is an empty product: report exhaustion at once
+        // rather than indexing into a zero-length cell vector.
+        let done = cells.protocols.is_empty()
+            || cells.directions.is_empty()
+            || cells.addresses.is_empty()
+            || cells.ports.is_empty()
+            || cells.identities.is_empty()
+            || cells.scans.is_empty();
+        ClassIter {
+            cells,
+            idx: [0; 8],
+            done,
+        }
+    }
+
+    fn lens(&self) -> [usize; 8] {
+        // Addresses and ports appear twice — source and destination.
+        let a = self.cells.addresses.len();
+        let p = self.cells.ports.len();
+        [
+            self.cells.protocols.len(),
+            self.cells.directions.len(),
+            a,
+            a,
+            p,
+            p,
+            self.cells.identities.len(),
+            self.cells.scans.len(),
+        ]
+    }
+
+    /// Step the odometer once. Returns false when it wraps past the last class.
+    fn advance(&mut self) -> bool {
+        let lens = self.lens();
+        let mut i = self.idx.len() - 1;
+        loop {
+            self.idx[i] += 1;
+            if self.idx[i] < lens[i] {
+                return true;
+            }
+            self.idx[i] = 0;
+            if i == 0 {
+                return false;
+            }
+            i -= 1;
+        }
+    }
+
+    fn scenario(&self) -> Scenario {
+        let protocol = self.cells.protocols[self.idx[0]];
+        let direction = self.cells.directions[self.idx[1]];
+        let src = self.cells.addresses[self.idx[2]];
+        let dst = self.cells.addresses[self.idx[3]];
+        let sport = self.cells.ports[self.idx[4]];
+        let dport = self.cells.ports[self.idx[5]];
+        Scenario {
+            name: format!(
+                "{:?}/{}/{src}:{sport}->{dst}:{dport}",
+                protocol,
+                direction.as_str()
+            ),
+            direction,
+            protocol,
+            src: (src, sport),
+            dst: (dst, dport),
+            identity: self.cells.identities[self.idx[6]].clone(),
+            dpi: self.cells.scans[self.idx[7]].clone(),
+            interface: None,
+            minute_of_week: None,
+        }
+    }
+}
+
+impl Iterator for ClassIter {
+    type Item = Scenario;
+
+    fn next(&mut self) -> Option<Scenario> {
+        loop {
+            if self.done {
+                return None;
+            }
+            // Mixing address families is not a flow any stack produces; skip
+            // those cells exactly as the nested loops' `continue` did.
+            let same_family = self.cells.addresses[self.idx[2]].is_ipv4()
+                == self.cells.addresses[self.idx[3]].is_ipv4();
+            let scenario = same_family.then(|| self.scenario());
+            if !self.advance() {
+                self.done = true;
+            }
+            if scenario.is_some() {
+                return scenario;
             }
         }
     }
-    out.into_iter()
 }
 
 /// Prove that all three backends and the reference evaluator agree on every
