@@ -24,22 +24,41 @@ fn order(r: &CompiledRule) -> (usize, u16, u32) {
 
 /// `verdict(f)` and `rule(f)`, implemented from the denotation.
 ///
-/// Deliberately naive: collect everything that matches, sort, take the first
-/// terminal action. The real evaluator stages and short-circuits, which is
-/// what makes it fast and what makes it possible for it to be subtly wrong.
+/// Collect everything that matches, order it, and walk it stage by stage. A
+/// terminal action (`allow`/`deny`) decides immediately. `allow-inspect`
+/// provisionally permits and *ends its stage*, so a deeper stage can still
+/// override it, and it stands as the verdict if none does. `alert` and
+/// `continue` decide nothing. This is the denotation from
+/// `formal_semantics.md`, not a transcription of the evaluator — but it must
+/// agree with it, including the two places the evaluator's shape shows through:
+/// a rule's effective action is its DPI `on_match` when it carries one, and a
+/// stage is decided by its first such rule.
 fn denotation(policy: &CompiledPolicy, ctx: &FlowContext<'_>) -> (Decision, u32) {
     let mut fired: Vec<&CompiledRule> = policy.rules.iter().filter(|r| r.matches(ctx)).collect();
     fired.sort_by_key(|r| order(r));
 
+    let mut provisional: Option<(Decision, u32)> = None;
+    let mut decided_stage: Option<usize> = None;
     for rule in fired {
-        match rule.action {
+        let stage = rule.layer.stage_index();
+        // A stage is decided by its first allow/deny/allow-inspect; later rules
+        // in the same stage are not consulted, matching the evaluator's break.
+        if decided_stage == Some(stage) {
+            continue;
+        }
+        match rule.effective_action() {
             Action::Allow => return (Decision::Allow, rule.id),
             Action::Deny => return (Decision::Deny, rule.id),
-            // Not terminal: evaluation proceeds past them.
-            Action::AllowInspect | Action::Alert | Action::Continue => {}
+            Action::AllowInspect => {
+                // Provisional permit: stands unless a deeper stage overrides it.
+                provisional = Some((Decision::Allow, rule.id));
+                decided_stage = Some(stage);
+            }
+            // Neither decides the stage; evaluation continues within it.
+            Action::Alert | Action::Continue => {}
         }
     }
-    (policy.default_action, RULE_ID_DEFAULT)
+    provisional.unwrap_or((policy.default_action, RULE_ID_DEFAULT))
 }
 
 fn compile(source: &str) -> CompiledPolicy {
@@ -132,7 +151,7 @@ fn absence_conforms() {
          - id: only-agent\n    priority: 100\n    action: allow\n    \
          protocol: tcp\n    application: agent\n  \
          - id: not-agent\n    priority: 200\n    action: deny\n    \
-         protocol: tcp\n    application: \"!agent\"\n",
+         protocol: tcp\n    application:\n      names: [agent]\n      negate: true\n",
     ));
 }
 
@@ -144,7 +163,7 @@ fn ports_on_a_portless_protocol_conform() {
          - id: icmp-ok\n    priority: 10\n    layer: packet\n    \
          action: allow\n    protocol: icmp\n  \
          - id: not-high-ports\n    priority: 20\n    layer: packet\n    \
-         action: deny\n    destination:\n      ports: \"!1024-65535\"\n",
+         action: deny\n    destination:\n      ports: [1024-65535]\n      negate: true\n",
     ));
 }
 

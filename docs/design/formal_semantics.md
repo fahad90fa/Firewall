@@ -118,31 +118,42 @@ Gating on the *stage* rather than on the predicate is what makes a terminal
 
 ```
 fired(f)     = ⟨ r ∈ rules | match(r, f) ⟩, ordered by order(r)
-
-verdict(f)   = first terminal action in fired(f), or default(policy)
+action(r)    = on_match(r)  if r carries a dpi clause,  else the written action of r
 
 terminal(a)  ⟺ a ∈ { allow, deny }
 ```
 
-`allow-inspect`, `alert` and `continue` are **not** terminal. Evaluation
-proceeds past them, which is what lets a later stage deny a flow an earlier one
-provisionally permitted:
+Walk `fired(f)` in `order(r)`, which proceeds stage by stage. A stage is
+*decided* by its first rule whose `action(r)` is `allow`, `deny` or
+`allow-inspect`; `alert` and `continue` decide nothing, and evaluation
+continues within the stage.
 
 ```
-verdict(f) = deny   when ∃ r₁ ≺ r₂ ∈ fired(f)
-                    with action(r₁) = allow-inspect ∧ action(r₂) = deny
+verdict(f) = allow | deny             the first terminal action reached, if any
+           = allow, attributed to r   the last allow-inspect that decided a stage,
+                                       when no terminal action was reached
+           = default(policy)          when no rule decided any stage
 ```
 
-`allow` is terminal, so an `allow` at the packet stage cannot be overridden by
-a deny at the stream stage. That asymmetry is the point of having two permit
-actions, and it is why a perimeter-crossing `allow` is lowered to
-`allow-inspect` by the compiler rather than left as written.
+`allow` and `deny` are terminal and stop evaluation. `allow-inspect` is a
+**provisional** permit: it decides its stage but lets evaluation continue into
+deeper stages, where a terminal action can still override it —
+
+```
+verdict(f) = deny   when a stage after an allow-inspect reaches a deny
+```
+
+— and if nothing deeper decides, the provisional permit stands. That is what
+lets the compiler lower a perimeter-crossing `allow` to `allow-inspect`,
+forcing deeper inspection, without silently turning the `allow` into a deny. It
+is also why the two permit actions differ: an `allow` at the packet stage
+cannot be overridden by a deny at the stream stage; an `allow-inspect` can.
 
 ## Attribution
 
 ```
-rule(f) = id of the rule that produced the terminal action,
-          or RULE_ID_DEFAULT when the default applied
+rule(f) = id of the rule that produced the verdict — the terminal action, or the
+          provisional allow-inspect that stood — or RULE_ID_DEFAULT for the default
 ```
 
 Attribution is part of the contract, not a diagnostic. Two backends that reach
