@@ -19,8 +19,8 @@
  * produces a *miss* — which resolves correctly a moment later — rather than a
  * confident wrong answer that persists until the entry expires.
  *
- * The socket cookie is the kernel's own per-socket identifier, stable for the
- * socket's lifetime and never reused while the socket exists. The daemon's
+ * The socket cookie is a per-socket identifier stable for the socket's
+ * lifetime (see ufw_socket_cookie()). The daemon's
  * cache uses (pid, process start time) for the same reason; the two keys
  * differ because they have different facts available, but both have the
  * property that matters: a stale key misses rather than lies.
@@ -48,6 +48,7 @@
 #include <linux/jhash.h>
 #include <linux/list.h>
 #include <linux/string.h>
+#include <linux/random.h>
 #include <net/sock.h>
 
 #include "../inc/module.h"
@@ -92,10 +93,37 @@ static inline unsigned int bucket_of(__u32 pid, __u64 cookie)
 	       UFW_IDENTITY_BUCKETS;
 }
 
+/* Per-boot key that hides the socket pointer inside ufw_socket_cookie(). */
+static u32 ufw_socket_key __read_mostly;
+
+/*
+ * A stable, unique-per-socket 64-bit key.
+ *
+ * The kernel's own socket-cookie helpers (`sock_gen_cookie()` /
+ * `__sock_gen_cookie()`) are not declared on every kernel this module is built
+ * against, so the key is derived from the socket pointer instead. It is hashed
+ * with a per-boot random seed for two reasons: the raw kernel address must
+ * never be recoverable from the value handed to the daemon, and the hash
+ * spreads it well as a cache key. The pointer is stable for the socket's
+ * lifetime, which is what the key needs; a pointer reused after the socket is
+ * freed can alias an old key, but the entry's TTL bounds how long that can
+ * matter and a stale key misses rather than lies.
+ */
+static __u64 ufw_socket_cookie(const struct sock *sk)
+{
+	unsigned long p = (unsigned long)sk;
+	u32 lo = jhash_2words((u32)p, (u32)((__u64)p >> 32), ufw_socket_key);
+	u32 hi = jhash_2words((u32)p, (u32)((__u64)p >> 32),
+			      ufw_socket_key ^ 0x9e3779b9U);
+
+	return ((__u64)hi << 32) | lo;
+}
+
 int ufw_identity_init(void)
 {
 	unsigned int i;
 
+	ufw_socket_key = get_random_u32();
 	for (i = 0; i < UFW_IDENTITY_BUCKETS; i++)
 		INIT_HLIST_HEAD(&ufw_identity_table[i]);
 	ufw_identity_count = 0;
@@ -220,17 +248,11 @@ int ufw_identity_fill(const struct sock *sk, struct ufw_flow_facts *facts)
 
 	/*
 	 * `sk->sk_peer_pid`-style ownership is not available for every socket
-	 * here, so the module uses the socket's own identity and lets the
-	 * daemon map it to a process. The cookie is stable and unique for the
-	 * socket's lifetime, which is what the cache key needs.
-	 *
-	 * Use `__sock_gen_cookie()`, not `sock_gen_cookie()`: both return the
-	 * socket's stable 64-bit cookie (generating it on first use), but the
-	 * non-underscore wrapper additionally broadcasts a sock_diag netlink
-	 * event — a side effect this path does not want. The double-underscore
-	 * variant is the one prototyped in <net/sock.h>, already included above.
+	 * here, so the module uses the socket's own identity and lets the daemon
+	 * map it to a process. See ufw_socket_cookie() for how the key is derived
+	 * and why it does not use the kernel's socket-cookie helper.
 	 */
-	cookie = __sock_gen_cookie((struct sock *)sk);
+	cookie = ufw_socket_cookie(sk);
 	pid = sk->sk_uid.val;
 	now = ktime_get_ns();
 
