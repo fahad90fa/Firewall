@@ -555,16 +555,23 @@ static inline __u32 ilog2_centi(__u32 v)
 	return whole * 100u + frac;
 }
 
-static inline __u32 entropy_centibits(const __u8 *data, __u32 len)
+/*
+ * `counts` is a caller-provided 256-entry scratch histogram, passed in rather
+ * than declared here: a 1 KiB array on a kernel stack blows the module's frame
+ * budget, so the kernel caller hands in a per-CPU buffer while the userspace
+ * differential test hands in a stack one. The function zeroes it, so the caller
+ * need not. The arithmetic is identical either way, which is what the
+ * cross-platform equivalence requires.
+ */
+static inline __u32 entropy_centibits(const __u8 *data, __u32 len, __u32 *counts)
 {
-	__u32 counts[256];
 	__u64 weighted = 0;
 	__u32 i;
 
 	if (len == 0)
 		return 0;
 
-	memset(counts, 0, sizeof(counts));
+	memset(counts, 0, 256 * sizeof(counts[0]));
 	for (i = 0; i < len; i++)
 		counts[data[i]]++;
 

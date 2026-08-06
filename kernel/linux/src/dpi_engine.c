@@ -117,6 +117,16 @@ static DEFINE_SPINLOCK(ufw_signature_lock);
  */
 static DEFINE_PER_CPU(struct ufw_ac_hit, ufw_ac_scratch[UFW_AC_MAX_PATTERNS]);
 
+/*
+ * Two more scratch buffers kept off the stack, for the same reason as the
+ * automaton hits above: the decode table and the entropy histogram are each
+ * far larger than the module's 512-byte frame budget allows on the stack.
+ * Both are only touched with preemption disabled (get_cpu_ptr / this_cpu_ptr
+ * under an outer get_cpu_ptr), so a per-CPU instance cannot be raced.
+ */
+static DEFINE_PER_CPU(struct ufw_decoded, ufw_decoded_scratch);
+static DEFINE_PER_CPU(__u32, ufw_entropy_counts[256]);
+
 /* --- condition evaluation ------------------------------------------------ */
 
 static bool compare(__u8 op, __u64 left, __u64 right)
@@ -182,8 +192,16 @@ static bool condition_holds(const struct ufw_condition *c,
 	case UFW_COND_CONTENT:
 		return content_match(c, set, hits, data, len);
 
-	case UFW_COND_ENTROPY:
-		return entropy_centibits(data, len) >= (__u32)c->value;
+	case UFW_COND_ENTROPY: {
+		/* The histogram is per-CPU scratch; borrow it for the duration
+		 * of the one call. The caller already runs preemption-disabled,
+		 * so this only nests. */
+		__u32 *counts = get_cpu_ptr(ufw_entropy_counts);
+		bool ok = entropy_centibits(data, len, counts) >= (__u32)c->value;
+
+		put_cpu_ptr(ufw_entropy_counts);
+		return ok;
+	}
 
 	default:
 		return false;
@@ -195,21 +213,24 @@ int ufw_dpi_scan(__u8 l7, const __u8 *data, size_t len,
 {
 	const struct ufw_signature_set *set;
 	struct ufw_ac_hit *pattern_hits = NULL;
-	struct ufw_decoded decoded;
+	struct ufw_decoded *decoded;
 	__u32 i;
 	int hits = 0;
 
 	if (!data || !len || !matched || !max_matches)
 		return 0;
 
-	memset(&decoded, 0, sizeof(decoded));
-	decoded_set(&decoded, UFW_FIELD_PAYLOAD_LEN, (__u32)len);
+	/* Per-CPU decode table, held (preemption disabled) until every
+	 * signature has been evaluated against it. */
+	decoded = get_cpu_ptr(&ufw_decoded_scratch);
+	memset(decoded, 0, sizeof(*decoded));
+	decoded_set(decoded, UFW_FIELD_PAYLOAD_LEN, (__u32)len);
 
 	switch (l7) {
-	case UFW_L7_DNS:  decode_dns(&decoded, data, (__u32)len); break;
-	case UFW_L7_HTTP: decode_http(&decoded, data, (__u32)len); break;
-	case UFW_L7_TLS:  decode_tls(&decoded, data, (__u32)len); break;
-	case UFW_L7_SSH:  decode_ssh(&decoded, data, (__u32)len); break;
+	case UFW_L7_DNS:  decode_dns(decoded, data, (__u32)len); break;
+	case UFW_L7_HTTP: decode_http(decoded, data, (__u32)len); break;
+	case UFW_L7_TLS:  decode_tls(decoded, data, (__u32)len); break;
+	case UFW_L7_SSH:  decode_ssh(decoded, data, (__u32)len); break;
 	default: break;
 	}
 
@@ -217,6 +238,7 @@ int ufw_dpi_scan(__u8 l7, const __u8 *data, size_t len,
 	set = rcu_dereference(ufw_signatures);
 	if (!set) {
 		rcu_read_unlock();
+		put_cpu_ptr(&ufw_decoded_scratch);
 		return 0;
 	}
 
@@ -248,7 +270,7 @@ int ufw_dpi_scan(__u8 l7, const __u8 *data, size_t len,
 			continue;
 
 		for (c = 0; c < sig->condition_count && c < UFW_MAX_CONDITIONS; c++) {
-			if (!condition_holds(&sig->conditions[c], &decoded, set,
+			if (!condition_holds(&sig->conditions[c], decoded, set,
 					     pattern_hits, data, (__u32)len)) {
 				all = false;
 				break;
@@ -261,6 +283,7 @@ int ufw_dpi_scan(__u8 l7, const __u8 *data, size_t len,
 	if (pattern_hits)
 		put_cpu_ptr(ufw_ac_scratch);
 	rcu_read_unlock();
+	put_cpu_ptr(&ufw_decoded_scratch);
 
 	/* A truncated stream that produced no match is not evidence of
 	 * absence, and the caller needs to be able to tell the two apart. */

@@ -166,6 +166,7 @@ const HARNESS: &str = r#"
 
 static unsigned char corpus[1 << 20];
 static unsigned char payload[1 << 16];
+static __u32 counts[256];   /* entropy_centibits() scratch histogram */
 
 static unsigned rd(const unsigned char *p) {
     return (unsigned)p[0]|((unsigned)p[1]<<8)|((unsigned)p[2]<<16)|((unsigned)p[3]<<24);
@@ -198,7 +199,7 @@ int main(int argc, char **argv) {
         printf("%u:", i);
         for (field = 0; field < 128; field++)
             if (d.present[field]) printf(" %u=%u", field, d.values[field]);
-        printf(" H=%u L=%u\n", entropy_centibits(payload, plen),
+        printf(" H=%u L=%u\n", entropy_centibits(payload, plen, counts),
                ufw_dpi_identify(payload, plen, (unsigned short)port));
     }
     return 0;
