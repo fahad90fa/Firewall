@@ -207,6 +207,12 @@ covers is the three modules' *runtime* behaviour on a live kernel — that needs
 deployment, and the testing documentation says so rather than implying
 otherwise.
 
+This is a verified codebase, not yet a deployable product. The gap between the
+two — zero runtime hours, no independent audit, no signing/recovery scaffolding,
+and the macOS path lagging the other two — is set out honestly in
+[`docs/design/production_readiness.md`](docs/design/production_readiness.md).
+None of it is an unsolved problem; all of it is time and process still owed.
+
 ## Contributing
 
 See [`docs/development/contributing.md`](docs/development/contributing.md). The

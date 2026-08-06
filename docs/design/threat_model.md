@@ -86,7 +86,9 @@ Kept here rather than in an issue tracker, because a threat model that lists
 only what is handled is marketing.
 
 - **No runtime hours.** No kernel module here has filtered a real packet. This
-  is the dominant risk and no code change addresses it.
+  is the dominant risk and no code change addresses it. It, and the other
+  reasons this is a verified codebase rather than a deployable product, are laid
+  out in [`production_readiness.md`](production_readiness.md).
 - **Hand-written C in ring 0.** The Linux DPI decoders — the highest-risk
   parsers — have been ported to memory-safe `no_std` Rust in
   `kernel/linux/rust/ufw_kcore`, which forbids `unsafe`, reads every byte
