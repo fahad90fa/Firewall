@@ -223,8 +223,14 @@ int ufw_identity_fill(const struct sock *sk, struct ufw_flow_facts *facts)
 	 * here, so the module uses the socket's own identity and lets the
 	 * daemon map it to a process. The cookie is stable and unique for the
 	 * socket's lifetime, which is what the cache key needs.
+	 *
+	 * Use `__sock_gen_cookie()`, not `sock_gen_cookie()`: both return the
+	 * socket's stable 64-bit cookie (generating it on first use), but the
+	 * non-underscore wrapper additionally broadcasts a sock_diag netlink
+	 * event — a side effect this path does not want. The double-underscore
+	 * variant is the one prototyped in <net/sock.h>, already included above.
 	 */
-	cookie = sock_gen_cookie((struct sock *)sk);
+	cookie = __sock_gen_cookie((struct sock *)sk);
 	pid = sk->sk_uid.val;
 	now = ktime_get_ns();
 
