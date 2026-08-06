@@ -60,8 +60,8 @@ bool ufw_cidr_contains(const struct ufw_cidr *cidr, const __u8 *addr, int is_v6)
 	return true;
 }
 
-static bool addr_match(const struct ufw_addr_match *m, const __u8 *addr,
-		       int is_v6, __u8 zone)
+static bool ufw_match_addr(const struct ufw_addr_match *m, const __u8 *addr,
+		           int is_v6, __u8 zone)
 {
 	bool hit = false;
 	__u8 i;
@@ -86,8 +86,8 @@ static bool addr_match(const struct ufw_addr_match *m, const __u8 *addr,
 	return m->negate ? !hit : hit;
 }
 
-static bool port_match(const struct ufw_port_match *m, __u16 port,
-		       __u8 protocol)
+static bool ufw_match_port(const struct ufw_port_match *m, __u16 port,
+		           __u8 protocol)
 {
 	bool hit = false;
 	__u8 i;
@@ -158,8 +158,8 @@ bool ufw_path_match(const char *pattern, const char *path, int case_insensitive)
 	return *p == '\0';
 }
 
-static bool fingerprint_match(const struct ufw_fingerprint *fp,
-			      const struct ufw_flow_facts *facts)
+static bool ufw_match_fingerprint(const struct ufw_fingerprint *fp,
+			          const struct ufw_flow_facts *facts)
 {
 	bool ok;
 	__u8 i;
@@ -208,8 +208,8 @@ static bool fingerprint_match(const struct ufw_fingerprint *fp,
 	return true;
 }
 
-static bool app_match(const struct ufw_app_match *m,
-		      const struct ufw_flow_facts *facts)
+static bool ufw_match_app(const struct ufw_app_match *m,
+		          const struct ufw_flow_facts *facts)
 {
 	bool hit;
 	__u8 i;
@@ -241,7 +241,7 @@ static bool app_match(const struct ufw_app_match *m,
 	} else {
 		hit = false;
 		for (i = 0; i < m->fingerprint_count && i < UFW_MAX_FINGERPRINTS; i++) {
-			if (fingerprint_match(&m->fingerprints[i], facts)) {
+			if (ufw_match_fingerprint(&m->fingerprints[i], facts)) {
 				hit = true;
 				break;
 			}
@@ -253,8 +253,8 @@ static bool app_match(const struct ufw_app_match *m,
 
 /* --- DPI matching ------------------------------------------------------- */
 
-static bool dpi_match(const struct ufw_dpi_match *m,
-		      const struct ufw_flow_facts *facts)
+static bool ufw_match_dpi(const struct ufw_dpi_match *m,
+		          const struct ufw_flow_facts *facts)
 {
 	bool hit;
 	__u8 i, j;
@@ -289,8 +289,8 @@ static bool dpi_match(const struct ufw_dpi_match *m,
 
 /* --- schedule ----------------------------------------------------------- */
 
-static bool schedule_match(const struct ufw_schedule *s,
-			   const struct ufw_flow_facts *facts)
+static bool ufw_match_schedule(const struct ufw_schedule *s,
+			       const struct ufw_flow_facts *facts)
 {
 	__u16 minute, day, minute_of_day;
 
@@ -332,7 +332,7 @@ static bool schedule_match(const struct ufw_schedule *s,
  * while the other two attributed it to the default, and the verdicts would
  * agree while the logs did not.
  */
-static bool stage_applies(__u8 stage, __u8 protocol)
+static bool ufw_stage_applies(__u8 stage, __u8 protocol)
 {
 	switch (stage) {
 	case UFW_STAGE_PERIMETER:
@@ -346,12 +346,12 @@ static bool stage_applies(__u8 stage, __u8 protocol)
 
 /* --- the rule ------------------------------------------------------------ */
 
-static bool rule_matches(const struct ufw_rule *rule,
-			 const struct ufw_flow_facts *facts)
+static bool ufw_rule_matches(const struct ufw_rule *rule,
+			     const struct ufw_flow_facts *facts)
 {
 	__u8 i;
 
-	if (!stage_applies(rule->stage, facts->protocol))
+	if (!ufw_stage_applies(rule->stage, facts->protocol))
 		return false;
 
 	if (rule->direction != UFW_DIR_ANY && rule->direction != facts->direction)
@@ -360,14 +360,14 @@ static bool rule_matches(const struct ufw_rule *rule,
 	if (rule->protocol != UFW_PROTO_ANY && rule->protocol != facts->protocol)
 		return false;
 
-	if (!addr_match(&rule->src, facts->src_addr, facts->is_v6, facts->src_zone))
+	if (!ufw_match_addr(&rule->src, facts->src_addr, facts->is_v6, facts->src_zone))
 		return false;
-	if (!addr_match(&rule->dst, facts->dst_addr, facts->is_v6, facts->dst_zone))
+	if (!ufw_match_addr(&rule->dst, facts->dst_addr, facts->is_v6, facts->dst_zone))
 		return false;
 
-	if (!port_match(&rule->src_ports, facts->src_port, facts->protocol))
+	if (!ufw_match_port(&rule->src_ports, facts->src_port, facts->protocol))
 		return false;
-	if (!port_match(&rule->dst_ports, facts->dst_port, facts->protocol))
+	if (!ufw_match_port(&rule->dst_ports, facts->dst_port, facts->protocol))
 		return false;
 
 	if (rule->interface_count) {
@@ -385,13 +385,13 @@ static bool rule_matches(const struct ufw_rule *rule,
 	}
 
 	if ((rule->flags & UFW_FLAG_HAS_SCHEDULE) &&
-	    !schedule_match(&rule->schedule, facts))
+	    !ufw_match_schedule(&rule->schedule, facts))
 		return false;
 
-	if ((rule->flags & UFW_FLAG_NEEDS_IDENTITY) && !app_match(&rule->app, facts))
+	if ((rule->flags & UFW_FLAG_NEEDS_IDENTITY) && !ufw_match_app(&rule->app, facts))
 		return false;
 
-	if ((rule->flags & UFW_FLAG_NEEDS_DPI) && !dpi_match(&rule->dpi, facts))
+	if ((rule->flags & UFW_FLAG_NEEDS_DPI) && !ufw_match_dpi(&rule->dpi, facts))
 		return false;
 
 	return true;
@@ -442,7 +442,7 @@ void ufw_classify(const struct ufw_flow_facts *facts, struct ufw_decision *out)
 			const struct ufw_rule *rule = &table->rules[i];
 			__u8 action;
 
-			if (!rule_matches(rule, facts))
+			if (!ufw_rule_matches(rule, facts))
 				continue;
 
 			action = effective_action(rule);
