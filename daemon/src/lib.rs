@@ -1,5 +1,6 @@
 pub mod automaton;
 pub mod config;
+pub mod fleet;
 pub mod identity;
 pub mod ipc;
 pub mod logging;

@@ -331,3 +331,91 @@ mod tests {
         }
     }
 }
+
+/// HMAC-SHA256, RFC 2104.
+///
+/// Used to authenticate policy bundles between a distribution point and a
+/// host. A plain `sha256(key ‖ message)` would be vulnerable to length
+/// extension — SHA-256 is a Merkle–Damgård construction, so an attacker who
+/// has one valid (message, tag) pair can produce a tag for `message ‖ padding
+/// ‖ anything` without knowing the key. For a policy bundle that means
+/// appending rules to a signed policy, which is the whole attack.
+///
+/// HMAC's two-pass structure is what removes that, and it is the reason this
+/// exists rather than a keyed hash somebody wrote in an afternoon.
+pub fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
+    const BLOCK: usize = 64;
+
+    // A key longer than the block is hashed first; shorter is zero-padded.
+    let mut padded = [0u8; BLOCK];
+    if key.len() > BLOCK {
+        padded[..32].copy_from_slice(&sha256(key));
+    } else {
+        padded[..key.len()].copy_from_slice(key);
+    }
+
+    let mut inner_key = [0u8; BLOCK];
+    let mut outer_key = [0u8; BLOCK];
+    for i in 0..BLOCK {
+        inner_key[i] = padded[i] ^ 0x36;
+        outer_key[i] = padded[i] ^ 0x5c;
+    }
+
+    let mut inner = Vec::with_capacity(BLOCK + message.len());
+    inner.extend_from_slice(&inner_key);
+    inner.extend_from_slice(message);
+    let inner_digest = sha256(&inner);
+
+    let mut outer = Vec::with_capacity(BLOCK + 32);
+    outer.extend_from_slice(&outer_key);
+    outer.extend_from_slice(&inner_digest);
+    sha256(&outer)
+}
+
+#[cfg(test)]
+mod hmac_tests {
+    use super::*;
+
+    /// RFC 4231 test vectors. A hand-written HMAC that is subtly wrong
+    /// produces plausible-looking output forever, so it is checked against
+    /// values somebody else computed rather than against itself.
+    #[test]
+    fn rfc_4231_vectors() {
+        // Case 1: 20-byte key of 0x0b, "Hi There".
+        assert_eq!(
+            hex(&hmac_sha256(&[0x0b; 20], b"Hi There")),
+            "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+        );
+        // Case 2: key "Jefe", message "what do ya want for nothing?".
+        assert_eq!(
+            hex(&hmac_sha256(b"Jefe", b"what do ya want for nothing?")),
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+        // Case 3: 20-byte key of 0xaa, 50 bytes of 0xdd.
+        assert_eq!(
+            hex(&hmac_sha256(&[0xaa; 20], &[0xdd; 50])),
+            "773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe"
+        );
+        // Case 6: a key longer than the block, which takes the hash-the-key
+        // branch — the one an implementation forgets.
+        assert_eq!(
+            hex(&hmac_sha256(
+                &[0xaa; 131],
+                b"Test Using Larger Than Block-Size Key - Hash Key First"
+            )),
+            "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
+        );
+    }
+
+    #[test]
+    fn length_extension_does_not_apply() {
+        // The property this exists for. With sha256(key ‖ msg), an attacker
+        // with one tag can compute the tag for an extended message. With HMAC
+        // they cannot, and the visible consequence is simply that the tags are
+        // unrelated.
+        let key = b"fleet";
+        let a = hmac_sha256(key, b"rules: []");
+        let b = hmac_sha256(key, b"rules: []\n  - id: theirs\n");
+        assert_ne!(a, b);
+    }
+}

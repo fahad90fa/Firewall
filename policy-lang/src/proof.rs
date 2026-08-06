@@ -393,6 +393,53 @@ fn cells(policy: &CompiledPolicy) -> Cells {
     }
 }
 
+/// Every equivalence class of this policy, as scenarios.
+///
+/// Exposed because two checks need the same decomposition and must not have
+/// two of them: `prove_equivalence` below, and the conformance suite that
+/// checks the evaluator against `docs/design/formal_semantics.md`. Two
+/// enumerations that drifted apart would mean each check covered a space the
+/// other did not, and neither would say so.
+pub fn equivalence_classes(policy: &CompiledPolicy) -> impl Iterator<Item = Scenario> + '_ {
+    let cells = cells(policy);
+    let mut out = Vec::new();
+    for protocol in &cells.protocols {
+        for direction in &cells.directions {
+            for src in &cells.addresses {
+                for dst in &cells.addresses {
+                    if src.is_ipv4() != dst.is_ipv4() {
+                        continue;
+                    }
+                    for sport in &cells.ports {
+                        for dport in &cells.ports {
+                            for identity in &cells.identities {
+                                for scan in &cells.scans {
+                                    out.push(Scenario {
+                                        name: format!(
+                                            "{:?}/{}/{src}:{sport}->{dst}:{dport}",
+                                            protocol,
+                                            direction.as_str()
+                                        ),
+                                        direction: *direction,
+                                        protocol: *protocol,
+                                        src: (*src, *sport),
+                                        dst: (*dst, *dport),
+                                        identity: identity.clone(),
+                                        dpi: scan.clone(),
+                                        interface: None,
+                                        minute_of_week: None,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out.into_iter()
+}
+
 /// Prove that all three backends and the reference evaluator agree on every
 /// flow this policy can distinguish.
 pub fn prove_equivalence(policy: &CompiledPolicy) -> Proof {
