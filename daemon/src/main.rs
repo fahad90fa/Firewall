@@ -39,13 +39,14 @@ use std::time::Duration;
 
 use ufw_daemon::config::Config;
 use ufw_daemon::identity::TrustDatabase;
-use ufw_daemon::ipc::{self, KernelChannel, KernelEvent};
+use ufw_daemon::ipc::{self, KernelEvent};
 use ufw_daemon::logging::{Enrichment, Logger};
 use ufw_daemon::management_api::{cli, rest, ApiError, ControlPlane, Router};
 use ufw_daemon::policy_loader;
 use ufw_daemon::policy_store::describe;
 use ufw_daemon::signatures;
 use ufw_daemon::state::{self, DaemonState, Health};
+use ufw_daemon::watchdog::Watchdog;
 use ufw_shared::constants;
 use ufw_shared::log_types::{EventKind, Severity};
 use ufw_shared::protocol::{Capabilities, EnforcementMode};
@@ -271,15 +272,20 @@ fn run() -> Result<(), String> {
         Duration::from_millis(config.ipc.connect_timeout_ms),
     );
 
-    let (channel, events) = match connection {
+    let mut events: Option<std::sync::mpsc::Receiver<KernelEvent>> = match connection {
         Ok(conn) => {
+            let endpoint = conn.channel.endpoint().to_string();
             daemon.set_kernel_connected(
-                conn.channel.endpoint().to_string(),
+                endpoint.clone(),
                 conn.handshake.module_version.clone(),
                 conn.handshake.platform.clone(),
                 conn.handshake.capabilities,
                 conn.handshake.installed_revision,
             );
+            // The channel lives in shared state from here on, so the management
+            // plane and a later reconnect both see one current channel rather
+            // than a clone captured at startup.
+            daemon.set_channel(Some(Arc::new(conn.channel)));
             logs.note(
                 &config.daemon.host_id,
                 Severity::Notice,
@@ -288,11 +294,11 @@ fn run() -> Result<(), String> {
                     "kernel module {} on {} at {} (capabilities: {})",
                     conn.handshake.module_version,
                     conn.handshake.platform,
-                    conn.channel.endpoint(),
+                    endpoint,
                     conn.handshake.capabilities.names().join(", ")
                 ),
             );
-            (Some(Arc::new(conn.channel)), Some(conn.events))
+            Some(conn.events)
         }
         Err(e) => {
             let message = format!("cannot reach the kernel module: {e}");
@@ -314,9 +320,14 @@ fn run() -> Result<(), String> {
                 ));
             }
             eprintln!("ufwd: {message} — continuing without enforcement");
-            (None, None)
+            None
         }
     };
+    // Whether the daemon ever reached a module. A daemon deliberately started
+    // without one (require_kernel_module = false) is not something the watchdog
+    // supervises — there is nothing to reconnect to — so it keeps the quiet
+    // idle loop instead.
+    let had_kernel = events.is_some();
 
     // --- signature install -----------------------------------------------
     //
@@ -329,7 +340,7 @@ fn run() -> Result<(), String> {
     // policy may not use DPI at all, and refusing to start would turn an
     // unused feature into an outage. A policy that *does* use DPI on such a
     // module is reported by the dangling-reference check further down.
-    if let Some(channel) = &channel {
+    if let Some(channel) = daemon.channel() {
         let capabilities = daemon.kernel().capabilities;
         if capabilities.has(Capabilities::DPI) {
             let payload = daemon.signatures().encode();
@@ -388,7 +399,6 @@ fn run() -> Result<(), String> {
     // --- policy ----------------------------------------------------------
     let control = Arc::new(Supervisor {
         state: Arc::clone(&daemon),
-        channel: channel.clone(),
         config: config.clone(),
     });
 
@@ -481,27 +491,67 @@ fn run() -> Result<(), String> {
     // --- main loop -------------------------------------------------------
     let mut watcher = policy_loader::watcher_for(&config.policy);
     let interval = policy_loader::watch_interval(&config.policy);
+    let mut watchdog = Watchdog::new(config.watchdog.engine());
+    let supervise = had_kernel && config.ipc.reconnect;
 
     logs.note(
         &config.daemon.host_id,
         Severity::Notice,
         EventKind::PolicyChange,
         format!(
-            "ready: {} rules at revision {}, watching {} ({})",
+            "ready: {} rules at revision {}, watching {} ({}); data-path supervision {}",
             daemon.rule_count(),
             daemon.active_revision(),
             config.policy.dir.display(),
-            watcher.name()
+            watcher.name(),
+            if config.watchdog.enabled && supervise {
+                "on"
+            } else {
+                "off"
+            }
         ),
     );
 
     while !daemon.is_shutting_down() {
-        // Kernel events first: log batches and identity queries are latency
-        // sensitive in a way a policy reload is not.
-        if let Some(events) = &events {
-            drain_kernel_events(events, &daemon, channel.as_deref(), interval);
+        if daemon.kernel().connected {
+            // A stable connection lets the watchdog forget old faults, so a
+            // crash-loop that later settles gets a clean slate.
+            if config.watchdog.enabled && watchdog.on_healthy(ufw_shared::now_us()) {
+                publish_watchdog(&daemon, &watchdog);
+            }
+            // Kernel events first: log batches and identity queries are latency
+            // sensitive in a way a policy reload is not.
+            match &events {
+                Some(rx) => {
+                    if !drain_kernel_events(rx, &daemon, interval) {
+                        // The receiver died without a Disconnected event (the
+                        // sender was dropped). Stop reading it — a dead receiver
+                        // returns instantly, which is what spun the old loop.
+                        events = None;
+                        if daemon.kernel().connected {
+                            daemon.set_kernel_disconnected(Some(
+                                "kernel channel closed".into(),
+                            ));
+                        }
+                    }
+                }
+                None => interruptible_sleep(&daemon, interval),
+            }
+        } else if supervise {
+            // Lost the module. Recover under the watchdog's pacing instead of
+            // hammering: back off, and after a crash-loop stop retrying at speed
+            // and get loud, so the host stays reachable.
+            events = supervise_reconnect(&daemon, &config, &control, &mut watchdog, &logs);
+            if events.is_none() && !daemon.is_shutting_down() {
+                // supervise_reconnect only returns None on shutdown; guard the
+                // loop condition regardless.
+                break;
+            }
         } else {
-            std::thread::sleep(interval);
+            // Not supervising (no module at startup, or reconnect disabled):
+            // idle quietly rather than spinning on a dead receiver.
+            events = None;
+            interruptible_sleep(&daemon, interval);
         }
 
         if watcher.poll() {
@@ -538,13 +588,176 @@ fn run() -> Result<(), String> {
     for worker in workers {
         let _ = worker.join();
     }
-    if let Some(channel) = channel {
+    if let Some(channel) = daemon.set_channel(None) {
         if let Ok(mut channel) = Arc::try_unwrap(channel) {
             channel.shutdown();
         }
     }
     logger.shutdown();
     Ok(())
+}
+
+/// Copy the watchdog's current state into shared state, so `ufwctl status` and
+/// the REST surface can report it. Cheap; called on every transition.
+fn publish_watchdog(daemon: &DaemonState, watchdog: &Watchdog) {
+    daemon.set_watchdog_report(state::WatchdogReport {
+        state: watchdog.state().as_str(),
+        faults_in_window: watchdog.faults_in_window(),
+        total_faults: watchdog.total_faults(),
+        safe_mode_entries: watchdog.safe_mode_entries(),
+    });
+}
+
+/// Sleep for `dur`, but wake early to notice a shutdown request. A watchdog
+/// backoff can be minutes; a daemon that ignored `ufwctl shutdown` for that long
+/// would be a worse bug than the one the backoff is managing.
+fn interruptible_sleep(daemon: &DaemonState, dur: Duration) {
+    let slice = Duration::from_millis(250);
+    let deadline = std::time::Instant::now() + dur;
+    while std::time::Instant::now() < deadline {
+        if daemon.is_shutting_down() {
+            return;
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        std::thread::sleep(remaining.min(slice));
+    }
+}
+
+/// Drive one reconnection episode under the watchdog. Returns the new event
+/// receiver once the data path is back up and fully reinstalled, or `None` if
+/// the daemon is shutting down.
+///
+/// The invariant this protects: the daemon returns to `Enforcing` only after a
+/// *successful full reinstall* into the reconnected module. A module that has
+/// just (re)loaded has empty tables; reporting Enforcing before repopulating
+/// them would be the one fail-open this supervision exists to prevent, so a
+/// reinstall failure drops the fresh channel and counts as another fault rather
+/// than proceeding.
+fn supervise_reconnect(
+    daemon: &Arc<DaemonState>,
+    config: &Config,
+    control: &Supervisor,
+    watchdog: &mut Watchdog,
+    logs: &ufw_daemon::logging::LogHandle,
+) -> Option<std::sync::mpsc::Receiver<KernelEvent>> {
+    let endpoint = if config.ipc.endpoint.is_empty() {
+        ipc::default_endpoint().to_string()
+    } else {
+        config.ipc.endpoint.clone()
+    };
+    let timeout = Duration::from_millis(config.ipc.connect_timeout_ms);
+
+    loop {
+        if daemon.is_shutting_down() {
+            return None;
+        }
+
+        match ipc::establish(&endpoint, &config.daemon.host_id, timeout) {
+            Ok(conn) => {
+                let ep = conn.channel.endpoint().to_string();
+                let handshake = conn.handshake.clone();
+                daemon.set_kernel_connected(
+                    ep,
+                    handshake.module_version.clone(),
+                    handshake.platform.clone(),
+                    handshake.capabilities,
+                    handshake.installed_revision,
+                );
+                let previous = daemon.set_channel(Some(Arc::new(conn.channel)));
+
+                match control.bring_up_data_path() {
+                    Ok(note) => {
+                        drop(previous);
+                        if config.watchdog.enabled {
+                            watchdog.on_healthy(ufw_shared::now_us());
+                        }
+                        publish_watchdog(daemon, watchdog);
+                        logs.note(
+                            &config.daemon.host_id,
+                            Severity::Notice,
+                            EventKind::PolicyChange,
+                            format!(
+                                "kernel module reconnected on {}; {}",
+                                handshake.platform, note
+                            ),
+                        );
+                        return Some(conn.events);
+                    }
+                    Err(e) => {
+                        // Do not run with a module we could not repopulate.
+                        daemon.set_channel(None);
+                        drop(previous);
+                        daemon.set_kernel_disconnected(Some(e.clone()));
+                        logs.note(
+                            &config.daemon.host_id,
+                            Severity::Error,
+                            EventKind::SystemFault,
+                            format!("reconnect reinstall failed, staying degraded: {e}"),
+                        );
+                        fault_and_wait(daemon, config, watchdog, logs);
+                    }
+                }
+            }
+            Err(e) => {
+                daemon.set_kernel_disconnected(Some(e.to_string()));
+                fault_and_wait(daemon, config, watchdog, logs);
+            }
+        }
+    }
+}
+
+/// Record a reconnect failure with the watchdog and wait the prescribed time.
+/// The one place safe mode is entered and announced.
+fn fault_and_wait(
+    daemon: &Arc<DaemonState>,
+    config: &Config,
+    watchdog: &mut Watchdog,
+    logs: &ufw_daemon::logging::LogHandle,
+) {
+    use ufw_daemon::watchdog::FaultResponse;
+
+    let response = if config.watchdog.enabled {
+        watchdog.on_fault(ufw_shared::now_us())
+    } else {
+        FaultResponse::Backoff {
+            attempt: 0,
+            delay: Duration::from_millis(config.ipc.reconnect_backoff_ms),
+        }
+    };
+
+    match response {
+        FaultResponse::EnterSafeMode { faults } => {
+            daemon.set_health(Health::SafeMode);
+            logs.note(
+                &config.daemon.host_id,
+                Severity::Critical,
+                EventKind::SystemFault,
+                format!(
+                    "watchdog: the data path faulted {faults} times in the fault window; \
+                     entering safe mode. The kernel module's last-installed policy stays \
+                     resident, reconnect attempts slow down, and the host stays reachable \
+                     for an operator to intervene"
+                ),
+            );
+        }
+        FaultResponse::HoldSafe { .. } => {}
+        FaultResponse::Backoff { attempt, delay } => {
+            if config.watchdog.enabled {
+                logs.note(
+                    &config.daemon.host_id,
+                    Severity::Warning,
+                    EventKind::SystemFault,
+                    format!(
+                        "watchdog: reconnect attempt {attempt} pending; backing off {} ms",
+                        delay.as_millis()
+                    ),
+                );
+            }
+        }
+    }
+
+    publish_watchdog(daemon, watchdog);
+    interruptible_sleep(daemon, response.delay());
 }
 
 /// `--check`: validate configuration and policy without touching the kernel.
@@ -673,25 +886,28 @@ fn check(config: &Config) -> Result<(), String> {
     }
 }
 
-/// Consume kernel events for up to `budget`.
+/// Consume kernel events for up to `budget`. Returns `true` while the channel
+/// is still alive, and `false` the moment it drops — either through an explicit
+/// `Disconnected` event or through the sender being dropped (a dead `mpsc`
+/// receiver, which would otherwise return instantly on every call and turn the
+/// main loop into a busy spin).
 fn drain_kernel_events(
     events: &std::sync::mpsc::Receiver<KernelEvent>,
     state: &Arc<DaemonState>,
-    channel: Option<&KernelChannel>,
     budget: Duration,
-) {
+) -> bool {
     let deadline = std::time::Instant::now() + budget;
     loop {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         if remaining.is_zero() {
-            return;
+            return true;
         }
         match events.recv_timeout(remaining) {
             Ok(KernelEvent::Logs(batch)) => state.logs.submit(batch),
             Ok(KernelEvent::IdentityQuery { seq, query }) => {
                 state.note_identity_query();
                 let identity = state.identity.answer(&query);
-                if let Some(channel) = channel {
+                if let Some(channel) = state.channel() {
                     let _ = channel.answer_identity(seq, &identity);
                 }
             }
@@ -712,10 +928,10 @@ fn drain_kernel_events(
                         reason.map(|r| format!(": {r}")).unwrap_or_default()
                     ),
                 );
-                return;
+                return false;
             }
-            Err(RecvTimeoutError::Timeout) => return,
-            Err(RecvTimeoutError::Disconnected) => return,
+            Err(RecvTimeoutError::Timeout) => return true,
+            Err(RecvTimeoutError::Disconnected) => return false,
         }
     }
 }
@@ -723,13 +939,54 @@ fn drain_kernel_events(
 /// The control plane behind the management API.
 struct Supervisor {
     state: Arc<DaemonState>,
-    channel: Option<Arc<KernelChannel>>,
     config: Config,
 }
 
 impl Supervisor {
     fn timeout(&self) -> Duration {
         Duration::from_millis(self.config.ipc.connect_timeout_ms)
+    }
+
+    /// (Re)install the full data path — signatures, then the active policy —
+    /// into whatever channel is currently published in state. Used on
+    /// reconnect, where the module on the other end has just (re)loaded and its
+    /// tables are empty. Every step is fail-closed: any error returns and the
+    /// caller drops the fresh channel rather than presenting an empty module as
+    /// if it were enforcing.
+    fn bring_up_data_path(&self) -> Result<String, String> {
+        let Some(channel) = self.state.channel() else {
+            return Err("no channel to bring up".into());
+        };
+        let timeout = self.timeout();
+        let mut installed_signatures = 0u32;
+
+        // Signatures before the policy, for the same reason startup does it:
+        // a DPI rule that reached the module before the signature it names
+        // would scan against an empty set until the gap closed.
+        if self.state.kernel().capabilities.has(Capabilities::DPI) {
+            let payload = self.state.signatures().encode();
+            let ack = channel
+                .install_signatures(&payload, timeout)
+                .map_err(|e| format!("signature reinstall failed: {e}"))?;
+            installed_signatures = ack.signatures_installed;
+        }
+
+        // Then the active policy, forced full — not a delta against what this
+        // module holds, because it holds nothing.
+        let rules = match self.state.active_policy() {
+            Some(active) => {
+                let n = active.rules.len();
+                channel
+                    .install_policy(&active, timeout)
+                    .map_err(|e| format!("policy reinstall failed: {e}"))?;
+                n
+            }
+            None => 0,
+        };
+
+        Ok(format!(
+            "reinstalled {rules} rule(s) and {installed_signatures} signature(s)"
+        ))
     }
 
     /// Compile, verify, install. Every failure leaves the previous policy in
@@ -773,7 +1030,7 @@ impl Supervisor {
             }
         };
 
-        if let Some(channel) = &self.channel {
+        if let Some(channel) = self.state.channel() {
             let result = if use_full {
                 channel.install_policy(&staged.revision.policy, self.timeout())
             } else {
@@ -867,7 +1124,7 @@ impl ControlPlane for Supervisor {
             .with_policies(|store| store.prepare_rollback(revision, now))
             .map_err(|e| ApiError::not_found(e.to_string()))?;
 
-        if let Some(channel) = &self.channel {
+        if let Some(channel) = self.state.channel() {
             channel
                 .install_policy(&staged.revision.policy, self.timeout())
                 .map_err(|e| ApiError::internal(format!("rollback rejected by the module: {e}")))?;
@@ -886,7 +1143,7 @@ impl ControlPlane for Supervisor {
             .with_policies(|store| store.prepare_flush(now))
             .ok_or_else(|| ApiError::conflict("no policy is installed"))?;
 
-        if let Some(channel) = &self.channel {
+        if let Some(channel) = self.state.channel() {
             channel
                 .flush(self.timeout())
                 .map_err(|e| ApiError::internal(format!("flush rejected by the module: {e}")))?;
@@ -905,7 +1162,7 @@ impl ControlPlane for Supervisor {
     }
 
     fn set_mode(&self, mode: EnforcementMode) -> Result<String, ApiError> {
-        if let Some(channel) = &self.channel {
+        if let Some(channel) = self.state.channel() {
             channel
                 .set_mode(mode, self.timeout())
                 .map_err(|e| ApiError::internal(format!("the module refused the mode: {e}")))?;
@@ -931,7 +1188,7 @@ impl ControlPlane for Supervisor {
     }
 
     fn refresh_stats(&self) -> Result<(), ApiError> {
-        let Some(channel) = &self.channel else {
+        let Some(channel) = self.state.channel() else {
             return Ok(());
         };
         match channel.stats(self.timeout()) {

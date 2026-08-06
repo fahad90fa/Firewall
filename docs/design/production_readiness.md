@@ -94,11 +94,23 @@ a thing a person can install, run, or recover from. Shipping means:
   the macOS kext/system-extension approval flow refuse it. This is not a
   missing feature; it is a *will-not-start* gap. Today there is no signing
   pipeline.
-- **Crash telemetry and safe-mode recovery.** When it crashes in ring 0 — and
-  new kernel code crashes — does the machine still boot? Is there a watchdog
-  that disables the filter so the user is not staring at an unbootable laptop?
-  Right now: no. A firewall that can brick the host it protects is a worse
-  outage than the threat it stops.
+- **Crash telemetry and safe-mode recovery.** *Partly built.* The control
+  plane now supervises the data path: a fail-safe watchdog
+  (`daemon/src/watchdog.rs`) detects a crash-loop — repeated data-path faults
+  inside a window — and responds by backing off, then stopping fast retries and
+  entering a loud, defined **safe mode** rather than thrashing, on the governing
+  rule that *a data-path fault must never cost an operator remote access to the
+  host*. A reconnect is fail-closed: the daemon returns to `enforcing` only
+  after a successful full reinstall into the reconnected module, so a freshly
+  reloaded module is never presented as enforcing while its tables are empty.
+  The state is exported in `ufwctl status` (`watchdog.state`, fault counts) so a
+  headless server's monitoring can tell "up" from "up, but crash-looping". What
+  is **still open** is the other half — *ring-0 boot survival*: if the kernel
+  module itself panics on boot, is there a kernel-side watchdog that disables
+  the filter so the machine still boots to a reachable state? That belongs in
+  the module, not the daemon, and is not done. Until it is, the daemon-side
+  supervision keeps a *running* host reachable; it cannot rescue one wedged
+  before userspace starts.
 - **Field update and rollback.** The fleet code (`daemon/src/fleet.rs`) is
   well-built — HMAC-signed bundles, hash-based canaries, rate-based automatic
   rollback — but it has never pushed a bundle to a machine it did not already
@@ -109,9 +121,9 @@ a thing a person can install, run, or recover from. Shipping means:
   every deployed host. None of that process exists.
 
 **What closes it:** productionization work — a signing and notarization
-pipeline, a boot-time watchdog and safe-mode path, a real staged rollout against
-hosts outside the lab, and a security-response process. Mostly engineering, none
-of it research.
+pipeline, a *kernel-side* boot watchdog (the daemon-side supervisor and safe
+mode are built), a real staged rollout against hosts outside the lab, and a
+security-response process. Mostly engineering, none of it research.
 
 ## 4. The macOS path is the weakest leg
 

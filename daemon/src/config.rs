@@ -358,6 +358,7 @@ pub struct Config {
     pub identity: IdentityConfig,
     pub logging: LoggingConfig,
     pub api: ApiConfig,
+    pub watchdog: WatchdogConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -401,6 +402,41 @@ pub struct IpcConfig {
     /// Reconnect automatically if the module goes away.
     pub reconnect: bool,
     pub reconnect_backoff_ms: u64,
+}
+
+/// Fail-safe supervision of the data path. See [`crate::watchdog`] for what
+/// each of these governs; the values here are the operator-facing knobs,
+/// carried in the units a config file is comfortable with (seconds and
+/// milliseconds) and converted to the engine's `Duration`s in [`Self::engine`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WatchdogConfig {
+    /// Supervise the data path at all. Off means a fault reconnects with a
+    /// fixed poll interval and never escalates — the pre-watchdog behaviour,
+    /// kept only for operators who run their own external supervisor.
+    pub enabled: bool,
+    pub max_faults: u32,
+    pub window_secs: u64,
+    pub backoff_initial_ms: u64,
+    pub backoff_max_secs: u64,
+    pub safe_retry_secs: u64,
+    pub recovery_stable_secs: u64,
+    pub safe_stable_secs: u64,
+}
+
+impl WatchdogConfig {
+    /// Build the sanitized decision-engine config from these settings.
+    pub fn engine(&self) -> crate::watchdog::WatchdogConfig {
+        crate::watchdog::WatchdogConfig {
+            max_faults: self.max_faults,
+            window: std::time::Duration::from_secs(self.window_secs),
+            backoff_initial: std::time::Duration::from_millis(self.backoff_initial_ms),
+            backoff_max: std::time::Duration::from_secs(self.backoff_max_secs),
+            safe_retry: std::time::Duration::from_secs(self.safe_retry_secs),
+            recovery_stable: std::time::Duration::from_secs(self.recovery_stable_secs),
+            safe_stable: std::time::Duration::from_secs(self.safe_stable_secs),
+        }
+        .sanitized()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -581,6 +617,16 @@ impl Default for Config {
                 allow_plaintext: false,
                 tls: crate::tls::TlsConfig::default(),
             },
+            watchdog: WatchdogConfig {
+                enabled: true,
+                max_faults: 5,
+                window_secs: 60,
+                backoff_initial_ms: 500,
+                backoff_max_secs: 30,
+                safe_retry_secs: 300,
+                recovery_stable_secs: 10,
+                safe_stable_secs: 300,
+            },
         }
     }
 }
@@ -639,6 +685,14 @@ const KNOWN_KEYS: &[&str] = &[
     "api.tls_key",
     "api.tls_client_ca",
     "api.allow_plaintext",
+    "watchdog.enabled",
+    "watchdog.max_faults",
+    "watchdog.window_secs",
+    "watchdog.backoff_initial_ms",
+    "watchdog.backoff_max_secs",
+    "watchdog.safe_retry_secs",
+    "watchdog.recovery_stable_secs",
+    "watchdog.safe_stable_secs",
 ];
 
 impl Config {
@@ -846,6 +900,32 @@ impl Config {
         }
         if let Some(v) = doc.u64("api.max_body_bytes")? {
             c.api.max_body_bytes = (v as usize).min(constants::MAX_API_BODY);
+        }
+
+        // --- watchdog -----------------------------------------------------
+        if let Some(v) = doc.bool("watchdog.enabled")? {
+            c.watchdog.enabled = v;
+        }
+        if let Some(v) = doc.u64("watchdog.max_faults")? {
+            c.watchdog.max_faults = v.clamp(1, u32::MAX as u64) as u32;
+        }
+        if let Some(v) = doc.u64("watchdog.window_secs")? {
+            c.watchdog.window_secs = v;
+        }
+        if let Some(v) = doc.u64("watchdog.backoff_initial_ms")? {
+            c.watchdog.backoff_initial_ms = v;
+        }
+        if let Some(v) = doc.u64("watchdog.backoff_max_secs")? {
+            c.watchdog.backoff_max_secs = v;
+        }
+        if let Some(v) = doc.u64("watchdog.safe_retry_secs")? {
+            c.watchdog.safe_retry_secs = v;
+        }
+        if let Some(v) = doc.u64("watchdog.recovery_stable_secs")? {
+            c.watchdog.recovery_stable_secs = v;
+        }
+        if let Some(v) = doc.u64("watchdog.safe_stable_secs")? {
+            c.watchdog.safe_stable_secs = v;
         }
 
         c.validate()?;
@@ -1214,5 +1294,38 @@ cli_socket = "/run/ufw.sock"
     fn siem_sink_requires_an_address() {
         let e = Config::parse("[logging.siem]\nenabled = true\n").unwrap_err();
         assert!(e.message.contains("address"));
+    }
+
+    #[test]
+    fn watchdog_defaults_are_present_and_supervise_by_default() {
+        let c = Config::parse("").unwrap();
+        assert!(c.watchdog.enabled);
+        assert_eq!(c.watchdog.max_faults, 5);
+        // The converted engine config is coherent (sanitized).
+        let e = c.watchdog.engine();
+        assert!(e.backoff_max >= e.backoff_initial);
+        assert!(e.safe_stable >= e.recovery_stable);
+    }
+
+    #[test]
+    fn watchdog_section_parses_and_clamps() {
+        let c = Config::parse(
+            "[watchdog]\nenabled = true\nmax_faults = 0\nwindow_secs = 120\n\
+             backoff_initial_ms = 250\nsafe_stable_secs = 600\n",
+        )
+        .unwrap();
+        // max_faults floors at 1 rather than producing a watchdog that trips on
+        // the zeroth fault.
+        assert_eq!(c.watchdog.max_faults, 1);
+        assert_eq!(c.watchdog.window_secs, 120);
+        assert_eq!(c.watchdog.backoff_initial_ms, 250);
+        assert_eq!(c.watchdog.safe_stable_secs, 600);
+    }
+
+    #[test]
+    fn a_typo_in_the_watchdog_section_is_rejected() {
+        let e = Config::parse("[watchdog]\nmax_fault = 3\n").unwrap_err();
+        assert!(e.message.contains("unknown configuration key"), "{}", e.message);
+        assert!(e.message.contains("watchdog.max_faults"), "{}", e.message);
     }
 }

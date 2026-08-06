@@ -10,3 +10,4 @@ pub mod policy_store;
 pub mod signatures;
 pub mod state;
 pub mod tls;
+pub mod watchdog;

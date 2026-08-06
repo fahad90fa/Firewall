@@ -784,6 +784,49 @@ mod tests {
     }
 
     #[test]
+    fn a_reconnect_repopulates_a_fresh_empty_module() {
+        // The reconnect contract: a module that has just (re)loaded has empty
+        // tables, and the daemon must push the full data path back into it
+        // before treating it as enforcing. This exercises the exact sequence
+        // `Supervisor::bring_up_data_path` performs — signatures, then a full
+        // policy install — against a fresh module, and proves it lands.
+        use crate::signatures::SignatureSet;
+
+        // First module: install a policy, confirm it took.
+        let (chan_a, _rx_a, mod_a) = connect_mock();
+        let policy = sample_policy();
+        chan_a
+            .install_policy(&policy, Duration::from_secs(2))
+            .expect("initial install");
+        assert_eq!(mod_a.installed_rule_count(), 1);
+
+        // Lose it.
+        drop(chan_a);
+        mod_a.stop();
+
+        // A brand-new module starts empty.
+        let (chan_b, _rx_b, mod_b) = connect_mock();
+        assert_eq!(mod_b.installed_rule_count(), 0);
+        assert!(mod_b.installed_signatures().is_empty());
+
+        // Reinstall, the way reconnect does: signatures then the full policy.
+        let sig_payload = SignatureSet::default().encode();
+        chan_b
+            .install_signatures(&sig_payload, Duration::from_secs(2))
+            .expect("signature reinstall");
+        chan_b
+            .install_policy(&policy, Duration::from_secs(2))
+            .expect("policy reinstall");
+
+        // The fresh module now holds everything again — no silent empty window.
+        assert_eq!(mod_b.installed_rule_count(), 1);
+        assert_eq!(mod_b.installed_signatures(), sig_payload);
+
+        drop(chan_b);
+        mod_b.stop();
+    }
+
+    #[test]
     fn a_hash_mismatch_is_reported_rather_than_ignored() {
         let (daemon_side, module_side) = loopback::pair();
         let module = MockKernelModule::spawn_with(module_side, |m| m.corrupt_hash = true);

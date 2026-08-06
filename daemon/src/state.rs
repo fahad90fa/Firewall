@@ -32,6 +32,13 @@ pub enum Health {
     /// Running, but the kernel module is unreachable. No filtering is
     /// happening; this is the state that must be loud.
     Degraded,
+    /// The data path has faulted repeatedly and the watchdog has stopped fast
+    /// retries to keep the host reachable. The kernel module's last-installed
+    /// policy remains resident; the daemon is retrying at a slow cadence and
+    /// this is recorded at the highest severity. Distinct from `Degraded` so an
+    /// operator can tell "briefly disconnected, retrying" from "crash-looped,
+    /// held down on purpose". See [`crate::watchdog`].
+    SafeMode,
     /// Starting up.
     Starting,
     /// Shutting down.
@@ -43,8 +50,35 @@ impl Health {
         match self {
             Health::Enforcing => "enforcing",
             Health::Degraded => "degraded",
+            Health::SafeMode => "safe-mode",
             Health::Starting => "starting",
             Health::Stopping => "stopping",
+        }
+    }
+}
+
+/// A snapshot of the data-path watchdog, for `status`. The watchdog itself
+/// lives in the daemon's supervision loop; this is what it publishes so
+/// monitoring can distinguish "up" from "up, but has been crash-looping".
+#[derive(Debug, Clone, Copy)]
+pub struct WatchdogReport {
+    /// `nominal`, `recovering`, or `safe-mode`.
+    pub state: &'static str,
+    /// Faults currently counted inside the fault window.
+    pub faults_in_window: u32,
+    /// Faults ever seen, since the daemon started.
+    pub total_faults: u64,
+    /// Times safe mode has been entered.
+    pub safe_mode_entries: u64,
+}
+
+impl Default for WatchdogReport {
+    fn default() -> Self {
+        WatchdogReport {
+            state: "nominal",
+            faults_in_window: 0,
+            total_faults: 0,
+            safe_mode_entries: 0,
         }
     }
 }
@@ -72,6 +106,13 @@ pub struct DaemonState {
     health: RwLock<Health>,
     mode: RwLock<EnforcementMode>,
     kernel: RwLock<KernelState>,
+    /// The live control channel to the kernel module, or `None` when the daemon
+    /// is running without enforcement (module never reached, or lost). Held here
+    /// rather than in the supervisor so a reconnect swaps it in exactly one
+    /// place and every management operation reads the current channel instead of
+    /// a clone captured at startup that a reconnect would leave stale.
+    kernel_channel: RwLock<Option<Arc<crate::ipc::KernelChannel>>>,
+    watchdog: RwLock<WatchdogReport>,
     policies: Mutex<PolicyStore>,
     kernel_stats: RwLock<KernelStats>,
 
@@ -113,6 +154,8 @@ impl DaemonState {
             health: RwLock::new(Health::Starting),
             mode: RwLock::new(mode),
             kernel: RwLock::new(KernelState::default()),
+            kernel_channel: RwLock::new(None),
+            watchdog: RwLock::new(WatchdogReport::default()),
             policies: Mutex::new(PolicyStore::new()),
             kernel_stats: RwLock::new(KernelStats::default()),
             identity,
@@ -199,9 +242,38 @@ impl DaemonState {
         k.reconnect_attempts = k.reconnect_attempts.saturating_add(1);
         k.last_error = error;
         drop(k);
-        if !self.is_shutting_down() {
+        // Do not downgrade a louder state. A disconnect that arrives while the
+        // watchdog holds the daemon in SafeMode (a crash-loop it deliberately
+        // stopped chasing) must not be repainted as a run-of-the-mill Degraded
+        // blip; and a shutdown-time disconnect is expected, not a fault.
+        if !self.is_shutting_down() && self.health() != Health::SafeMode {
             self.set_health(Health::Degraded);
         }
+    }
+
+    /// The live channel, if any. Callers clone the `Arc` and use it without
+    /// holding the lock, so a concurrent reconnect that swaps the channel never
+    /// blocks a management operation — the operation simply finishes against the
+    /// channel it took, which at worst errors if that channel is mid-teardown.
+    pub fn channel(&self) -> Option<Arc<crate::ipc::KernelChannel>> {
+        self.kernel_channel.read().unwrap().clone()
+    }
+
+    /// Publish a (re)connected channel. The previous one, if any, is returned so
+    /// the caller can tear it down after the swap rather than under the lock.
+    pub fn set_channel(
+        &self,
+        channel: Option<Arc<crate::ipc::KernelChannel>>,
+    ) -> Option<Arc<crate::ipc::KernelChannel>> {
+        std::mem::replace(&mut *self.kernel_channel.write().unwrap(), channel)
+    }
+
+    pub fn watchdog_report(&self) -> WatchdogReport {
+        *self.watchdog.read().unwrap()
+    }
+
+    pub fn set_watchdog_report(&self, report: WatchdogReport) {
+        *self.watchdog.write().unwrap() = report;
     }
 
     pub fn set_kernel_stats(&self, stats: KernelStats) {
@@ -318,6 +390,14 @@ impl DaemonState {
         w.u64_field("installed_revision", kernel.installed_revision);
         w.u64_field("reconnect_attempts", kernel.reconnect_attempts as u64);
         w.opt_str_field("last_error", kernel.last_error.as_deref());
+        w.end_object();
+
+        let wd = self.watchdog_report();
+        w.begin_object_field("watchdog");
+        w.str_field("state", wd.state);
+        w.u64_field("faults_in_window", wd.faults_in_window as u64);
+        w.u64_field("total_faults", wd.total_faults);
+        w.u64_field("safe_mode_entries", wd.safe_mode_entries);
         w.end_object();
 
         w.begin_object_field("policy");
@@ -585,6 +665,31 @@ mod tests {
                 .as_u64(),
             Some(7)
         );
+    }
+
+    #[test]
+    fn status_reports_the_watchdog_state() {
+        let (s, _l) = state();
+        // Cold: nominal, nothing seen.
+        let v = ufw_shared::json::parse(&s.status_json()).unwrap();
+        let wd = v.get("watchdog").unwrap();
+        assert_eq!(wd.get("state").unwrap().as_str(), Some("nominal"));
+        assert_eq!(wd.get("total_faults").unwrap().as_u64(), Some(0));
+
+        // After the supervision loop publishes a safe-mode snapshot, status
+        // reflects it — the signal a headless server's monitoring watches for.
+        s.set_watchdog_report(WatchdogReport {
+            state: "safe-mode",
+            faults_in_window: 5,
+            total_faults: 12,
+            safe_mode_entries: 1,
+        });
+        let v = ufw_shared::json::parse(&s.status_json()).unwrap();
+        let wd = v.get("watchdog").unwrap();
+        assert_eq!(wd.get("state").unwrap().as_str(), Some("safe-mode"));
+        assert_eq!(wd.get("faults_in_window").unwrap().as_u64(), Some(5));
+        assert_eq!(wd.get("total_faults").unwrap().as_u64(), Some(12));
+        assert_eq!(wd.get("safe_mode_entries").unwrap().as_u64(), Some(1));
     }
 
     #[test]
