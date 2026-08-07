@@ -12,6 +12,13 @@ authors.workspace = true
 name = "ufwd"
 path = "src/main.rs"
 
+# A userspace kernel-module simulator: serves the control protocol over a Unix
+# socket so the daemon connects and the management surface is fully operable
+# without loading a kernel module. It filters no traffic; see the module docs.
+[[bin]]
+name = "ufw-kmod-sim"
+path = "src/bin/ufw-kmod-sim.rs"
+
 [lib]
 name = "ufw_daemon"
 path = "src/lib.rs"

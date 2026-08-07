@@ -42,6 +42,34 @@ cargo build --release
 
 The per-platform table at the bottom is the whole thesis.
 
+## Running the daemon without a kernel module
+
+The daemon talks to the kernel module over a framed control protocol. Loading a
+real module means a matching kernel, root, and — realistically — a throwaway VM,
+none of which you want in the loop while working on the daemon, the CLI or the
+dashboard. So the workspace ships a **userspace simulator** that speaks the
+module half of that protocol over a Unix socket:
+
+```sh
+cargo build                                    # builds ufwd, ufwctl, ufw-kmod-sim
+./target/debug/ufw-kmod-sim --endpoint /tmp/ufw-control.sock
+```
+
+Point a daemon at it by setting the endpoint in the daemon's config, then run
+the daemon normally:
+
+```toml
+[ipc]
+endpoint = "/tmp/ufw-control.sock"
+```
+
+The daemon connects, shakes hands, installs its policy and signatures, and
+answers `ufwctl status` and the dashboard with a live control channel —
+`require_kernel_module = true` and all. It reports itself as
+`linux-userspace-sim` everywhere it appears, because it **filters no traffic**:
+it is the control plane made operable, not enforcement. Real packet filtering is
+still the kernel module below.
+
 ## Kernel work
 
 ### Linux

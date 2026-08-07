@@ -42,6 +42,8 @@ use ufw_shared::protocol::{
 pub mod linux;
 pub mod loopback;
 pub mod macos;
+#[cfg(unix)]
+pub mod simulator;
 pub mod windows;
 
 // ===========================================================================

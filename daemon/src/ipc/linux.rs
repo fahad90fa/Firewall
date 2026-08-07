@@ -36,13 +36,31 @@ use super::{StreamTransport, Transport};
 /// Character device the kernel module registers.
 pub const DEFAULT_ENDPOINT: &str = "/dev/ufw-control";
 
-/// Open the control device.
+/// Open the control endpoint.
+///
+/// Two kinds of endpoint carry the same framed protocol:
+///
+/// * a **character device** (`/dev/ufw-control`), which is what the loaded
+///   kernel module registers, and
+/// * a **Unix-domain socket**, which is what a userspace peer serving the
+///   control protocol exposes — the kernel-module simulator (`ufw-kmod-sim`),
+///   or a test harness pointed at with `ipc.endpoint`.
+///
+/// The distinction is only in the syscall that opens the endpoint; everything
+/// above the transport is identical. The socket case exists so the daemon and
+/// its dashboard can be exercised end to end — handshake, policy install,
+/// stats, mode changes — without loading a kernel module, which is the only
+/// way to do that on a host where loading one is not an option.
 pub fn connect(endpoint: &str) -> io::Result<Box<dyn Transport>> {
     let path = if endpoint.is_empty() {
         DEFAULT_ENDPOINT
     } else {
         endpoint
     };
+
+    if let Some(result) = connect_socket(path) {
+        return result;
+    }
 
     let file = OpenOptions::new()
         .read(true)
@@ -51,6 +69,35 @@ pub fn connect(endpoint: &str) -> io::Result<Box<dyn Transport>> {
         .map_err(|e| annotate(path, e))?;
 
     Ok(Box::new(StreamTransport::new(file, path)))
+}
+
+/// Connect to `path` as a Unix-domain socket, or `None` when it is not one.
+///
+/// The endpoint is treated as a socket only when it already exists *and* is a
+/// socket; anything else (a char device, a missing path) falls through to the
+/// device open, so the "module not loaded" diagnostic on `/dev/ufw-control` is
+/// unchanged.
+#[cfg(unix)]
+fn connect_socket(path: &str) -> Option<io::Result<Box<dyn Transport>>> {
+    use std::os::unix::fs::FileTypeExt;
+    use std::os::unix::net::UnixStream;
+
+    let is_socket = std::fs::metadata(path)
+        .map(|m| m.file_type().is_socket())
+        .unwrap_or(false);
+    if !is_socket {
+        return None;
+    }
+
+    Some(match UnixStream::connect(path) {
+        Ok(stream) => Ok(Box::new(StreamTransport::new(stream, path))),
+        Err(e) => Err(annotate(path, e)),
+    })
+}
+
+#[cfg(not(unix))]
+fn connect_socket(_path: &str) -> Option<io::Result<Box<dyn Transport>>> {
+    None
 }
 
 /// Turn the raw `open` failure into something an operator can act on. "No such
@@ -119,5 +166,30 @@ mod tests {
         for p in paths {
             assert!(p.starts_with(ufw_shared::constants::LINUX_BPF_PIN_DIR));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_socket_endpoint_is_opened_as_a_stream_not_a_device() {
+        use std::os::unix::net::UnixListener;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        // A unique, self-cleaning socket path — no device node, so this proves
+        // the connect path takes the socket branch rather than `open(2)` on a
+        // char device.
+        static N: AtomicU32 = AtomicU32::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "ufw-linux-connect-{}-{}.sock",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).expect("bind");
+
+        let transport = connect(path.to_str().unwrap()).expect("connect to socket");
+        assert_eq!(transport.endpoint(), path.to_string_lossy());
+
+        drop(listener);
+        let _ = std::fs::remove_file(&path);
     }
 }
