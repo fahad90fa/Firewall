@@ -104,7 +104,10 @@ struct task_struct {
 	struct mm_struct *mm;
 };
 
-struct socket;
+struct sock;
+struct socket {
+	struct sock *sk;
+};
 struct sockaddr;
 
 #pragma clang attribute pop
@@ -169,7 +172,12 @@ int BPF_PROG(ufw_socket_connect, struct socket *sock, struct sockaddr *address,
 		return 0;
 	}
 
-	cookie = bpf_get_socket_cookie(sock);
+	/*
+	 * The cookie is a property of the network-layer `struct sock`, not the
+	 * `struct socket` wrapper the LSM hook hands us: bpf_get_socket_cookie()
+	 * expects a sock_common, which `sock->sk` provides and `sock` does not.
+	 */
+	cookie = bpf_get_socket_cookie(sock->sk);
 	if (!cookie)
 		return 0;
 
@@ -213,7 +221,7 @@ SEC("lsm/socket_post_create")
 int BPF_PROG(ufw_socket_post_create, struct socket *sock, int family, int type,
 	     int protocol, int kern)
 {
-	__u64 cookie = bpf_get_socket_cookie(sock);
+	__u64 cookie = bpf_get_socket_cookie(sock->sk);
 
 	/* A cookie is unique for the life of a socket but the *number* can be
 	 * reused after it closes. Clearing at create rather than at destroy
