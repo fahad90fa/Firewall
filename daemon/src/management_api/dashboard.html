@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  Unified Firewall — fleet monitoring dashboard.
+  Unified Firewall — fleet operations console.
 
   One self-contained file: no external scripts, stylesheets, fonts or images, in
   keeping with the rest of this project. It is embedded in the daemon binary and
@@ -12,130 +12,313 @@
   (same origin). Add more devices — a Mac, a Linux box, a Windows host — and it
   polls each and shows them side by side; those daemons must list this page's
   origin in `api.cors_origins` for the browser to read them cross-origin.
+
+  Nothing here mutates state. Every control is a read; policy changes and mode
+  switches stay with the CLI and the authenticated API, deliberately.
 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Unified Firewall — Fleet</title>
+<title>Unified Firewall — Fleet Console</title>
 <style>
+  /* ---- design tokens: light is the base, dark overrides ---------------- */
   :root {
-    --bg: #f5f6f8; --panel: #ffffff; --ink: #1a1c1f; --muted: #616873;
-    --line: #e2e5ea; --accent: #2b6cb0;
-    --ok: #2f855a; --ok-bg: #e6f4ec;
-    --warn: #b7791f; --warn-bg: #fdf3e0;
-    --bad: #c53030; --bad-bg: #fbeaea;
-    --idle: #718096; --idle-bg: #edf0f4;
+    --bg: #f4f6f9; --bg-grid: #eef1f5;
+    --surface: #ffffff; --surface-2: #f4f6f9; --surface-3: #eceff4;
+    --border: #e2e6ec; --border-strong: #d0d6df;
+    --text: #0f1420; --text-dim: #59616f; --text-mute: #8b93a1;
+    --accent: #3355e6; --accent-ink: #ffffff; --accent-weak: #e9edfe;
+    --ok: #0f8a56; --ok-weak: #e0f2e9;
+    --warn: #9a6410; --warn-weak: #f7edd8;
+    --bad: #ce362b; --bad-weak: #fbe7e5;
+    --info: #235fa8; --info-weak: #e6effb;
+    --shadow: 0 1px 2px rgba(15,20,32,.05), 0 6px 20px rgba(15,20,32,.05);
+    --shadow-lg: 0 12px 40px rgba(15,20,32,.16);
+    --r-sm: 8px; --r: 12px; --r-lg: 16px;
+    --spark-area: rgba(51,85,230,.16);
   }
   @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #14161a; --panel: #1d2026; --ink: #e6e8ec; --muted: #9aa2ae;
-      --line: #2b2f37; --accent: #63b3ed;
-      --ok: #68d391; --ok-bg: #1c3026;
-      --warn: #f6ad55; --warn-bg: #35291479;
-      --bad: #fc8181; --bad-bg: #3a1d1d;
-      --idle: #a0aec0; --idle-bg: #262b33;
+    :root:not([data-theme="light"]) {
+      --bg: #0a0c10; --bg-grid: #0f1218;
+      --surface: #14171e; --surface-2: #1a1e26; --surface-3: #20252f;
+      --border: #262c37; --border-strong: #384250;
+      --text: #eaedf3; --text-dim: #9aa3b2; --text-mute: #666e7d;
+      --accent: #6f8bff; --accent-ink: #0a0c10; --accent-weak: #1b2340;
+      --ok: #45cf8c; --ok-weak: #10281e;
+      --warn: #e2a54c; --warn-weak: #2a2213;
+      --bad: #f2685d; --bad-weak: #2f1613;
+      --info: #5ba2f2; --info-weak: #12203200;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 28px rgba(0,0,0,.35);
+      --shadow-lg: 0 20px 60px rgba(0,0,0,.6);
+      --spark-area: rgba(111,139,255,.18);
     }
   }
+  :root[data-theme="dark"] {
+    --bg: #0a0c10; --bg-grid: #0f1218;
+    --surface: #14171e; --surface-2: #1a1e26; --surface-3: #20252f;
+    --border: #262c37; --border-strong: #384250;
+    --text: #eaedf3; --text-dim: #9aa3b2; --text-mute: #666e7d;
+    --accent: #6f8bff; --accent-ink: #0a0c10; --accent-weak: #1b2340;
+    --ok: #45cf8c; --ok-weak: #10281e;
+    --warn: #e2a54c; --warn-weak: #2a2213;
+    --bad: #f2685d; --bad-weak: #2f1613;
+    --info: #5ba2f2; --info-weak: #122032;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 28px rgba(0,0,0,.35);
+    --shadow-lg: 0 20px 60px rgba(0,0,0,.6);
+    --spark-area: rgba(111,139,255,.18);
+  }
+
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
-    margin: 0; background: var(--bg); color: var(--ink);
+    margin: 0; color: var(--text);
+    background:
+      radial-gradient(1200px 600px at 100% -10%, var(--bg-grid), transparent 60%),
+      var(--bg);
     font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
+  .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  /* ---- top bar --------------------------------------------------------- */
   header {
-    position: sticky; top: 0; z-index: 10; background: var(--panel);
-    border-bottom: 1px solid var(--line); padding: 12px 18px;
-    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    position: sticky; top: 0; z-index: 20;
+    background: color-mix(in srgb, var(--surface) 82%, transparent);
+    backdrop-filter: saturate(1.4) blur(10px);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 22px; display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
   }
-  header h1 { font-size: 16px; margin: 0; font-weight: 650; }
+  .brand { display: flex; align-items: center; gap: 11px; }
+  .brand .mark {
+    width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
+    background: linear-gradient(160deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #7a3ff0));
+    color: #fff; box-shadow: var(--shadow);
+  }
+  .brand .mark svg { width: 19px; height: 19px; display: block; }
+  .brand h1 { font-size: 15.5px; margin: 0; font-weight: 680; letter-spacing: -.01em; }
+  .brand small { display: block; font-size: 11px; color: var(--text-mute); font-weight: 500; margin-top: -1px; }
   header .spacer { flex: 1; }
-  .summary { display: flex; gap: 14px; flex-wrap: wrap; }
-  .summary .stat { display: flex; flex-direction: column; align-items: flex-start; }
-  .summary .stat b { font-size: 18px; font-variant-numeric: tabular-nums; }
-  .summary .stat span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .live {
+    display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-dim);
+    padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface);
+  }
+  .live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-mute); }
+  .live.on .dot { background: var(--ok); box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 60%, transparent); animation: pulse 2s infinite; }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 55%, transparent); }
+    70% { box-shadow: 0 0 0 7px transparent; }
+    100% { box-shadow: 0 0 0 0 transparent; }
+  }
   .controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   button, input, select {
-    font: inherit; color: var(--ink); background: var(--panel);
-    border: 1px solid var(--line); border-radius: 7px; padding: 6px 10px;
+    font: inherit; color: var(--text); background: var(--surface);
+    border: 1px solid var(--border); border-radius: var(--r-sm); padding: 7px 11px;
   }
-  button { cursor: pointer; }
-  button:hover { border-color: var(--accent); }
-  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-  main { padding: 18px; display: grid; gap: 16px;
-    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
+  select { padding-right: 8px; }
+  button { cursor: pointer; transition: border-color .12s, background .12s, transform .04s; }
+  button:hover { border-color: var(--border-strong); }
+  button:active { transform: translateY(1px); }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
+  button.primary:hover { filter: brightness(1.05); border-color: transparent; }
+  button.icon { padding: 7px 9px; line-height: 1; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; }
+  .seg label { color: var(--text-mute); font-size: 12px; padding: 7px 4px 7px 11px; background: var(--surface); }
+  .seg select { border: none; border-radius: 0; }
+
+  /* ---- fleet KPI band -------------------------------------------------- */
+  .band {
+    padding: 18px 22px 4px; display: grid; gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  }
+  .kpi {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--r);
+    padding: 14px 16px; box-shadow: var(--shadow); position: relative; overflow: hidden;
+  }
+  .kpi::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent); opacity: .0; }
+  .kpi.accent::before { opacity: 1; }
+  .kpi .lab { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-mute); font-weight: 650; }
+  .kpi .big { font-size: 26px; font-weight: 720; letter-spacing: -.02em; margin-top: 3px; }
+  .kpi .sub { font-size: 12px; color: var(--text-dim); margin-top: 1px; }
+  .kpi.good .big { color: var(--ok); }
+  .kpi.bad .big { color: var(--bad); }
+
+  /* ---- status ribbon --------------------------------------------------- */
+  .ribbon {
+    margin: 12px 22px 0; padding: 9px 14px; border-radius: var(--r-sm); font-size: 13px;
+    display: flex; align-items: center; gap: 9px; border: 1px solid var(--border);
+  }
+  .ribbon.ok { background: var(--ok-weak); border-color: color-mix(in srgb, var(--ok) 35%, var(--border)); color: color-mix(in srgb, var(--ok) 85%, var(--text)); }
+  .ribbon.warn { background: var(--warn-weak); border-color: color-mix(in srgb, var(--warn) 35%, var(--border)); color: color-mix(in srgb, var(--warn) 85%, var(--text)); }
+  .ribbon.bad { background: var(--bad-weak); border-color: color-mix(in srgb, var(--bad) 35%, var(--border)); color: color-mix(in srgb, var(--bad) 85%, var(--text)); }
+  .ribbon b { font-weight: 680; }
+
+  /* ---- device grid ----------------------------------------------------- */
+  main {
+    padding: 16px 22px 8px; display: grid; gap: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  }
   .card {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
-    overflow: hidden; display: flex; flex-direction: column;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg);
+    box-shadow: var(--shadow); display: flex; flex-direction: column; overflow: hidden;
+    transition: border-color .12s, box-shadow .12s, transform .12s; cursor: pointer;
   }
-  .card.stale { opacity: .55; }
-  .card-head {
-    display: flex; align-items: center; gap: 10px; padding: 12px 14px;
-    border-bottom: 1px solid var(--line);
+  .card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-lg); transform: translateY(-2px); }
+  .card.stale { opacity: .6; }
+  .card.stale:hover { transform: none; }
+  .card-head { display: flex; align-items: center; gap: 12px; padding: 15px 16px 12px; }
+  .os-tile {
+    width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; font-size: 21px;
+    background: var(--surface-2); border: 1px solid var(--border); flex: none;
   }
-  .card-head .os { font-size: 20px; }
-  .card-head .id { display: flex; flex-direction: column; min-width: 0; }
-  .card-head .id b { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .card-head .id small { color: var(--muted); font-size: 11px; }
-  .card-head .spacer { flex: 1; }
-  .badge {
-    font-size: 11px; font-weight: 650; padding: 3px 9px; border-radius: 999px;
-    text-transform: uppercase; letter-spacing: .03em; white-space: nowrap;
+  .idblock { min-width: 0; flex: 1; }
+  .idblock b { font-size: 15px; font-weight: 660; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .idblock small { color: var(--text-mute); font-size: 11.5px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 680;
+    padding: 4px 10px; border-radius: 999px; text-transform: uppercase; letter-spacing: .03em; white-space: nowrap;
   }
-  .b-ok { color: var(--ok); background: var(--ok-bg); }
-  .b-warn { color: var(--warn); background: var(--warn-bg); }
-  .b-bad { color: var(--bad); background: var(--bad-bg); }
-  .b-idle { color: var(--idle); background: var(--idle-bg); }
-  .rows { padding: 6px 14px 12px; }
-  .section-title {
-    font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
-    color: var(--muted); margin: 12px 0 4px; font-weight: 650;
+  .pill .d { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .p-ok { color: var(--ok); background: var(--ok-weak); }
+  .p-warn { color: var(--warn); background: var(--warn-weak); }
+  .p-bad { color: var(--bad); background: var(--bad-weak); }
+  .p-idle { color: var(--text-dim); background: var(--surface-3); }
+  .remove { color: var(--text-mute); border: none; background: none; font-size: 15px; padding: 2px 4px; margin-left: 2px; border-radius: 6px; }
+  .remove:hover { color: var(--bad); background: var(--bad-weak); }
+
+  .conn {
+    margin: 0 16px 12px; padding: 10px 12px; border-radius: var(--r); background: var(--surface-2);
+    border: 1px solid var(--border); display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   }
-  .row { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
-  .row .k { color: var(--muted); }
-  .row .v { font-variant-numeric: tabular-nums; text-align: right; }
-  .row .v.warn { color: var(--warn); font-weight: 600; }
-  .row .v.bad { color: var(--bad); font-weight: 600; }
-  .remove { color: var(--muted); border: none; background: none; font-size: 16px; padding: 0 4px; }
-  .remove:hover { color: var(--bad); }
-  .err { color: var(--bad); padding: 14px; font-size: 13px; }
+  .conn .state { display: inline-flex; align-items: center; gap: 7px; font-weight: 650; font-size: 13px; }
+  .conn .state .d { width: 8px; height: 8px; border-radius: 50%; }
+  .conn .state.up { color: var(--ok); } .conn .state.up .d { background: var(--ok); }
+  .conn .state.down { color: var(--bad); } .conn .state.down .d { background: var(--bad); }
+  .conn .mod { font-size: 12px; color: var(--text-dim); }
+  .conn .ep { font-size: 11.5px; color: var(--text-mute); margin-left: auto; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 16px 12px; }
+  .chip {
+    font-size: 10.5px; font-weight: 600; letter-spacing: .01em; padding: 3px 8px; border-radius: 6px;
+    background: var(--accent-weak); color: color-mix(in srgb, var(--accent) 82%, var(--text)); white-space: nowrap;
+  }
+  .chip.mute { background: var(--surface-3); color: var(--text-mute); }
+
+  .kgrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--border); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  .kcell { background: var(--surface); padding: 11px 12px; }
+  .kcell .kv { font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
+  .kcell .kv.warn { color: var(--warn); } .kcell .kv.bad { color: var(--bad); } .kcell .kv.ok { color: var(--ok); }
+  .kcell .kl { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-mute); margin-top: 2px; font-weight: 600; }
+
+  .chart { padding: 12px 16px 6px; }
+  .chart .clab { display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: var(--text-mute); margin-bottom: 4px; }
+  .chart .clab .legend { display: flex; gap: 12px; }
+  .chart .clab .legend i { display: inline-flex; align-items: center; gap: 5px; font-style: normal; }
+  .chart .clab .legend i::before { content: ""; width: 9px; height: 3px; border-radius: 2px; background: currentColor; }
+  .chart .legend .fl { color: var(--accent); } .chart .legend .dn { color: var(--bad); }
+  svg.spark { width: 100%; height: 54px; display: block; }
+  svg.spark .area { fill: var(--spark-area); stroke: none; }
+  svg.spark .line-fl { fill: none; stroke: var(--accent); stroke-width: 1.8; stroke-linejoin: round; stroke-linecap: round; }
+  svg.spark .line-dn { fill: none; stroke: var(--bad); stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+  svg.spark .base { stroke: var(--border); stroke-width: 1; }
+  .chart .empty { height: 54px; display: grid; place-items: center; color: var(--text-mute); font-size: 12px; }
+
+  .card-foot {
+    display: flex; align-items: center; gap: 8px; padding: 10px 16px 14px; font-size: 12px; color: var(--text-dim);
+  }
+  .card-foot .sep { color: var(--border-strong); }
+  .card-foot .more { margin-left: auto; color: var(--accent); font-weight: 600; }
+  .err { color: var(--bad); padding: 14px 16px 18px; font-size: 13px; }
+
+  /* ---- empty state ----------------------------------------------------- */
+  .empty-state { grid-column: 1 / -1; text-align: center; color: var(--text-mute); padding: 60px 20px; }
+
+  /* ---- detail modal ---------------------------------------------------- */
   dialog {
-    border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
-    color: var(--ink); padding: 0; max-width: 420px; width: 92%;
+    border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface);
+    color: var(--text); padding: 0; width: 620px; max-width: 94vw; box-shadow: var(--shadow-lg);
   }
-  dialog::backdrop { background: rgba(0,0,0,.45); }
-  .dlg-body { padding: 18px; display: flex; flex-direction: column; gap: 10px; }
-  .dlg-body h2 { margin: 0 0 4px; font-size: 15px; }
-  .dlg-body label { font-size: 12px; color: var(--muted); }
-  .dlg-body input { width: 100%; }
-  .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
-  .muted { color: var(--muted); }
-  .foot { padding: 4px 18px 22px; color: var(--muted); font-size: 12px; }
+  dialog::backdrop { background: rgba(4,6,10,.55); backdrop-filter: blur(2px); }
+  .dlg-head { display: flex; align-items: center; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--border); }
+  .dlg-head .os-tile { width: 36px; height: 36px; font-size: 19px; }
+  .dlg-head b { font-size: 16px; }
+  .dlg-head small { color: var(--text-mute); font-size: 12px; display: block; }
+  .dlg-head .x { margin-left: auto; border: none; background: none; font-size: 20px; color: var(--text-mute); padding: 2px 8px; border-radius: 8px; }
+  .dlg-head .x:hover { background: var(--surface-3); color: var(--text); }
+  .dlg-scroll { max-height: 70vh; overflow: auto; padding: 8px 18px 18px; }
+  .sect { margin-top: 16px; }
+  .sect h3 {
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-mute);
+    font-weight: 680; margin: 0 0 7px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+  }
+  .kv-list { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 22px; }
+  .kv-list .row { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; min-width: 0; }
+  .kv-list .row .k { color: var(--text-dim); }
+  .kv-list .row .v { text-align: right; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .kv-list .row .v.warn { color: var(--warn); font-weight: 600; }
+  .kv-list .row .v.bad { color: var(--bad); font-weight: 600; }
+  .kv-list .row.wide { grid-column: 1 / -1; }
+
+  /* ---- add-device dialog ---------------------------------------------- */
+  .form { padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+  .form h2 { margin: 0; font-size: 16px; }
+  .form label { font-size: 12px; color: var(--text-dim); display: block; margin-bottom: 4px; }
+  .form input { width: 100%; }
+  .form .note { font-size: 12px; color: var(--text-mute); margin: 0; }
+  .form .note code { background: var(--surface-3); padding: 1px 5px; border-radius: 5px; }
+  .form .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+  footer { padding: 8px 22px 26px; color: var(--text-mute); font-size: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  footer .sep { color: var(--border-strong); }
+  .muted { color: var(--text-mute); }
 </style>
 </head>
 <body>
 <header>
-  <h1>🛡️ Unified Firewall</h1>
-  <div class="summary" id="summary"></div>
+  <div class="brand">
+    <span class="mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none"><path d="M12 2l7.5 3v6c0 4.6-3.2 8.4-7.5 9.8C7.7 19.4 4.5 15.6 4.5 11V5L12 2z" fill="currentColor" opacity=".9"/><path d="M8.6 12.2l2.3 2.3 4.4-4.6" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </span>
+    <div>
+      <h1>Unified Firewall</h1>
+      <small>Fleet Operations Console</small>
+    </div>
+  </div>
   <div class="spacer"></div>
+  <span class="live" id="live"><span class="dot"></span><span id="liveTxt">idle</span></span>
   <div class="controls">
-    <label class="muted" for="interval">refresh</label>
-    <select id="interval">
-      <option value="2000">2s</option>
-      <option value="5000" selected>5s</option>
-      <option value="15000">15s</option>
-      <option value="60000">1m</option>
-      <option value="0">off</option>
-    </select>
-    <button id="add">+ Device</button>
+    <span class="seg">
+      <label for="interval">Refresh</label>
+      <select id="interval" aria-label="Refresh interval">
+        <option value="2000">2s</option>
+        <option value="3000" selected>3s</option>
+        <option value="5000">5s</option>
+        <option value="15000">15s</option>
+        <option value="60000">1m</option>
+        <option value="0">off</option>
+      </select>
+    </span>
+    <button id="theme" class="icon" title="Toggle theme" aria-label="Toggle theme">◐</button>
+    <button id="add" title="Add a device">+ Device</button>
     <button id="refresh" class="primary">Refresh</button>
   </div>
 </header>
 
+<section class="band" id="band"></section>
+<div id="ribbonSlot"></div>
 <main id="grid"></main>
-<div class="foot" id="foot"></div>
+<footer id="foot"></footer>
 
+<!-- detail modal -->
+<dialog id="detail">
+  <div class="dlg-head" id="detailHead"></div>
+  <div class="dlg-scroll" id="detailBody"></div>
+</dialog>
+
+<!-- add-device modal -->
 <dialog id="dlg">
-  <form method="dialog" class="dlg-body" id="dlgForm">
+  <form method="dialog" class="form" id="dlgForm">
     <h2>Add a device</h2>
     <div>
       <label for="dUrl">Base URL</label>
@@ -149,11 +332,9 @@
       <label for="dToken">Bearer token (if the device requires one)</label>
       <input id="dToken" placeholder="leave blank for loopback / no-auth">
     </div>
-    <p class="muted" style="font-size:12px;margin:2px 0 0">
-      That device's daemon must list this page's origin in
-      <code>api.cors_origins</code> for the browser to read it.
-    </p>
-    <div class="dlg-actions">
+    <p class="note">That device's daemon must list this page's origin in
+      <code>api.cors_origins</code> for the browser to read it.</p>
+    <div class="actions">
       <button value="cancel">Cancel</button>
       <button value="ok" class="primary" id="dlgOk">Add</button>
     </div>
@@ -163,9 +344,20 @@
 <script>
 "use strict";
 
-// --- device list, persisted -------------------------------------------------
-// The daemon that served this page is always present as "this host" (same
-// origin, empty base URL). Extra devices live in localStorage.
+/* ---- theme ---------------------------------------------------------------- */
+const THEMES = ["system", "light", "dark"];
+const THEME_ICON = { system: "◐", light: "☀", dark: "☾" };
+function applyTheme(t) {
+  const root = document.documentElement;
+  if (t === "system") root.removeAttribute("data-theme");
+  else root.setAttribute("data-theme", t);
+  document.getElementById("theme").textContent = THEME_ICON[t];
+  document.getElementById("theme").title = "Theme: " + t;
+}
+let theme = localStorage.getItem("ufw.theme") || "system";
+applyTheme(theme);
+
+/* ---- device list, persisted ---------------------------------------------- */
 const SELF = { id: "self", url: "", name: "This host", token: "" };
 function loadDevices() {
   let extra = [];
@@ -177,9 +369,22 @@ function saveDevices(list) {
 }
 let devices = loadDevices();
 
-// --- formatting -------------------------------------------------------------
+/* in-memory poll history + last snapshot, keyed by device id */
+const HISTORY = {};            // id -> [{t, flows, denied, packets}]
+const LAST = {};               // id -> { dev, data, err }
+const HIST_MAX = 48;
+let lastUpdate = null;
+
+/* ---- formatting ----------------------------------------------------------- */
 const nf = new Intl.NumberFormat();
 const num = n => (n === undefined || n === null) ? "—" : nf.format(n);
+function compact(n) {
+  if (n === undefined || n === null) return "—";
+  if (n < 1000) return "" + n;
+  const u = ["k", "M", "B", "T"]; let i = -1; let v = n;
+  while (v >= 1000 && i < u.length - 1) { v /= 1000; i++; }
+  return v.toFixed(v < 10 ? 1 : 0) + u[i];
+}
 function bytes(b) {
   if (b === undefined || b === null) return "—";
   const u = ["B", "KB", "MB", "GB"]; let i = 0;
@@ -188,27 +393,30 @@ function bytes(b) {
 }
 function uptime(s) {
   if (s === undefined || s === null) return "—";
-  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600),
-        m = Math.floor(s % 3600 / 60);
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
   if (d) return `${d}d ${h}h`; if (h) return `${h}h ${m}m`;
   if (m) return `${m}m ${s % 60}s`; return `${s}s`;
 }
+function ago(ts) {
+  if (!ts) return "never";
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 2) return "just now";
+  if (s < 60) return s + "s ago";
+  const m = Math.floor(s / 60); return m + "m ago";
+}
 const OS = {
-  linux:   { icon: "🐧", name: "Linux" },
+  linux: { icon: "🐧", name: "Linux" },
+  "linux-userspace-sim": { icon: "🧪", name: "Linux (simulator)" },
   windows: { icon: "🪟", name: "Windows" },
-  macos:   { icon: "🍎", name: "macOS" },
-  darwin:  { icon: "🍎", name: "macOS" },
-  mock:    { icon: "🧪", name: "Mock" },
+  macos: { icon: "🍎", name: "macOS" }, darwin: { icon: "🍎", name: "macOS" },
+  mock: { icon: "🧪", name: "Mock" },
 };
-function osOf(p) { return OS[(p || "").toLowerCase()] || { icon: "❔", name: p || "unknown" }; }
+function osOf(p) { return OS[(p || "").toLowerCase()] || { icon: "🖥", name: p || "unknown" }; }
 
-const HEALTH = {
-  enforcing: "b-ok", degraded: "b-bad", "safe-mode": "b-bad",
-  starting: "b-idle", stopping: "b-idle",
-};
-const WD = { nominal: "b-ok", recovering: "b-warn", "safe-mode": "b-bad" };
+const HEALTH_PILL = { enforcing: "p-ok", degraded: "p-bad", "safe-mode": "p-bad", starting: "p-idle", stopping: "p-idle" };
+const WD_CLS = { nominal: "", recovering: "warn", "safe-mode": "bad" };
 
-// --- fetching ---------------------------------------------------------------
+/* ---- fetching ------------------------------------------------------------- */
 function headers(token) { return token ? { Authorization: "Bearer " + token } : {}; }
 async function getJSON(base, path, token) {
   const r = await fetch(base + path, { headers: headers(token), cache: "no-store" });
@@ -223,157 +431,286 @@ async function getRSS(base, token) {
     return m ? parseInt(m[1], 10) : null;
   } catch (_) { return null; }
 }
-
 async function pollDevice(dev) {
-  // Refresh the kernel's traffic counters first, then read the full status, so
-  // the traffic block is fresh in the same cycle. Both are best-effort past the
-  // status read, which is the one that must succeed.
   try { await getJSON(dev.url, "/v1/stats", dev.token); } catch (_) {}
   const status = await getJSON(dev.url, "/v1/status", dev.token);
   const rss = await getRSS(dev.url, dev.token);
+  const t = status.traffic || {};
+  const h = HISTORY[dev.id] || (HISTORY[dev.id] = []);
+  h.push({ t: Date.now(), flows: t.flows_seen || 0, denied: t.flows_denied || 0, packets: t.packets_seen || 0 });
+  if (h.length > HIST_MAX) h.shift();
   return { status, rss };
 }
 
-// --- rendering --------------------------------------------------------------
-function row(k, v, cls) {
-  return `<div class="row"><span class="k">${k}</span><span class="v ${cls || ""}">${v}</span></div>`;
+/* ---- sparkline ------------------------------------------------------------ */
+function trafficChart(id) {
+  const h = HISTORY[id] || [];
+  const W = 320, H = 54, pad = 4;
+  // per-interval deltas: denied is a subset of flows, so both share one scale.
+  const d = [];
+  for (let i = 1; i < h.length; i++) {
+    d.push({ f: Math.max(0, h[i].flows - h[i - 1].flows), n: Math.max(0, h[i].denied - h[i - 1].denied) });
+  }
+  if (d.length < 2) return `<div class="empty">collecting traffic…</div>`;
+  // 18% headroom so the peak never glues to the top edge.
+  const max = Math.max(1, ...d.map(s => s.f)) * 1.18;
+  const n = d.length;
+  const x = i => pad + (i / (n - 1)) * (W - 2 * pad);
+  const y = v => pad + (1 - v / max) * (H - 2 * pad);
+  let fl = "M" + x(0).toFixed(1) + " " + y(d[0].f).toFixed(1);
+  let dn = "M" + x(0).toFixed(1) + " " + y(d[0].n).toFixed(1);
+  for (let i = 1; i < n; i++) {
+    fl += " L" + x(i).toFixed(1) + " " + y(d[i].f).toFixed(1);
+    dn += " L" + x(i).toFixed(1) + " " + y(d[i].n).toFixed(1);
+  }
+  const area = fl + " L" + x(n - 1).toFixed(1) + " " + (H - pad) + " L" + x(0).toFixed(1) + " " + (H - pad) + " Z";
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+    <line class="base" x1="0" y1="${H - pad}" x2="${W}" y2="${H - pad}"/>
+    <path class="area" d="${area}"/>
+    <path class="line-fl" d="${fl}"/>
+    <path class="line-dn" d="${dn}"/>
+  </svg>`;
 }
+
+/* ---- rendering ------------------------------------------------------------ */
 function el(html) { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstChild; }
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+function kcell(v, label, cls) {
+  return `<div class="kcell"><div class="kv ${cls || ""} tnum">${v}</div><div class="kl">${label}</div></div>`;
+}
 
 function renderCard(dev, data, err) {
-  const os = osOf(data && data.status && data.status.kernel && data.status.kernel.platform);
   const s = data && data.status;
+  const os = osOf(s && s.kernel && s.kernel.platform);
   const removable = dev.id !== "self";
-  const rm = removable ? `<button class="remove" data-rm="${dev.id}" title="remove">✕</button>` : "";
+  const rm = removable ? `<button class="remove" data-rm="${dev.id}" title="remove device">✕</button>` : "";
 
   if (err || !s) {
-    return el(`<div class="card stale">
-      <div class="card-head"><span class="os">${os.icon}</span>
-        <div class="id"><b>${dev.name || dev.url || "device"}</b><small>${dev.url || "same origin"}</small></div>
-        <div class="spacer"></div><span class="badge b-bad">unreachable</span>${rm}
+    return el(`<div class="card stale" data-id="${dev.id}">
+      <div class="card-head">
+        <span class="os-tile">${os.icon}</span>
+        <div class="idblock"><b>${esc(dev.name || dev.url || "device")}</b><small>${esc(dev.url || "same origin")}</small></div>
+        <span class="pill p-bad"><span class="d"></span>unreachable</span>${rm}
       </div>
-      <div class="err">${(err && err.message) || "no data"}</div>
+      <div class="err">${esc((err && err.message) || "no data")}</div>
     </div>`);
   }
 
-  const k = s.kernel || {}, w = s.watchdog || {}, p = s.policy || {},
-        id = s.identity || {}, lg = s.logging || {}, t = s.traffic || {};
+  const k = s.kernel || {}, w = s.watchdog || {}, p = s.policy || {}, t = s.traffic || {};
   const denied = t.flows_denied || 0;
-  const wdCls = WD[w.state] || "b-idle";
-  const hCls = HEALTH[s.health] || "b-idle";
+  const hCls = HEALTH_PILL[s.health] || "p-idle";
+  const caps = (k.capabilities || []);
+  const chips = caps.length
+    ? caps.map(c => `<span class="chip">${esc(c)}</span>`).join("")
+    : `<span class="chip mute">no capabilities reported</span>`;
 
-  return el(`<div class="card">
+  return el(`<div class="card" data-id="${dev.id}">
     <div class="card-head">
-      <span class="os" title="${os.name}">${os.icon}</span>
-      <div class="id"><b>${s.host_id || dev.name || "host"}</b>
-        <small>${os.name} · v${s.version || "?"} · ${dev.url || "same origin"}</small></div>
-      <div class="spacer"></div>
-      <span class="badge ${hCls}">${s.health}</span>${rm}
+      <span class="os-tile" title="${esc(os.name)}">${os.icon}</span>
+      <div class="idblock">
+        <b>${esc(s.host_id || dev.name || "host")}</b>
+        <small>${esc(os.name)} · v${esc(s.version || "?")} · ${esc(dev.url || "same origin")}</small>
+      </div>
+      <span class="pill ${hCls}"><span class="d"></span>${esc(s.health)}</span>${rm}
     </div>
-    <div class="rows">
-      ${row("Mode", s.mode)}
-      ${row("Uptime", uptime(s.uptime_secs))}
-      ${row("Memory (RSS)", bytes(data.rss))}
 
-      <div class="section-title">Kernel</div>
-      ${row("Connected", k.connected ? "yes" : "NO", k.connected ? "" : "bad")}
-      ${row("Module", k.module_version || "—")}
-      ${row("Capabilities", (k.capabilities || []).join(", ") || "—")}
-      ${k.last_error ? row("Last error", k.last_error, "bad") : ""}
+    <div class="conn">
+      <span class="state ${k.connected ? "up" : "down"}"><span class="d"></span>${k.connected ? "Connected" : "Disconnected"}</span>
+      <span class="mod">${k.connected ? esc(k.module_version || "module") : (esc(k.last_error || "no kernel module"))}</span>
+      <span class="ep mono">${esc(k.endpoint || "")}</span>
+    </div>
 
-      <div class="section-title">Watchdog</div>
-      ${row("State", w.state || "—", wdCls === "b-bad" ? "bad" : wdCls === "b-warn" ? "warn" : "")}
-      ${row("Faults (window / total)", num(w.faults_in_window) + " / " + num(w.total_faults),
-             (w.faults_in_window || 0) > 0 ? "warn" : "")}
-      ${row("Safe-mode entries", num(w.safe_mode_entries), (w.safe_mode_entries || 0) > 0 ? "bad" : "")}
+    <div class="chips">${chips}</div>
 
-      <div class="section-title">Policy</div>
-      ${row("Revision", num(p.revision))}
-      ${row("Rules", num(p.rules))}
-      ${row("Reloads (ok / failed)", num(p.reloads) + " / " + num(p.failed_reloads),
-             (p.failed_reloads || 0) > 0 ? "warn" : "")}
-      ${p.origin ? row("Source", p.origin) : ""}
+    <div class="kgrid">
+      ${kcell(compact(t.flows_seen), "Flows", "")}
+      ${kcell(compact(denied), "Denied", denied > 0 ? "warn" : "")}
+      ${kcell(num(p.rules), "Rules", "")}
+      ${kcell(uptime(s.uptime_secs), "Uptime", "")}
+    </div>
 
-      <div class="section-title">Traffic</div>
-      ${row("Flows seen", num(t.flows_seen))}
-      ${row("Allowed / Denied", num(t.flows_allowed) + " / " + num(denied), denied > 0 ? "warn" : "")}
-      ${row("Packets", num(t.packets_seen))}
-      ${row("DPI scans / hits", num(t.dpi_scans) + " / " + num(t.dpi_hits))}
-      ${row("Conntrack entries", num(t.conntrack_entries))}
-      ${row("eBPF fast-path", num(t.ebpf_fastpath_decisions))}
+    <div class="chart">
+      <div class="clab"><span>Traffic / interval</span>
+        <span class="legend"><i class="fl">flows</i><i class="dn">denied</i></span>
+      </div>
+      ${trafficChart(dev.id)}
+    </div>
 
-      <div class="section-title">Identity</div>
-      ${row("Resolver", id.resolver || "—")}
-      ${row("Queries", num(id.queries))}
-      ${row("Cache hit rate", id.cache_hit_rate !== undefined ? (id.cache_hit_rate * 100).toFixed(1) + "%" : "—")}
-
-      <div class="section-title">Logging</div>
-      ${row("Received / written", num(lg.received) + " / " + num(lg.written))}
-      ${row("Dropped (queue full)", num(lg.dropped_queue_full), (lg.dropped_queue_full || 0) > 0 ? "bad" : "")}
-      ${row("Sink errors", num(lg.sink_errors), (lg.sink_errors || 0) > 0 ? "warn" : "")}
+    <div class="card-foot">
+      <span>Mode <b>${esc(s.mode || "—")}</b></span><span class="sep">•</span>
+      <span>Rev ${num(p.revision)}</span><span class="sep">•</span>
+      <span>${bytes(data.rss)}</span>
+      <span class="more">Details →</span>
     </div>
   </div>`);
 }
 
-function renderSummary(results) {
-  const total = results.length;
-  let online = 0, enforcing = 0, degraded = 0, denied = 0;
+function renderBand(results) {
+  let total = results.length, online = 0, enforcing = 0, alarm = 0, denied = 0, flows = 0;
   for (const r of results) {
-    if (r.data && r.data.status) {
-      online++;
-      const s = r.data.status;
-      if (s.health === "enforcing") enforcing++;
-      if (s.health === "degraded" || s.health === "safe-mode") degraded++;
-      denied += (s.traffic && s.traffic.flows_denied) || 0;
-    }
+    const s = r.data && r.data.status;
+    if (!s) continue;
+    online++;
+    if (s.health === "enforcing") enforcing++;
+    if (s.health === "degraded" || s.health === "safe-mode") alarm++;
+    if (s.kernel && !s.kernel.connected) alarm = Math.max(alarm, 1);
+    denied += (s.traffic && s.traffic.flows_denied) || 0;
+    flows += (s.traffic && s.traffic.flows_seen) || 0;
   }
-  const stat = (b, s, cls) =>
-    `<div class="stat"><b class="${cls || ""}">${b}</b><span>${s}</span></div>`;
-  document.getElementById("summary").innerHTML =
-    stat(online + "/" + total, "online") +
-    stat(enforcing, "enforcing") +
-    stat(degraded, "degraded") +
-    stat(num(denied), "flows denied");
+  const kpi = (lab, big, sub, cls) =>
+    `<div class="kpi ${cls || ""}"><div class="lab">${lab}</div><div class="big tnum">${big}</div><div class="sub">${sub}</div></div>`;
+  document.getElementById("band").innerHTML =
+    kpi("Devices online", online + "<span class='muted' style='font-size:16px'>/" + total + "</span>", total === online ? "all reachable" : (total - online) + " unreachable", "accent") +
+    kpi("Enforcing", enforcing, enforcing === total ? "full coverage" : "of " + total + " devices", enforcing === total && total > 0 ? "good" : "") +
+    kpi("Needs attention", alarm, alarm === 0 ? "nothing degraded" : "degraded / disconnected", alarm > 0 ? "bad" : "") +
+    kpi("Flows denied", compact(denied), compact(flows) + " flows seen", denied > 0 ? "bad" : "");
+
+  // status ribbon
+  let cls = "ok", msg = "<b>All systems nominal.</b> Every device is reachable and enforcing.";
+  if (online < total) { cls = "warn"; msg = "<b>" + (total - online) + " device(s) unreachable.</b> Check connectivity, CORS origins, or tokens."; }
+  if (alarm > 0) { cls = "bad"; msg = "<b>" + alarm + " device(s) need attention.</b> A firewall that is up but not enforcing is not protecting the host."; }
+  if (total === 0) { cls = "warn"; msg = "No devices configured."; }
+  document.getElementById("ribbonSlot").innerHTML = `<div class="ribbon ${cls}">${msg}</div>`;
 }
 
-// --- main loop --------------------------------------------------------------
-let timer = null;
+/* ---- detail modal --------------------------------------------------------- */
+function detailRow(k, v, cls, wide) {
+  return `<div class="row ${wide ? "wide" : ""}"><span class="k">${k}</span><span class="v ${cls || ""}">${v}</span></div>`;
+}
+function openDetail(id) {
+  const entry = LAST[id];
+  if (!entry || !entry.data || !entry.data.status) return;
+  const s = entry.data.status, rss = entry.data.rss;
+  const os = osOf(s.kernel && s.kernel.platform);
+  const k = s.kernel || {}, w = s.watchdog || {}, p = s.policy || {}, idn = s.identity || {}, lg = s.logging || {}, t = s.traffic || {};
+  const hitRate = idn.cache_hit_rate !== undefined ? (idn.cache_hit_rate * 100).toFixed(1) + "%" : "—";
+  const denied = t.flows_denied || 0;
+
+  document.getElementById("detailHead").innerHTML =
+    `<span class="os-tile">${os.icon}</span>
+     <div><b>${esc(s.host_id || "host")}</b><small>${esc(os.name)} · v${esc(s.version || "?")} · ${esc(k.endpoint || "same origin")}</small></div>
+     <button class="x" id="detailClose" aria-label="Close">✕</button>`;
+
+  const sect = (title, rows) => `<div class="sect"><h3>${title}</h3><div class="kv-list">${rows}</div></div>`;
+  document.getElementById("detailBody").innerHTML =
+    `<div class="chart" style="padding:6px 0 0">
+       <div class="clab"><span>Traffic / interval</span><span class="legend"><i class="fl">flows</i><i class="dn">denied</i></span></div>
+       ${trafficChart(id)}
+     </div>` +
+    sect("Overview",
+      detailRow("Health", esc(s.health), s.health === "enforcing" ? "" : "bad") +
+      detailRow("Mode", esc(s.mode)) +
+      detailRow("Uptime", uptime(s.uptime_secs)) +
+      detailRow("Memory (RSS)", bytes(rss))) +
+    sect("Kernel / enforcement",
+      detailRow("Connected", k.connected ? "yes" : "NO", k.connected ? "" : "bad") +
+      detailRow("Module", esc(k.module_version || "—")) +
+      detailRow("Platform", esc(k.platform || "—")) +
+      detailRow("Installed revision", num(k.installed_revision)) +
+      detailRow("Endpoint", esc(k.endpoint || "—"), "", true) +
+      (k.capabilities && k.capabilities.length ? detailRow("Capabilities", esc(k.capabilities.join(", ")), "", true) : "") +
+      (k.last_error ? detailRow("Last error", esc(k.last_error), "bad", true) : "")) +
+    sect("Watchdog",
+      detailRow("State", esc(w.state || "—"), WD_CLS[w.state] || "") +
+      detailRow("Faults (window / total)", num(w.faults_in_window) + " / " + num(w.total_faults), (w.faults_in_window || 0) > 0 ? "warn" : "") +
+      detailRow("Safe-mode entries", num(w.safe_mode_entries), (w.safe_mode_entries || 0) > 0 ? "bad" : "")) +
+    sect("Policy",
+      detailRow("Revision", num(p.revision)) +
+      detailRow("Rules", num(p.rules)) +
+      detailRow("Reloads (ok / failed)", num(p.reloads) + " / " + num(p.failed_reloads), (p.failed_reloads || 0) > 0 ? "warn" : "") +
+      (p.origin ? detailRow("Source", esc(p.origin), "", true) : "")) +
+    sect("Traffic",
+      detailRow("Flows seen", num(t.flows_seen)) +
+      detailRow("Allowed / denied", num(t.flows_allowed) + " / " + num(denied), denied > 0 ? "warn" : "") +
+      detailRow("Packets seen", num(t.packets_seen)) +
+      detailRow("DPI scans / hits", num(t.dpi_scans) + " / " + num(t.dpi_hits)) +
+      detailRow("Conntrack entries", num(t.conntrack_entries)) +
+      detailRow("eBPF fast-path", num(t.ebpf_fastpath_decisions))) +
+    sect("Identity",
+      detailRow("Resolver", esc(idn.resolver || "—")) +
+      detailRow("Trust anchors", num(idn.trust_anchors)) +
+      detailRow("Queries", num(idn.queries)) +
+      detailRow("Cache hit rate", hitRate)) +
+    sect("Logging",
+      detailRow("Received / written", num(lg.received) + " / " + num(lg.written)) +
+      detailRow("Filtered", num(lg.filtered)) +
+      detailRow("Dropped (queue full)", num(lg.dropped_queue_full), (lg.dropped_queue_full || 0) > 0 ? "bad" : "") +
+      detailRow("Sink errors", num(lg.sink_errors), (lg.sink_errors || 0) > 0 ? "warn" : "") +
+      detailRow("Correlations", num(lg.correlations)));
+
+  const dlg = document.getElementById("detail");
+  document.getElementById("detailClose").onclick = () => dlg.close();
+  if (!dlg.open) dlg.showModal();
+}
+
+/* ---- main loop ------------------------------------------------------------ */
+let timer = null, busy = false;
+function setLive(state) {
+  const el = document.getElementById("live");
+  el.classList.toggle("on", state === "live");
+  document.getElementById("liveTxt").textContent =
+    state === "live" ? "polling" : (state === "paused" ? "paused" : "idle");
+}
 async function refresh() {
+  if (busy) return; busy = true;
   devices = loadDevices();
-  const grid = document.getElementById("grid");
   const results = await Promise.all(devices.map(async dev => {
-    try { return { dev, data: await pollDevice(dev), err: null }; }
+    try { const data = await pollDevice(dev); return { dev, data, err: null }; }
     catch (err) { return { dev, data: null, err }; }
   }));
+  const grid = document.getElementById("grid");
   grid.innerHTML = "";
-  for (const r of results) grid.appendChild(renderCard(r.dev, r.data, r.err));
-  renderSummary(results);
-  document.getElementById("foot").textContent =
-    "Updated " + new Date().toLocaleTimeString() + " · " + devices.length + " device(s)";
-  grid.querySelectorAll("[data-rm]").forEach(btn => btn.onclick = () => {
+  if (results.length === 0) {
+    grid.innerHTML = `<div class="empty-state">No devices.</div>`;
+  } else {
+    for (const r of results) { LAST[r.dev.id] = r; grid.appendChild(renderCard(r.dev, r.data, r.err)); }
+  }
+  renderBand(results);
+  lastUpdate = Date.now();
+  updateFoot();
+  grid.querySelectorAll("[data-rm]").forEach(btn => btn.onclick = e => {
+    e.stopPropagation();
     devices = loadDevices().filter(d => d.id !== btn.dataset.rm);
     saveDevices(devices); refresh();
   });
+  grid.querySelectorAll(".card").forEach(card => card.onclick = () => openDetail(card.dataset.id));
+  busy = false;
 }
-
+function updateFoot() {
+  const on = parseInt(document.getElementById("interval").value, 10) > 0;
+  document.getElementById("foot").innerHTML =
+    `<span>Updated ${ago(lastUpdate)}</span><span class="sep">•</span>` +
+    `<span>${devices.length} device(s)</span><span class="sep">•</span>` +
+    `<span class="muted">Read-only view · policy &amp; mode changes via the CLI / authenticated API</span>`;
+  setLive(on ? "live" : "paused");
+}
 function scheduleTimer() {
   if (timer) clearInterval(timer);
   const ms = parseInt(document.getElementById("interval").value, 10);
   if (ms > 0) timer = setInterval(refresh, ms);
+  updateFoot();
 }
 
+/* keep "updated Ns ago" honest between polls */
+setInterval(updateFoot, 1000);
+
+/* ---- events --------------------------------------------------------------- */
 document.getElementById("refresh").onclick = refresh;
 document.getElementById("interval").onchange = scheduleTimer;
+document.getElementById("theme").onclick = () => {
+  theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+  localStorage.setItem("ufw.theme", theme); applyTheme(theme);
+};
 document.getElementById("add").onclick = () => document.getElementById("dlg").showModal();
 document.getElementById("dlgForm").onsubmit = () => {
-  // The dialog closes via method="dialog"; only act on the OK button.
   const ok = document.activeElement && document.activeElement.id === "dlgOk";
   const url = document.getElementById("dUrl").value.trim().replace(/\/$/, "");
   if (ok && url) {
     const list = loadDevices();
     list.push({ id: "d" + Date.now(), url,
-                name: document.getElementById("dName").value.trim(),
-                token: document.getElementById("dToken").value.trim() });
+      name: document.getElementById("dName").value.trim(),
+      token: document.getElementById("dToken").value.trim() });
     saveDevices(list);
     document.getElementById("dUrl").value = "";
     document.getElementById("dName").value = "";
@@ -381,6 +718,9 @@ document.getElementById("dlgForm").onsubmit = () => {
     refresh();
   }
 };
+document.getElementById("detail").addEventListener("click", e => {
+  if (e.target.id === "detail") e.target.close(); // click backdrop to close
+});
 
 refresh();
 scheduleTimer();

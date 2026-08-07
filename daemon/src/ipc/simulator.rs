@@ -77,17 +77,27 @@ fn capabilities() -> Capabilities {
 /// what makes a reconnect against the simulator take the same
 /// full-reinstall path the supervisor runs against a real reloaded module.
 ///
-/// Only what the replies actually depend on is kept: the installed rules and
-/// revision (a delta applies against them, and stats reports per-rule hits) and
-/// a poll counter. The enforcement mode and default action are echoed straight
-/// back in their acks rather than stored, so there is nothing else to track.
+/// The installed rules and revision (a delta applies against them, and stats
+/// reports per-rule hits), plus a small set of running traffic counters. The
+/// enforcement mode and default action are echoed straight back in their acks
+/// rather than stored, so there is nothing else to track.
+///
+/// The traffic counters advance by a varying amount on every stats poll rather
+/// than a fixed step, so a dashboard graphing them shows an organic line with
+/// the occasional denied spike instead of a dead-flat ramp. The variation is a
+/// deterministic function of the poll count — no clock, no RNG — so it stays
+/// reproducible and needs no dependencies.
 #[derive(Default)]
 struct SimState {
     rules: Vec<CompiledRule>,
     revision: u64,
-    /// Bumped on every stats request so the reported counters advance between
-    /// polls instead of sitting frozen — enough for a dashboard to look alive.
     stats_polls: u64,
+    flows: u64,
+    denied: u64,
+    packets: u64,
+    dpi_scans: u64,
+    dpi_hits: u64,
+    ebpf: u64,
 }
 
 /// Handle one decoded request, returning the reply to send (or `None` for
@@ -184,16 +194,36 @@ fn handle(state: &mut SimState, message: Message) -> Option<Message> {
 
         Message::StatsRequest => {
             state.stats_polls += 1;
-            let flows = state.stats_polls.saturating_mul(100);
-            let denied = state.stats_polls;
-            let allowed = flows.saturating_sub(denied);
+            // A deterministic hash of the poll count drives the per-interval
+            // variation. Constant increments would draw a dead-flat graph; this
+            // gives a lively line with an occasional denied spike, while staying
+            // reproducible (no clock, no RNG).
+            let h = state.stats_polls.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 29;
+            let flows_inc = 25 + h % 85; // 25..=109 flows this interval
+            let denied_inc = if h % 5 == 0 { (1 + h % 6).min(flows_inc) } else { 0 };
+            let pkt_inc = flows_inc.saturating_mul(5 + (h >> 4) % 7);
+
+            state.flows += flows_inc;
+            state.denied += denied_inc;
+            state.packets += pkt_inc;
+            state.dpi_scans += flows_inc;
+            state.dpi_hits += if h % 11 == 0 { 1 } else { 0 };
+            state.ebpf += flows_inc;
+
+            let allowed = state.flows.saturating_sub(state.denied);
             let mut stats = KernelStats {
-                flows_seen: flows,
+                flows_seen: state.flows,
                 flows_allowed: allowed,
-                flows_denied: denied,
-                packets_seen: flows.saturating_mul(8),
-                packets_allowed: allowed.saturating_mul(8),
-                packets_denied: denied.saturating_mul(8),
+                flows_denied: state.denied,
+                packets_seen: state.packets,
+                packets_allowed: allowed.saturating_mul(6),
+                packets_denied: state.denied.saturating_mul(6),
+                dpi_scans: state.dpi_scans,
+                dpi_hits: state.dpi_hits,
+                // A live gauge (current tracked connections), not a running
+                // total, so it wanders instead of only climbing.
+                conntrack_entries: 40 + h % 120,
+                ebpf_fastpath_decisions: state.ebpf,
                 ..Default::default()
             };
             // One hit per installed rule, so the per-rule view is populated.
