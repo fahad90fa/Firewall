@@ -70,6 +70,37 @@ answers `ufwctl status` and the dashboard with a live control channel —
 it is the control plane made operable, not enforcement. Real packet filtering is
 still the kernel module below.
 
+## Real enforcement without a kernel module (`ufw-nft`)
+
+The daemon's control channel talks to a kernel module (or, for development, the
+simulator above). If you want a policy to *actually filter this host's traffic*
+without building and loading a kernel module, `ufw-nft` compiles a policy and
+loads it into the running kernel with nftables:
+
+```sh
+cargo build
+sudo ./target/debug/ufw-nft apply policies/base/default_allow.yaml   # real, live
+sudo ./target/debug/ufw-nft status                                   # rules + counters
+sudo ./target/debug/ufw-nft revert                                   # remove it
+```
+
+This is genuine kernel enforcement (netfilter), not a simulation. It covers the
+**packet-layer** policy — addresses, ports, protocols, directions; the identity
+and DPI predicates need the kernel module, and any rule nftables cannot express
+is dropped from the output rather than silently weakened (the compiler emits the
+same file as a documented parity artifact).
+
+Because a default-deny policy can lock you out of a live machine, prefer a
+lockout-safe trial first — it applies the policy and arms a **detached**
+auto-revert that fires even if the terminal closes:
+
+```sh
+sudo ./target/debug/ufw-nft trial policies/base/default_deny.yaml 60
+```
+
+Everything lives in the `inet ufw` table, so `revert` removes exactly what was
+added and leaves any other host firewall rules alone.
+
 ## Kernel work
 
 ### Linux

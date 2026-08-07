@@ -12,6 +12,12 @@ authors.workspace = true
 name = "ufwctl"
 path = "src/main.rs"
 
+# Real nftables enforcement: compile a policy and load it into the running
+# kernel. Unlike the daemon's kernel channel, this needs no kernel module.
+[[bin]]
+name = "ufw-nft"
+path = "src/bin/ufw-nft.rs"
+
 [lib]
 name = "ufw_cli"
 path = "src/lib.rs"
