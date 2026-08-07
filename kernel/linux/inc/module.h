@@ -243,6 +243,11 @@ void ufw_log_note(const char *fmt, ...);
 int ufw_policy_sync_init(void);
 void ufw_policy_sync_exit(void);
 
+/* Send a raw payload to the daemon over the netlink transport. Implemented in
+ * the netlink layer (policy_sync.c) and used by the logging path to deliver
+ * queued events. Returns -ENOTCONN when no daemon is attached. */
+int ufw_log_send(const void *payload, size_t len);
+
 /* Whether the daemon is currently connected. Drives the fail-closed
  * behaviour on identity misses: with no daemon there is nobody to ask, so
  * the module stops enqueueing queries rather than filling the queue. */

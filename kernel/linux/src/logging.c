@@ -89,8 +89,6 @@ static DEFINE_SPINLOCK(ufw_log_lock);
 static void ufw_log_work_fn(struct work_struct *work);
 static DECLARE_WORK(ufw_log_work, ufw_log_work_fn);
 
-int ufw_log_send(const void *payload, size_t len);
-
 int ufw_log_init(void)
 {
 	ufw_log_ring = kvcalloc(UFW_LOG_QUEUE_DEPTH,
