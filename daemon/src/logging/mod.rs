@@ -455,8 +455,10 @@ mod tests {
     }
 
     fn enrichment() -> Enrichment {
-        let mut profile = NetworkProfile::default();
-        profile.internal = vec![Cidr::parse("10.0.0.0/8").unwrap()];
+        let profile = NetworkProfile {
+            internal: vec![Cidr::parse("10.0.0.0/8").unwrap()],
+            ..Default::default()
+        };
         Enrichment {
             host_id: "host-a".into(),
             policy_revision: 7,

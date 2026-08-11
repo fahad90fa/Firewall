@@ -96,7 +96,8 @@ impl Args {
             .map(|(_, v)| v.as_str())
     }
     fn require(&self, name: &str) -> Result<&str, String> {
-        self.get(name).ok_or_else(|| format!("--{name} is required"))
+        self.get(name)
+            .ok_or_else(|| format!("--{name} is required"))
     }
 }
 
@@ -184,7 +185,10 @@ fn verify(args: &[String]) -> Result<(), String> {
         }
         ok += 1;
     }
-    println!("verified {ok} artifact(s) against {}", manifest_path.display());
+    println!(
+        "verified {ok} artifact(s) against {}",
+        manifest_path.display()
+    );
     Ok(())
 }
 

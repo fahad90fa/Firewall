@@ -239,7 +239,12 @@ pub fn prometheus(state: &DaemonState) -> String {
     // like `ufw_health{state="degraded"}` alerts cleanly.
     m.help("ufw_health", "Daemon health, one-hot by state", "gauge");
     for s in ["enforcing", "degraded", "safe-mode", "starting", "stopping"] {
-        m.labeled_value("ufw_health", "state", s, bool_f64(state.health().as_str() == s));
+        m.labeled_value(
+            "ufw_health",
+            "state",
+            s,
+            bool_f64(state.health().as_str() == s),
+        );
     }
     m.help("ufw_enforcement_mode", "Enforcement mode, one-hot", "gauge");
     for s in ["enforce", "monitor", "emergency-allow"] {
@@ -264,7 +269,11 @@ pub fn prometheus(state: &DaemonState) -> String {
 
     // Watchdog: the signal a headless server watches to tell "up" from
     // "up, but crash-looping".
-    m.help("ufw_watchdog_state", "Data-path watchdog state, one-hot", "gauge");
+    m.help(
+        "ufw_watchdog_state",
+        "Data-path watchdog state, one-hot",
+        "gauge",
+    );
     for s in ["nominal", "recovering", "safe-mode"] {
         m.labeled_value("ufw_watchdog_state", "state", s, bool_f64(wd.state == s));
     }
@@ -310,7 +319,11 @@ pub fn prometheus(state: &DaemonState) -> String {
         "Identity resolutions answered",
         counters.identity_queries as f64,
     );
-    m.counter("ufw_identity_cache_hits_total", "Identity cache hits", cache.hits as f64);
+    m.counter(
+        "ufw_identity_cache_hits_total",
+        "Identity cache hits",
+        cache.hits as f64,
+    );
     m.counter(
         "ufw_identity_cache_misses_total",
         "Identity cache misses",
@@ -323,12 +336,36 @@ pub fn prometheus(state: &DaemonState) -> String {
     );
 
     // Traffic, straight from the kernel module's counters.
-    m.counter("ufw_flows_seen_total", "Flows observed", stats.flows_seen as f64);
-    m.counter("ufw_flows_allowed_total", "Flows allowed", stats.flows_allowed as f64);
-    m.counter("ufw_flows_denied_total", "Flows denied", stats.flows_denied as f64);
-    m.counter("ufw_packets_seen_total", "Packets observed", stats.packets_seen as f64);
-    m.counter("ufw_dpi_scans_total", "DPI scans performed", stats.dpi_scans as f64);
-    m.counter("ufw_dpi_hits_total", "DPI signature hits", stats.dpi_hits as f64);
+    m.counter(
+        "ufw_flows_seen_total",
+        "Flows observed",
+        stats.flows_seen as f64,
+    );
+    m.counter(
+        "ufw_flows_allowed_total",
+        "Flows allowed",
+        stats.flows_allowed as f64,
+    );
+    m.counter(
+        "ufw_flows_denied_total",
+        "Flows denied",
+        stats.flows_denied as f64,
+    );
+    m.counter(
+        "ufw_packets_seen_total",
+        "Packets observed",
+        stats.packets_seen as f64,
+    );
+    m.counter(
+        "ufw_dpi_scans_total",
+        "DPI scans performed",
+        stats.dpi_scans as f64,
+    );
+    m.counter(
+        "ufw_dpi_hits_total",
+        "DPI signature hits",
+        stats.dpi_hits as f64,
+    );
     m.gauge(
         "ufw_conntrack_entries",
         "Connection-tracking entries",
@@ -341,14 +378,26 @@ pub fn prometheus(state: &DaemonState) -> String {
     );
 
     // Logging pipeline health: dropped events are a back-pressure signal.
-    m.counter("ufw_log_events_received_total", "Log events received", logs.received as f64);
-    m.counter("ufw_log_events_written_total", "Log events written", logs.written as f64);
+    m.counter(
+        "ufw_log_events_received_total",
+        "Log events received",
+        logs.received as f64,
+    );
+    m.counter(
+        "ufw_log_events_written_total",
+        "Log events written",
+        logs.written as f64,
+    );
     m.counter(
         "ufw_log_events_dropped_total",
         "Log events dropped by a full queue",
         logs.dropped_queue_full as f64,
     );
-    m.counter("ufw_log_sink_errors_total", "Log sink errors", logs.sink_errors as f64);
+    m.counter(
+        "ufw_log_sink_errors_total",
+        "Log sink errors",
+        logs.sink_errors as f64,
+    );
 
     // The leak signal itself, when the platform can report it.
     if let Some(rss) = process_rss_bytes() {
@@ -561,7 +610,12 @@ mod tests {
             ResolverOptions::default(),
             16,
         ));
-        let state = DaemonState::new("host-a", EnforcementMode::Enforce, identity, logger.handle());
+        let state = DaemonState::new(
+            "host-a",
+            EnforcementMode::Enforce,
+            identity,
+            logger.handle(),
+        );
         prometheus(&state)
     }
 }

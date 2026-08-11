@@ -355,10 +355,10 @@ fn emit_module_header(policy: &CompiledPolicy, ordered: &[CompiledRule]) -> Stri
 
     s.push_str("static const struct ufw_rule ufw_rules[] = {\n");
     for r in ordered {
-        let _ = write!(
+        let _ = writeln!(
             s,
             "    {{ .id = {}, .name = \"{}\", .stage = {}, .priority = {}, .action = {}, \
-             .direction = {}, .protocol = {}, .flags = {} }},\n",
+             .direction = {}, .protocol = {}, .flags = {} }},",
             r.id,
             escape_c(&r.name),
             stage_macro(r.layer),
@@ -503,9 +503,19 @@ fn netfilter_hook(d: Direction) -> &'static str {
 /// This is not the enforcement path — the kernel module is — but it is a
 /// genuinely useful artifact: an operator can read it, diff it against the
 /// host's existing firewall, and see what the policy will do without loading
-/// anything. Rules that need identity or payload context are emitted as
-/// comments, because nftables cannot express them and silently dropping them
-/// would make the file lie.
+/// anything (and `ufw-nft apply` loads exactly this file). Rules that need
+/// identity or payload context are emitted as comments, because nftables
+/// cannot express them and silently dropping them would make the file lie.
+///
+/// The same honesty applies to matchers, not just whole rules. An `inet`
+/// table matches IPv4 with `ip` expressions and IPv6 with `ip6` expressions,
+/// so an address set that mixes families cannot be one nftables set: the rule
+/// is split into an IPv4 line and an IPv6 line with the same verdict. Zone
+/// predicates are lowered through the same `NetworkProfile::classify` order
+/// the reference model uses (loopback, then internal, then perimeter, then
+/// external); a predicate whose exact lowering does not exist — a negated
+/// zone+address combination, say — becomes a comment rather than a rule that
+/// matches more or less than the policy said.
 fn emit_nftables(policy: &CompiledPolicy, ordered: &[CompiledRule]) -> String {
     let mut s = String::new();
     let _ = write!(
@@ -542,18 +552,26 @@ fn emit_nftables(policy: &CompiledPolicy, ordered: &[CompiledRule]) -> String {
             if !r.direction.matches(dir) {
                 continue;
             }
-            match nft_rule(r) {
-                Some(line) => {
-                    let _ = writeln!(s, "        {line}");
+            match nft_rule(policy, r, dir) {
+                Lowering::Lines(lines) => {
+                    for line in lines {
+                        let _ = writeln!(s, "        {line}");
+                    }
                 }
-                None => {
-                    let _ =
-                        writeln!(
+                Lowering::Kernel(reason) => {
+                    let _ = writeln!(
                         s,
-                        "        # [{}] `{}` needs {} context; enforced by the kernel module only",
+                        "        # [{}] `{}` {reason}; enforced by the kernel module only",
                         r.layer.as_str(),
                         r.name,
-                        if r.dpi.is_some() { "payload" } else { "process" }
+                    );
+                }
+                Lowering::Unmatchable(reason) => {
+                    let _ = writeln!(
+                        s,
+                        "        # [{}] `{}` {reason}; it can never match a packet and is omitted",
+                        r.layer.as_str(),
+                        r.name,
                     );
                 }
             }
@@ -564,64 +582,473 @@ fn emit_nftables(policy: &CompiledPolicy, ordered: &[CompiledRule]) -> String {
     s
 }
 
-fn nft_rule(r: &CompiledRule) -> Option<String> {
-    if r.app.is_some() || r.dpi.is_some() || r.schedule.is_some() {
+/// What became of one policy rule on the way into nftables.
+enum Lowering {
+    /// One line per address family that can match — two when an address set
+    /// mixes IPv4 and IPv6, one otherwise.
+    Lines(Vec<String>),
+    /// nftables cannot express the rule; the string completes the sentence
+    /// "`name` …; enforced by the kernel module only".
+    Kernel(String),
+    /// The rule contradicts itself (an IPv4-only source with an IPv6-only
+    /// destination, a negated wildcard); no packet can ever satisfy it.
+    Unmatchable(String),
+}
+
+/// The two address families an `inet` chain sees. nftables has no expression
+/// that matches an address of either family, which is the entire reason rules
+/// get split.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fam {
+    V4,
+    V6,
+}
+
+impl Fam {
+    fn keyword(self) -> &'static str {
+        match self {
+            Fam::V4 => "ip",
+            Fam::V6 => "ip6",
+        }
+    }
+
+    fn holds(self, c: &Cidr) -> bool {
+        c.is_v4() == (self == Fam::V4)
+    }
+}
+
+/// How one side (source or destination) of a rule lowers for one family.
+enum SideMatch {
+    /// Zero or more match statements; zero means unconstrained.
+    Stmts(Vec<String>),
+    /// This family cannot satisfy the predicate (e.g. an IPv4-only address
+    /// set on the IPv6 line); the family's rule line is skipped.
+    NoFamily,
+}
+
+fn nft_rule(policy: &CompiledPolicy, r: &CompiledRule, chain_dir: Direction) -> Lowering {
+    if r.app.is_some() || r.dpi.is_some() {
+        return Lowering::Kernel(format!(
+            "needs {} context",
+            if r.dpi.is_some() {
+                "payload"
+            } else {
+                "process"
+            }
+        ));
+    }
+    if r.schedule.is_some() {
+        return Lowering::Kernel("is active only on a schedule".into());
+    }
+    for (side, m) in [("source", &r.source), ("destination", &r.dest)] {
+        if m.negate && m.cidrs.is_empty() && m.zones.is_empty() {
+            return Lowering::Unmatchable(format!("negates the wildcard {side} address"));
+        }
+    }
+    for (side, p) in [("source", &r.source_ports), ("destination", &r.dest_ports)] {
+        if p.negate && p.ranges.is_empty() {
+            return Lowering::Unmatchable(format!("negates the wildcard {side} port"));
+        }
+    }
+
+    let mut lines = Vec::new();
+    for fam in [Fam::V4, Fam::V6] {
+        // ICMP is an IPv4 protocol and ICMPv6 an IPv6 one; the other family's
+        // line would be a rule no packet can hit.
+        match (r.protocol, fam) {
+            (Protocol::Icmp, Fam::V6) | (Protocol::IcmpV6, Fam::V4) => continue,
+            _ => {}
+        }
+        let src = match side_match(&policy.network_profile, &r.source, "saddr", fam) {
+            Ok(SideMatch::Stmts(v)) => v,
+            Ok(SideMatch::NoFamily) => continue,
+            Err(reason) => return Lowering::Kernel(reason),
+        };
+        let dst = match side_match(&policy.network_profile, &r.dest, "daddr", fam) {
+            Ok(SideMatch::Stmts(v)) => v,
+            Ok(SideMatch::NoFamily) => continue,
+            Err(reason) => return Lowering::Kernel(reason),
+        };
+
+        let mut parts: Vec<String> = Vec::new();
+        if !r.interfaces.is_empty() {
+            // The packet's interface is the receiving one on the input hook
+            // and the sending one on the output hook, so the same rule
+            // constrains a different meta key per chain.
+            let key = match chain_dir {
+                Direction::Outbound => "oifname",
+                _ => "iifname",
+            };
+            let names = r
+                .interfaces
+                .iter()
+                .map(|i| format!("\"{}\"", i.replace('"', "'")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            parts.push(format!("{key} {{ {names} }}"));
+        }
+        if let Some(n) = r.protocol.number() {
+            parts.push(format!("meta l4proto {n}"));
+        }
+        parts.extend(src);
+        parts.extend(dst);
+        // Ports. nftables names the port field with a per-transport keyword.
+        // A rule that carries ports but leaves the protocol as `any` still
+        // means the port-bearing transports — the semantic analyzer allows
+        // exactly `any` (never icmp) to pair with ports — so it lowers to the
+        // generic transport header under an `l4proto` guard, which both
+        // matches tcp/udp/sctp and cannot misread an ICMP packet's header
+        // bytes as a port. Dropping the port entirely, as this once did, made
+        // "deny any protocol to port 3389" silently mean "deny everything".
+        let have_ports = !r.source_ports.ranges.is_empty() || !r.dest_ports.ranges.is_empty();
+        if have_ports {
+            let keyword = match r.protocol {
+                Protocol::Tcp => Some("tcp"),
+                Protocol::Udp => Some("udp"),
+                Protocol::Other(132) => Some("sctp"),
+                Protocol::Any => {
+                    // Constrain to the same transports `Protocol::has_ports`
+                    // recognises, so the nft rule matches exactly the set the
+                    // decision model treats as port-bearing — no broader, no
+                    // narrower.
+                    parts.push("meta l4proto { 6, 17, 132 }".to_string());
+                    Some("th")
+                }
+                // icmp/icmpv6/other non-port protocols with a port list are a
+                // semantic error and never reach here; skip defensively.
+                _ => None,
+            };
+            if let Some(kw) = keyword {
+                if let Some(m) = port_match(&r.source_ports, kw, "sport") {
+                    parts.push(m);
+                }
+                if let Some(m) = port_match(&r.dest_ports, kw, "dport") {
+                    parts.push(m);
+                }
+            }
+        }
+
+        // Denies the policy asked to log carry a structured prefix naming the
+        // rule, so a kernel log line can be traced back to the decision that
+        // produced it. Logged *allows* are deliberately not lowered to a log
+        // statement: nf_log on every accepted packet floods the ring buffer,
+        // and the kernel module's own sink is where that firehose belongs.
+        let log = match r.effective_action() {
+            Action::Alert => Some(log_statement("alert", &r.name)),
+            Action::Deny if r.log => Some(log_statement("deny", &r.name)),
+            _ => None,
+        };
+        let verdict = match r.effective_action() {
+            Action::Allow | Action::AllowInspect => Some("accept"),
+            Action::Deny => Some("drop"),
+            // An alert observes and lets evaluation continue; the log
+            // statement above is the whole of it.
+            Action::Alert => None,
+            Action::Continue => Some("continue"),
+        };
+        if let Some(log) = log {
+            parts.push(log);
+        }
+        if let Some(v) = verdict {
+            parts.push(v.to_string());
+        }
+        parts.push(format!("comment \"{}\"", r.name.replace('"', "'")));
+        lines.push(parts.join(" ").trim().to_string());
+    }
+
+    // A rule with no family-specific matcher lowers identically for both
+    // families; one line covers the whole inet chain.
+    lines.dedup();
+    if lines.is_empty() {
+        return Lowering::Unmatchable(
+            "combines predicates whose address families never intersect".into(),
+        );
+    }
+    Lowering::Lines(lines)
+}
+
+/// The kernel-log prefix for a logged deny or alert:
+/// `ufw#<deny|alert>#<rule-name> `. The dashboard and any log pipeline parse
+/// this back into (action, rule); the trailing space separates it from the
+/// packet fields netfilter appends. Kept well under NF_LOG's 127-character
+/// prefix ceiling.
+fn log_statement(kind: &str, rule_name: &str) -> String {
+    let mut name: String = rule_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    name.truncate(96);
+    format!("log prefix \"ufw#{kind}#{name} \"")
+}
+
+/// One port expression, e.g. `tcp dport { 80, 443 }` or, for an any-protocol
+/// rule, `th dport { 53 }`. `keyword` is the nftables transport keyword
+/// (`tcp`/`udp`/`sctp`/`th`), already chosen by the caller.
+fn port_match(ports: &PortMatch, keyword: &str, field: &str) -> Option<String> {
+    if ports.ranges.is_empty() {
         return None;
     }
-    let mut parts: Vec<String> = Vec::new();
-    if let Some(n) = r.protocol.number() {
-        parts.push(format!("meta l4proto {n}"));
+    let list = ports
+        .ranges
+        .iter()
+        .map(|p| {
+            if p.lo == p.hi {
+                p.lo.to_string()
+            } else {
+                format!("{}-{}", p.lo, p.hi)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let op = if ports.negate { "!= " } else { "" };
+    Some(format!("{keyword} {field} {op}{{ {list} }}"))
+}
+
+/// The address sets that define `Zone::Loopback`, per family. Internal and
+/// perimeter come from the network profile; loopback is the address
+/// architecture's.
+fn loopback_cidrs() -> [Cidr; 2] {
+    [
+        Cidr::parse("127.0.0.0/8").expect("constant"),
+        Cidr::parse("::1/128").expect("constant"),
+    ]
+}
+
+/// Lower one side's address predicate for one family.
+///
+/// `Err` carries a reason the predicate has no exact nftables form; the rule
+/// then falls back to a comment. Widening (dropping a constraint) or
+/// narrowing (inventing one) are both lies this function refuses to tell.
+fn side_match(
+    profile: &NetworkProfile,
+    m: &AddressMatch,
+    field: &str,
+    fam: Fam,
+) -> Result<SideMatch, String> {
+    if m.cidrs.is_empty() && m.zones.is_empty() {
+        return Ok(SideMatch::Stmts(Vec::new()));
     }
-    if !r.source.cidrs.is_empty() {
-        parts.push(format!(
-            "ip saddr {{ {} }}",
-            r.source
-                .cidrs
-                .iter()
-                .map(|c| c.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    if !r.dest.cidrs.is_empty() {
-        parts.push(format!(
-            "ip daddr {{ {} }}",
-            r.dest
-                .cidrs
-                .iter()
-                .map(|c| c.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    if !r.dest_ports.ranges.is_empty() && r.protocol.has_ports() {
-        parts.push(format!(
-            "{} dport {{ {} }}",
-            r.protocol.as_str(),
-            r.dest_ports
-                .ranges
-                .iter()
-                .map(|p| if p.lo == p.hi {
-                    p.lo.to_string()
+
+    if m.negate {
+        if !m.zones.is_empty() && !m.cidrs.is_empty() {
+            // ¬(addr ∈ set ∧ zone ∈ Z) is a disjunction, and an nftables rule
+            // is a conjunction.
+            return Err(format!(
+                "negates a combined address+zone {} predicate, which nftables \
+                 cannot express as one rule",
+                if field == "saddr" {
+                    "source"
                 } else {
-                    format!("{}-{}", p.lo, p.hi)
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
+                    "destination"
+                }
+            ));
+        }
+        if !m.cidrs.is_empty() {
+            // ¬(addr ∈ set): membership in the other family is impossible, so
+            // its negation holds vacuously — that family's line simply loses
+            // the constraint.
+            let members: Vec<&Cidr> = m.cidrs.iter().filter(|c| fam.holds(c)).collect();
+            if members.is_empty() {
+                return Ok(SideMatch::Stmts(Vec::new()));
+            }
+            if members.iter().any(|c| c.is_any()) {
+                // ¬(everything in this family) matches nothing in it.
+                return Ok(SideMatch::NoFamily);
+            }
+            return Ok(SideMatch::Stmts(vec![format!(
+                "{} {field} != {{ {} }}",
+                fam.keyword(),
+                render_cidrs(&members)
+            )]));
+        }
+        // ¬(zone ∈ Z) ≡ zone ∈ (complement of Z); reuse the positive lowering.
+        let complement: Vec<Zone> = [
+            Zone::Loopback,
+            Zone::Internal,
+            Zone::Perimeter,
+            Zone::External,
+        ]
+        .into_iter()
+        .filter(|z| !m.zones.contains(z))
+        .collect();
+        if complement.is_empty() {
+            // The predicate negated every zone there is.
+            return Ok(SideMatch::NoFamily);
+        }
+        return zone_stmts(profile, &complement, field, fam);
+    }
+
+    let mut stmts = Vec::new();
+    if !m.cidrs.is_empty() {
+        let members: Vec<&Cidr> = m.cidrs.iter().filter(|c| fam.holds(c)).collect();
+        if members.is_empty() {
+            // Every listed address is the other family; nothing of this
+            // family can ever satisfy the predicate.
+            return Ok(SideMatch::NoFamily);
+        }
+        stmts.push(format!(
+            "{} {field} {{ {} }}",
+            fam.keyword(),
+            render_cidrs(&members)
         ));
     }
-    let verdict = match r.effective_action() {
-        Action::Allow | Action::AllowInspect => "accept",
-        Action::Deny => "drop",
-        Action::Alert => "log prefix \"ufw-alert \"",
-        Action::Continue => "continue",
+    if !m.zones.is_empty() {
+        match zone_stmts(profile, &m.zones, field, fam)? {
+            SideMatch::Stmts(z) => stmts.extend(z),
+            SideMatch::NoFamily => return Ok(SideMatch::NoFamily),
+        }
+    }
+    Ok(SideMatch::Stmts(stmts))
+}
+
+/// Lower `zone ∈ Z` (a union of zones, not negated) for one family, exactly.
+///
+/// `classify` tries loopback, internal, perimeter, external, in that order,
+/// so a zone's addresses are its defining set *minus every earlier zone's*.
+/// A union of zones without External is therefore membership in the union of
+/// defining sets plus an exclusion for any earlier, unselected set that
+/// overlaps — both expressible, since an nftables rule is a conjunction. A
+/// union containing External is rewritten as ¬(the complement union), which
+/// is only expressible when that complement needs no exclusions of its own.
+fn zone_stmts(
+    profile: &NetworkProfile,
+    zones: &[Zone],
+    field: &str,
+    fam: Fam,
+) -> Result<SideMatch, String> {
+    let selected = |z: Zone| zones.contains(&z);
+    if selected(Zone::External) {
+        let complement: Vec<Zone> = [Zone::Loopback, Zone::Internal, Zone::Perimeter]
+            .into_iter()
+            .filter(|z| !selected(*z))
+            .collect();
+        if complement.is_empty() {
+            // Every zone is selected: the wildcard.
+            return Ok(SideMatch::Stmts(Vec::new()));
+        }
+        let (members, exclusions) = zone_union_sets(profile, &complement, field)?;
+        if !exclusions.is_empty() {
+            return Err(format!(
+                "matches a set of zones whose complement nftables cannot express \
+                 exactly (the profile's zone ranges overlap on {field})"
+            ));
+        }
+        let members: Vec<&Cidr> = members.into_iter().filter(|c| fam.holds(c)).collect();
+        if members.is_empty() {
+            // Nothing of this family is in the complement, so everything in
+            // this family matches.
+            return Ok(SideMatch::Stmts(Vec::new()));
+        }
+        if members.iter().any(|c| c.is_any()) {
+            // The complement covers the whole family.
+            return Ok(SideMatch::NoFamily);
+        }
+        return Ok(SideMatch::Stmts(vec![format!(
+            "{} {field} != {{ {} }}",
+            fam.keyword(),
+            render_cidrs(&members)
+        )]));
+    }
+
+    let (members, exclusions) = zone_union_sets(profile, zones, field)?;
+    let members: Vec<&Cidr> = members.into_iter().filter(|c| fam.holds(c)).collect();
+    if members.is_empty() {
+        return Ok(SideMatch::NoFamily);
+    }
+    let mut stmts = vec![format!(
+        "{} {field} {{ {} }}",
+        fam.keyword(),
+        render_cidrs(&members)
+    )];
+    let exclusions: Vec<&Cidr> = exclusions.into_iter().filter(|c| fam.holds(c)).collect();
+    if !exclusions.is_empty() {
+        stmts.push(format!(
+            "{} {field} != {{ {} }}",
+            fam.keyword(),
+            render_cidrs(&exclusions)
+        ));
+    }
+    Ok(SideMatch::Stmts(stmts))
+}
+
+/// For a union of zones (External never among them): the defining sets whose
+/// union the address must fall in, and the earlier-zone sets it must *not*
+/// fall in for the classification to actually land on a selected zone.
+/// Exclusions are only generated where sets overlap; on any sane profile
+/// (internal ranges that do not contain 127.0.0.1) there are none.
+///
+/// `Err` marks the one shape a conjunction cannot carry: an excluded set that
+/// also overlaps a *selected* zone classified before it, where subtracting
+/// the set would wrongly remove addresses the earlier zone already claimed.
+fn zone_union_sets<'a>(
+    profile: &'a NetworkProfile,
+    zones: &[Zone],
+    field: &str,
+) -> Result<(Vec<&'a Cidr>, Vec<&'a Cidr>), String> {
+    let loopback: &'static [Cidr] = {
+        // The loopback defining set never changes; one shared copy lets it sit
+        // beside profile-owned CIDRs without cloning the profile's.
+        static LOOPBACK: std::sync::OnceLock<[Cidr; 2]> = std::sync::OnceLock::new();
+        LOOPBACK.get_or_init(loopback_cidrs)
     };
-    let comment = format!("comment \"{}\"", r.name.replace('"', "'"));
-    Some(
-        format!("{} {verdict} {comment}", parts.join(" "))
-            .trim()
-            .to_string(),
-    )
+    let defining = |z: Zone| -> &[Cidr] {
+        match z {
+            Zone::Loopback => loopback,
+            Zone::Internal => &profile.internal,
+            Zone::Perimeter => &profile.perimeter,
+            Zone::External => &[],
+        }
+    };
+    let overlaps = |a: &Cidr, set: &[Cidr]| set.iter().any(|m| a.covers(m) || m.covers(a));
+    let order = [Zone::Loopback, Zone::Internal, Zone::Perimeter];
+    let mut members: Vec<&Cidr> = Vec::new();
+    let mut exclusions: Vec<&Cidr> = Vec::new();
+    for (i, z) in order.iter().enumerate() {
+        if !zones.contains(z) {
+            continue;
+        }
+        members.extend(defining(*z));
+        // An address in a selected zone's set is only classified there if no
+        // earlier zone's set claims it first.
+        for (j, earlier) in order[..i].iter().enumerate() {
+            if zones.contains(earlier) {
+                continue;
+            }
+            for e in defining(*earlier) {
+                if !overlaps(e, defining(*z)) {
+                    continue;
+                }
+                // Subtracting `e` must not take back addresses a selected
+                // zone ahead of `earlier` already classified.
+                for prior in &order[..j] {
+                    if zones.contains(prior) && overlaps(e, defining(*prior)) {
+                        return Err(format!(
+                            "matches a set of zones the profile's overlapping \
+                             ranges keep nftables from expressing exactly (on {field})"
+                        ));
+                    }
+                }
+                if !exclusions.contains(&e) {
+                    exclusions.push(e);
+                }
+            }
+        }
+    }
+    Ok((members, exclusions))
+}
+
+fn render_cidrs(cidrs: &[&Cidr]) -> String {
+    cidrs
+        .iter()
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -784,9 +1211,220 @@ mod tests {
         ]);
         let a = LinuxBackend.generate(&p);
         let nft = &a.file("linux/ufw.nft").unwrap().contents;
-        assert!(nft.contains("tcp dport { 23 } drop comment \"telnet\""));
+        // `log` defaults to true, so the deny carries its attribution prefix.
+        assert!(nft
+            .contains("tcp dport { 23 } log prefix \"ufw#deny#telnet \" drop comment \"telnet\""));
         assert!(nft.contains("# [identity] `ident` needs process context"));
         assert!(nft.contains("table inet ufw"));
+    }
+
+    fn cidrs(list: &[&str]) -> Vec<Cidr> {
+        list.iter().map(|s| Cidr::parse(s).unwrap()).collect()
+    }
+
+    fn nft_artifact(p: &CompiledPolicy) -> String {
+        LinuxBackend
+            .generate(p)
+            .file("linux/ufw.nft")
+            .unwrap()
+            .contents
+            .clone()
+    }
+
+    #[test]
+    fn a_mixed_family_address_set_is_split_into_ip_and_ip6_rules() {
+        // The exact shape that used to be emitted as one `ip daddr` set with
+        // `::1/128` inside it — which nft rejects outright.
+        let mut r = header_rule(1, "allow-loopback", 10, Direction::Any);
+        r.action = Action::Allow;
+        r.protocol = Protocol::Any;
+        r.dest_ports = PortMatch::default();
+        r.dest = AddressMatch {
+            cidrs: cidrs(&["127.0.0.0/8", "::1/128"]),
+            zones: vec![],
+            negate: false,
+        };
+        let nft = nft_artifact(&build(vec![r]));
+        assert!(nft.contains("ip daddr { 127.0.0.0/8 } accept comment \"allow-loopback\""));
+        assert!(nft.contains("ip6 daddr { ::1/128 } accept comment \"allow-loopback\""));
+        // No set may mix the families.
+        for line in nft.lines() {
+            if line.trim_start().starts_with("ip daddr") {
+                assert!(!line.contains("::"), "IPv6 address in an ip match: {line}");
+            }
+            if line.trim_start().starts_with("ip6 daddr") {
+                assert!(
+                    !line.contains("127."),
+                    "IPv4 address in an ip6 match: {line}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_single_family_address_set_emits_one_rule_for_that_family_only() {
+        let mut r = header_rule(1, "v4-only", 10, Direction::Any);
+        r.dest = AddressMatch {
+            cidrs: cidrs(&["10.0.0.0/8"]),
+            zones: vec![],
+            negate: false,
+        };
+        let nft = nft_artifact(&build(vec![r]));
+        assert!(nft.contains("ip daddr { 10.0.0.0/8 }"));
+        assert!(!nft.contains("ip6 daddr"));
+    }
+
+    #[test]
+    fn a_cross_family_contradiction_is_omitted_with_a_comment() {
+        // IPv4-only source, IPv6-only destination: no packet has both.
+        let mut r = header_rule(1, "impossible", 10, Direction::Any);
+        r.source = AddressMatch {
+            cidrs: cidrs(&["10.0.0.0/8"]),
+            zones: vec![],
+            negate: false,
+        };
+        r.dest = AddressMatch {
+            cidrs: cidrs(&["2001:db8::/32"]),
+            zones: vec![],
+            negate: false,
+        };
+        let nft = nft_artifact(&build(vec![r]));
+        assert!(nft.contains("`impossible`"));
+        assert!(nft.contains("can never match a packet"));
+        assert!(!nft.contains("drop comment \"impossible\""));
+    }
+
+    #[test]
+    fn an_external_zone_lowers_to_exclusion_of_loopback_and_internal() {
+        let mut r = header_rule(1, "no-smb-egress", 10, Direction::Outbound);
+        r.dest = AddressMatch {
+            cidrs: vec![],
+            zones: vec![Zone::External],
+            negate: false,
+        };
+        let mut p = CompiledPolicy::new("lin", Decision::Allow);
+        p.network_profile.internal = cidrs(&["10.0.0.0/8", "fd00::/8"]);
+        p.rules = vec![r];
+        p.finalize();
+        crate::optimizer::optimize(&mut p, &crate::optimizer::OptimizerOptions::default());
+        let nft = nft_artifact(&p);
+        assert!(
+            nft.contains("ip daddr != { 127.0.0.0/8, 10.0.0.0/8 }"),
+            "external zone must exclude loopback and internal v4 ranges:\n{nft}"
+        );
+        assert!(
+            nft.contains("ip6 daddr != { ::1/128, fd00::/8 }"),
+            "external zone must exclude loopback and internal v6 ranges:\n{nft}"
+        );
+    }
+
+    #[test]
+    fn a_negated_address_set_lowers_to_set_exclusion() {
+        let mut r = header_rule(1, "not-lan", 10, Direction::Outbound);
+        r.dest = AddressMatch {
+            cidrs: cidrs(&["192.168.0.0/16"]),
+            zones: vec![],
+            negate: true,
+        };
+        let nft = nft_artifact(&build(vec![r]));
+        assert!(nft.contains("ip daddr != { 192.168.0.0/16 }"));
+        // For IPv6 the negated IPv4 set holds vacuously: the rule applies to
+        // all v6 traffic, so a second line without the address matcher exists.
+        assert!(nft.contains(
+            "meta l4proto 6 tcp dport { 23 } log prefix \"ufw#deny#not-lan \" drop comment \"not-lan\""
+        ));
+    }
+
+    #[test]
+    fn source_ports_are_emitted_not_silently_dropped() {
+        let mut r = header_rule(1, "sport", 10, Direction::Any);
+        r.source_ports = PortMatch {
+            ranges: vec![PortRange::single(20)],
+            negate: false,
+        };
+        let nft = nft_artifact(&build(vec![r]));
+        assert!(nft.contains("tcp sport { 20 }"));
+    }
+
+    #[test]
+    fn an_any_protocol_rule_with_ports_keeps_the_port_constraint() {
+        // The regression: `protocol: any` + `ports: [3389]` must NOT become a
+        // rule that matches every port. It lowers to the port-bearing
+        // transports with a generic transport-header match.
+        let mut r = CompiledRule::new(1, "deny-any-rdp", Layer::Packet, Action::Deny);
+        r.priority = 10;
+        r.protocol = Protocol::Any;
+        r.direction = Direction::Inbound;
+        r.dest_ports = PortMatch {
+            ranges: vec![PortRange::single(3389)],
+            negate: false,
+        };
+        let nft = nft_artifact(&build(vec![r]));
+        assert!(
+            nft.contains("meta l4proto { 6, 17, 132 } th dport { 3389 }"),
+            "any-protocol port rule must constrain to port-bearing transports:\n{nft}"
+        );
+        // It must NOT emit a bare `drop` that ignores the port.
+        for line in nft.lines() {
+            if line.contains("deny-any-rdp") {
+                assert!(line.contains("dport"), "port constraint dropped: {line}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_sctp_rule_uses_the_sctp_keyword_not_a_raw_proto_number() {
+        let mut r = CompiledRule::new(1, "sctp-rule", Layer::Packet, Action::Deny);
+        r.priority = 10;
+        r.protocol = Protocol::Other(132);
+        r.direction = Direction::Inbound;
+        r.dest_ports = PortMatch {
+            ranges: vec![PortRange::single(9999)],
+            negate: false,
+        };
+        let nft = nft_artifact(&build(vec![r]));
+        assert!(nft.contains("sctp dport { 9999 }"), "{nft}");
+        assert!(
+            !nft.contains("proto-132 dport"),
+            "invalid keyword emitted:\n{nft}"
+        );
+    }
+
+    #[test]
+    fn logged_denies_and_alerts_carry_a_rule_named_log_prefix() {
+        let mut deny = header_rule(1, "deny-telnet", 10, Direction::Any);
+        deny.log = true;
+        let mut alert = header_rule(2, "watch-db", 20, Direction::Any);
+        alert.action = Action::Alert;
+        alert.dest_ports = PortMatch {
+            ranges: vec![PortRange::single(5432)],
+            negate: false,
+        };
+        let mut quiet = header_rule(3, "deny-quietly", 30, Direction::Any);
+        quiet.log = false;
+        let nft = nft_artifact(&build(vec![deny, alert, quiet]));
+        assert!(nft.contains("log prefix \"ufw#deny#deny-telnet \" drop"));
+        assert!(nft.contains("log prefix \"ufw#alert#watch-db \" comment"));
+        assert!(!nft.contains("ufw#deny#deny-quietly"));
+        // An alert is observation, not a verdict; evaluation continues.
+        assert!(!nft.contains("ufw#alert#watch-db \" accept"));
+        assert!(!nft.contains("ufw#alert#watch-db \" drop"));
+    }
+
+    #[test]
+    fn icmp_and_icmpv6_rules_stay_in_their_own_family() {
+        let mut v4 = header_rule(1, "ping4", 10, Direction::Any);
+        v4.protocol = Protocol::Icmp;
+        v4.action = Action::Allow;
+        v4.dest_ports = PortMatch::default();
+        let mut v6 = header_rule(2, "ping6", 20, Direction::Any);
+        v6.protocol = Protocol::IcmpV6;
+        v6.action = Action::Allow;
+        v6.dest_ports = PortMatch::default();
+        let nft = nft_artifact(&build(vec![v4, v6]));
+        // One line each, not a duplicated pair.
+        assert_eq!(nft.matches("meta l4proto 1 accept").count(), 2); // input + output chains
+        assert_eq!(nft.matches("meta l4proto 58 accept").count(), 2);
     }
 
     #[test]

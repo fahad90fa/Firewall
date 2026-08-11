@@ -26,17 +26,16 @@ fn repo_root() -> PathBuf {
 }
 
 fn c_compiler() -> Option<&'static str> {
-    for candidate in ["cc", "gcc", "clang"] {
-        if Command::new(candidate)
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-        {
-            return Some(candidate);
-        }
-    }
-    None
+    ["cc", "gcc", "clang"]
+        .into_iter()
+        .find(|&candidate| {
+            Command::new(candidate)
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        })
+        .map(|v| v as _)
 }
 
 /// Compile and run a fragment of C against the header, returning its stdout.

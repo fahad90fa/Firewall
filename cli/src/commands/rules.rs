@@ -165,7 +165,7 @@ fn hits(options: &GlobalOptions, transport: &mut dyn Transport) -> CliResult {
         }
         // Busiest first: the question is usually "what is this policy actually
         // doing?", not "what is rule 4 doing?".
-        rows.sort_by(|a, b| b.2.cmp(&a.2));
+        rows.sort_by_key(|r| std::cmp::Reverse(r.2));
 
         let mut t = Table::new(["HITS", "ID", "RULE"]);
         for (id, name, hits) in rows {

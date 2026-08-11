@@ -831,8 +831,15 @@ mod tests {
                 &config(),
                 &format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n"),
             );
-            assert!(text.starts_with("HTTP/1.1 200 OK\r\n"), "{path}: {}", &text[..40]);
-            assert!(text.contains("Content-Type: text/html"), "{path} content type");
+            assert!(
+                text.starts_with("HTTP/1.1 200 OK\r\n"),
+                "{path}: {}",
+                &text[..40]
+            );
+            assert!(
+                text.contains("Content-Type: text/html"),
+                "{path} content type"
+            );
             assert!(text.contains("Unified Firewall"), "{path} body content");
         }
     }
@@ -864,7 +871,11 @@ mod tests {
             &cfg,
             "OPTIONS /v1/status HTTP/1.1\r\nOrigin: https://dash.example\r\n\r\n",
         );
-        assert!(pre.starts_with("HTTP/1.1 204 No Content\r\n"), "{}", &pre[..40]);
+        assert!(
+            pre.starts_with("HTTP/1.1 204 No Content\r\n"),
+            "{}",
+            &pre[..40]
+        );
         assert!(pre.contains("Access-Control-Allow-Origin: https://dash.example"));
 
         // The real GET carries the grant too (loopback, so authorized).

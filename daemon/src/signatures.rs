@@ -734,8 +734,10 @@ pub fn parse_into(
             if let Some(b) = current.take() {
                 finish(set, b, file, errors);
             }
-            let mut builder = Builder::default();
-            builder.line = line;
+            let mut builder = Builder {
+                line,
+                ..Default::default()
+            };
             if let Some((k, v)) = split_kv(rest) {
                 apply_key(&mut builder, k, v, file, line, errors);
             } else {

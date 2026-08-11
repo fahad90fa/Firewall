@@ -58,7 +58,7 @@ fn make_policy(n: usize) -> CompiledPolicy {
     for i in 0..n {
         p.rules.push(CompiledRule::new(
             i as u32 + 1,
-            &format!("rule-{i}"),
+            format!("rule-{i}"),
             Layer::Packet,
             Action::Allow,
         ));

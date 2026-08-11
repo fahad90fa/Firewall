@@ -333,13 +333,11 @@ fn emit_conditions(w: &mut JsonWriter, r: &CompiledRule) {
         condition(w, "FWPM_CONDITION_IP_PROTOCOL", "equal", &n.to_string());
     }
     for c in &r.source.cidrs {
+        // WFP names the condition the same for both families; the address
+        // value it is compared against carries v4/v6.
         condition(
             w,
-            if c.is_v4() {
-                "FWPM_CONDITION_IP_LOCAL_ADDRESS"
-            } else {
-                "FWPM_CONDITION_IP_LOCAL_ADDRESS"
-            },
+            "FWPM_CONDITION_IP_LOCAL_ADDRESS",
             if r.source.negate {
                 "not-equal"
             } else {

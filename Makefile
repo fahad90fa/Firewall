@@ -137,20 +137,28 @@ install: build
 	install -d $(DESTDIR)$(PREFIX)/sbin $(DESTDIR)$(PREFIX)/bin
 	install -m 0755 target/release/ufwd $(DESTDIR)$(PREFIX)/sbin/ufwd
 	install -m 0755 target/release/ufwctl $(DESTDIR)$(PREFIX)/bin/ufwctl
+ifeq ($(HOST_PLATFORM),linux)
+	install -m 0755 target/release/ufw-nft $(DESTDIR)$(PREFIX)/bin/ufw-nft
+	install -m 0755 build/linux/firewall.sh $(DESTDIR)$(PREFIX)/bin/firewall
+endif
 	install -d $(DESTDIR)/etc/unified-firewall/policies
 	install -d $(DESTDIR)/etc/unified-firewall/sig-rules
 	cp -R sig-rules/* $(DESTDIR)/etc/unified-firewall/sig-rules/
+	cp -R policies/* $(DESTDIR)/etc/unified-firewall/policies/
 	@echo
 	@echo "Installed the daemon and CLI. The kernel module is a separate step:"
 	@echo "  make kernel-$(HOST_PLATFORM)"
 	@echo
-	@echo "No policy was installed. Choose one deliberately —"
+	@echo "No policy was ACTIVATED. The shipped policies are in"
+	@echo "/etc/unified-firewall/policies; choose one deliberately —"
 	@echo "policies/base/default_deny.yaml enforces from the first packet, and"
 	@echo "policies/base/default_allow.yaml is the rollout phase that comes"
-	@echo "before it. See policies/base/default_allow.yaml for the sequence."
+	@echo "before it. On Linux, \`firewall apply default_allow\` starts real"
+	@echo "nftables enforcement and \`firewall\` opens the live dashboard."
 
 uninstall:
-	rm -f $(DESTDIR)$(PREFIX)/sbin/ufwd $(DESTDIR)$(PREFIX)/bin/ufwctl
+	rm -f $(DESTDIR)$(PREFIX)/sbin/ufwd $(DESTDIR)$(PREFIX)/bin/ufwctl \
+	      $(DESTDIR)$(PREFIX)/bin/ufw-nft $(DESTDIR)$(PREFIX)/bin/firewall
 	@echo "Left /etc/unified-firewall in place: it holds policy you wrote."
 
 clean:

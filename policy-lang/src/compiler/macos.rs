@@ -418,10 +418,14 @@ fn emit_swift(policy: &CompiledPolicy, placements: &[Placement<'_>]) -> String {
             },
             swift_action_case(r.effective_action()),
             r.direction.as_str(),
+            // `ipProtocol` is a non-optional UInt8; the RuleEngine treats 255
+            // as "any protocol" (`rule.ipProtocol != 255` is its wildcard
+            // check), so a rule with no protocol constraint emits 255, not the
+            // `nil` a non-optional field cannot hold.
             r.protocol
                 .number()
                 .map(|n| n.to_string())
-                .unwrap_or_else(|| "nil".into()),
+                .unwrap_or_else(|| "255".into()),
             swift_strings(r.source.cidrs.iter().map(|c| c.to_string())),
             swift_ports(&r.source_ports.ranges),
             swift_strings(r.dest.cidrs.iter().map(|c| c.to_string())),

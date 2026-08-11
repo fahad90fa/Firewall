@@ -200,7 +200,11 @@ fn handle(state: &mut SimState, message: Message) -> Option<Message> {
             // reproducible (no clock, no RNG).
             let h = state.stats_polls.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 29;
             let flows_inc = 25 + h % 85; // 25..=109 flows this interval
-            let denied_inc = if h % 5 == 0 { (1 + h % 6).min(flows_inc) } else { 0 };
+            let denied_inc = if h % 5 == 0 {
+                (1 + h % 6).min(flows_inc)
+            } else {
+                0
+            };
             let pkt_inc = flows_inc.saturating_mul(5 + (h >> 4) % 7);
 
             state.flows += flows_inc;
@@ -310,8 +314,12 @@ mod tests {
 
     fn sample_policy() -> CompiledPolicy {
         let mut p = CompiledPolicy::new("t", Decision::Deny);
-        p.rules
-            .push(CompiledRule::new(1, "allow-loopback", Layer::Packet, Action::Allow));
+        p.rules.push(CompiledRule::new(
+            1,
+            "allow-loopback",
+            Layer::Packet,
+            Action::Allow,
+        ));
         p.finalize();
         p
     }
@@ -330,7 +338,8 @@ mod tests {
         });
 
         let stream = UnixStream::connect(&path).expect("connect");
-        let transport: Box<dyn Transport> = Box::new(StreamTransport::new(stream, path.to_string_lossy()));
+        let transport: Box<dyn Transport> =
+            Box::new(StreamTransport::new(stream, path.to_string_lossy()));
         let (tx, _rx) = channel();
         let (channel, handshake) =
             KernelChannel::open(transport, tx, "test-host", Duration::from_secs(2))

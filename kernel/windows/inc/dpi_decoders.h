@@ -38,6 +38,7 @@ typedef uint64_t UINT64;
 #define _In_
 #define _Inout_
 #define _In_reads_bytes_(n)
+#define _Out_writes_(n)
 #endif
 #ifndef RtlZeroMemory
 #define RtlZeroMemory(d, l) memset((d), 0, (l))
@@ -476,17 +477,22 @@ static __inline UINT32 UfwILog2Centi(_In_ UINT32 v)
 	return whole * 100u + frac;
 }
 
+/*
+ * `counts` is a caller-provided 256-entry scratch histogram, passed in rather
+ * than declared here, so this matches kernel/linux/inc/dpi_decoders.h byte for
+ * byte: a 1 KiB array on a kernel stack blows the frame budget, so the caller
+ * hands in its own buffer. The function zeroes it, so the caller need not.
+ */
 static __inline UINT32 UfwEntropyCentibits(_In_reads_bytes_(len) const UINT8 *data,
-				  _In_ UINT32 len)
+				  _In_ UINT32 len, _Out_writes_(256) UINT32 *counts)
 {
-	UINT32 counts[256];
 	UINT64 weighted = 0;
 	UINT32 i, total, mean;
 
 	if (len == 0)
 		return 0;
 
-	RtlZeroMemory(counts, sizeof(counts));
+	RtlZeroMemory(counts, 256 * sizeof(counts[0]));
 	for (i = 0; i < len; i++)
 		counts[data[i]]++;
 

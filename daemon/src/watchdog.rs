@@ -388,7 +388,10 @@ mod tests {
                 delay: Duration::from_millis(500)
             }
         );
-        assert!(matches!(w.state(), SupervisorState::Recovering { attempt: 1 }));
+        assert!(matches!(
+            w.state(),
+            SupervisorState::Recovering { attempt: 1 }
+        ));
     }
 
     #[test]
@@ -419,7 +422,7 @@ mod tests {
     #[test]
     fn the_nth_fault_in_the_window_trips_safe_mode() {
         let mut w = Watchdog::new(cfg()); // max_faults = 3
-        assert!(matches!(w.on_fault(1 * S), FaultResponse::Backoff { .. }));
+        assert!(matches!(w.on_fault(S), FaultResponse::Backoff { .. }));
         assert!(matches!(w.on_fault(2 * S), FaultResponse::Backoff { .. }));
         let r = w.on_fault(3 * S);
         assert_eq!(r, FaultResponse::EnterSafeMode { faults: 3 });
@@ -430,7 +433,7 @@ mod tests {
     #[test]
     fn faults_spread_wider_than_the_window_never_trip_safe_mode() {
         let mut w = Watchdog::new(cfg()); // window 60s, max 3
-        // One fault every 100s: the window only ever holds one at a time.
+                                          // One fault every 100s: the window only ever holds one at a time.
         for i in 0..10 {
             let r = w.on_fault(i * 100 * S);
             assert!(
@@ -460,20 +463,26 @@ mod tests {
     #[test]
     fn recovery_clears_the_ledger_so_the_next_loop_starts_fresh() {
         let mut w = Watchdog::new(cfg()); // max 3
-        w.on_fault(1 * S);
+        w.on_fault(S);
         w.on_fault(2 * S);
         // Recover.
         assert!(w.on_healthy(2 * S + 20 * S));
         // Two more faults must not trip safe mode: the earlier two were cleared.
-        assert!(matches!(w.on_fault(100 * S), FaultResponse::Backoff { attempt: 1, .. }));
-        assert!(matches!(w.on_fault(101 * S), FaultResponse::Backoff { attempt: 2, .. }));
+        assert!(matches!(
+            w.on_fault(100 * S),
+            FaultResponse::Backoff { attempt: 1, .. }
+        ));
+        assert!(matches!(
+            w.on_fault(101 * S),
+            FaultResponse::Backoff { attempt: 2, .. }
+        ));
         assert_ne!(w.state(), SupervisorState::SafeMode);
     }
 
     #[test]
     fn safe_mode_holds_and_paces_slow_retries() {
         let mut w = Watchdog::new(cfg());
-        w.on_fault(1 * S);
+        w.on_fault(S);
         w.on_fault(2 * S);
         w.on_fault(3 * S); // -> safe mode
         let r = w.on_fault(4 * S);
@@ -491,7 +500,7 @@ mod tests {
     #[test]
     fn leaving_safe_mode_needs_the_longer_stable_window() {
         let mut w = Watchdog::new(cfg()); // safe_stable = 120s
-        w.on_fault(1 * S);
+        w.on_fault(S);
         w.on_fault(2 * S);
         w.on_fault(3 * S); // safe mode, last_fault at 3s
 
