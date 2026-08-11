@@ -2,560 +2,743 @@
 <!--
   ufw-nft — live enforcement console.
 
-  One self-contained file, no external scripts, stylesheets, fonts or images,
-  like the rest of this project. Served embedded from the ufw-nft binary at
-  GET /; everything it shows comes from GET /api/state, which any operator
-  could curl instead. Nothing here mutates state: applying, trialing and
-  reverting policy stay with the CLI, deliberately.
+  One self-contained file: no external scripts, stylesheets, fonts or images,
+  in keeping with the rest of this project. Served embedded from the ufw-nft
+  binary at GET /; everything it shows comes from GET /api/state, which any
+  operator could curl instead. Nothing here mutates state — applying, trialing
+  and reverting policy stay with the CLI, deliberately.
 
-  Design tokens follow the daemon's fleet console so the two surfaces read
-  as one product. The two chart series colors (denied / alert) are validated
-  for contrast and color-vision-deficiency separation on both surfaces;
-  identity in the chart is also carried by the legend, and every number in a
-  chart exists in a table on the same page.
+  Layout is an app shell: a sticky header, a section rail that collapses to a
+  drawer on narrow screens, and a scrolling main column of cards. It is
+  responsive from a phone (single column, horizontally-scrolling tables) to a
+  wide desktop, theme-aware (light base, dark override, explicit toggle), and
+  renders incrementally — each section only rebuilds when its slice of the
+  state actually changed, so the 3-second refresh is cheap.
+
+  The two chart series (denied / alert) use colours validated for contrast and
+  colour-vision-deficiency separation on both surfaces; identity in the chart
+  is also carried by the legend, and every number in a chart exists in a table
+  on the same page.
 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ufw-nft — Live Enforcement Console</title>
+<title>ufw-nft — Enforcement Console</title>
 <style>
   :root {
-    --bg: #f4f6f9; --bg-grid: #eef1f5;
-    --surface: #ffffff; --surface-2: #f4f6f9; --surface-3: #eceff4;
-    --border: #e2e6ec; --border-strong: #d0d6df;
-    --text: #0f1420; --text-dim: #59616f; --text-mute: #8b93a1;
-    --accent: #3355e6; --accent-ink: #ffffff; --accent-weak: #e9edfe;
-    --ok: #0f8a56; --ok-weak: #e0f2e9;
-    --warn: #9a6410; --warn-weak: #f7edd8;
-    --bad: #ce362b; --bad-weak: #fbe7e5;
-    --info: #235fa8; --info-weak: #e6effb;
+    /* light is the base; dark overrides below */
+    --bg: #eef1f6; --bg-2: #e7ebf2;
+    --surface: #ffffff; --surface-2: #f6f8fb; --surface-3: #eef1f6;
+    --border: #e2e6ee; --border-strong: #cfd6e2;
+    --text: #0e1626; --text-dim: #55607a; --text-mute: #8a93a8;
+    --accent: #2f56e6; --accent-ink: #ffffff; --accent-weak: #e8edfe;
+    --ok: #12855a; --ok-weak: #e2f3ea; --ok-line: #12855a;
+    --warn: #9a6410; --warn-weak: #f8efd9; --warn-line: #b9791a;
+    --bad: #ce362b; --bad-weak: #fce7e5; --bad-line: #ce362b;
+    --info: #235fa8; --info-weak: #e7effb; --info-line: #235fa8;
     --chart-deny: #ce362b; --chart-alert: #235fa8;
-    --shadow: 0 1px 2px rgba(15,20,32,.05), 0 6px 20px rgba(15,20,32,.05);
-    --r-sm: 8px; --r: 12px; --r-lg: 16px;
+    --shadow-sm: 0 1px 2px rgba(16,22,38,.06);
+    --shadow: 0 1px 2px rgba(16,22,38,.05), 0 8px 24px rgba(16,22,38,.06);
+    --shadow-lg: 0 16px 48px rgba(16,22,38,.14);
+    --r-xs: 6px; --r-sm: 9px; --r: 13px; --r-lg: 18px;
+    --sb-w: 232px; --head-h: 60px;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg: #0a0c10; --bg-grid: #0f1218;
-      --surface: #14171e; --surface-2: #1a1e26; --surface-3: #20252f;
-      --border: #262c37; --border-strong: #384250;
-      --text: #eaedf3; --text-dim: #9aa3b2; --text-mute: #666e7d;
-      --accent: #6f8bff; --accent-ink: #0a0c10; --accent-weak: #1b2340;
-      --ok: #45cf8c; --ok-weak: #10281e;
-      --warn: #e2a54c; --warn-weak: #2a2213;
-      --bad: #f2685d; --bad-weak: #2f1613;
-      --info: #5ba2f2; --info-weak: #122032;
+      --bg: #080a0f; --bg-2: #0c0f16;
+      --surface: #12151d; --surface-2: #171b25; --surface-3: #1e2330;
+      --border: #242a37; --border-strong: #333c4d;
+      --text: #e9edf5; --text-dim: #9aa4b6; --text-mute: #626c7e;
+      --accent: #6f8bff; --accent-ink: #080a0f; --accent-weak: #1a2340;
+      --ok: #45cf8c; --ok-weak: #0f2a1e; --ok-line: #45cf8c;
+      --warn: #e2a54c; --warn-weak: #2a2113; --warn-line: #e2a54c;
+      --bad: #f2685d; --bad-weak: #2f1512; --bad-line: #f2685d;
+      --info: #5ba2f2; --info-weak: #10203300; --info-line: #5ba2f2;
       --chart-deny: #e2493d; --chart-alert: #3e87dd;
-      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 28px rgba(0,0,0,.35);
+      --shadow-sm: 0 1px 2px rgba(0,0,0,.4);
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.4);
+      --shadow-lg: 0 24px 64px rgba(0,0,0,.6);
     }
   }
   :root[data-theme="dark"] {
-    --bg: #0a0c10; --bg-grid: #0f1218;
-    --surface: #14171e; --surface-2: #1a1e26; --surface-3: #20252f;
-    --border: #262c37; --border-strong: #384250;
-    --text: #eaedf3; --text-dim: #9aa3b2; --text-mute: #666e7d;
-    --accent: #6f8bff; --accent-ink: #0a0c10; --accent-weak: #1b2340;
-    --ok: #45cf8c; --ok-weak: #10281e;
-    --warn: #e2a54c; --warn-weak: #2a2213;
-    --bad: #f2685d; --bad-weak: #2f1613;
-    --info: #5ba2f2; --info-weak: #122032;
+    --bg: #080a0f; --bg-2: #0c0f16;
+    --surface: #12151d; --surface-2: #171b25; --surface-3: #1e2330;
+    --border: #242a37; --border-strong: #333c4d;
+    --text: #e9edf5; --text-dim: #9aa4b6; --text-mute: #626c7e;
+    --accent: #6f8bff; --accent-ink: #080a0f; --accent-weak: #1a2340;
+    --ok: #45cf8c; --ok-weak: #0f2a1e; --ok-line: #45cf8c;
+    --warn: #e2a54c; --warn-weak: #2a2113; --warn-line: #e2a54c;
+    --bad: #f2685d; --bad-weak: #2f1512; --bad-line: #f2685d;
+    --info: #5ba2f2; --info-weak: #102033; --info-line: #5ba2f2;
     --chart-deny: #e2493d; --chart-alert: #3e87dd;
-    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 28px rgba(0,0,0,.35);
+    --shadow-sm: 0 1px 2px rgba(0,0,0,.4);
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.4);
+    --shadow-lg: 0 24px 64px rgba(0,0,0,.6);
   }
 
   * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
   html, body { margin: 0; }
   body {
     color: var(--text);
-    background:
-      radial-gradient(1200px 600px at 100% -10%, var(--bg-grid), transparent 60%),
-      var(--bg);
-    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    padding-bottom: 48px;
+    background: var(--bg);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
-  .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+  .mono { font-family: var(--mono); font-size: .82rem; font-variant-numeric: tabular-nums; }
+  .num { font-variant-numeric: tabular-nums; }
+  h1, h2, h3 { margin: 0; font-weight: 650; }
+  a { color: var(--accent); }
+  ::selection { background: var(--accent-weak); }
 
-  header {
-    position: sticky; top: 0; z-index: 20;
-    display: flex; align-items: center; gap: 14px;
-    padding: 12px 20px; border-bottom: 1px solid var(--border);
-    background: color-mix(in srgb, var(--surface) 88%, transparent);
-    backdrop-filter: blur(10px);
-  }
-  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; }
-  .brand .logo {
-    width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
-    background: linear-gradient(160deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #7a3ff0));
-    color: #fff; box-shadow: var(--shadow); font-size: 17px;
-  }
-  .brand small { display: block; font-size: 11px; color: var(--text-mute); font-weight: 500; }
-  .spacer { flex: 1; }
-  .live { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-dim); }
-  .live .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-mute); }
+  /* ---- app shell -------------------------------------------------------- */
+  .app { display: grid; grid-template-columns: var(--sb-w) 1fr; grid-template-rows: var(--head-h) 1fr;
+         grid-template-areas: "brand header" "nav main"; min-height: 100vh; }
+
+  header.top { grid-area: header; position: sticky; top: 0; z-index: 30;
+    display: flex; align-items: center; gap: 12px; padding: 0 18px; height: var(--head-h);
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--surface) 86%, transparent); backdrop-filter: blur(12px); }
+  .brandbox { grid-area: brand; position: sticky; top: 0; z-index: 31; height: var(--head-h);
+    display: flex; align-items: center; gap: 11px; padding: 0 16px;
+    border-bottom: 1px solid var(--border); border-right: 1px solid var(--border);
+    background: color-mix(in srgb, var(--surface) 86%, transparent); backdrop-filter: blur(12px); }
+  .logo { width: 34px; height: 34px; border-radius: 10px; flex: none; display: grid; place-items: center;
+    color: #fff; font-size: 18px; box-shadow: var(--shadow-sm);
+    background: linear-gradient(150deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #7a3ff0)); }
+  .brandbox .name { font-weight: 750; letter-spacing: -.01em; line-height: 1.05; }
+  .brandbox .name small { display: block; font-size: 10.5px; color: var(--text-mute); font-weight: 550; letter-spacing: .02em; }
+
+  nav.side { grid-area: nav; position: sticky; top: var(--head-h); align-self: start;
+    height: calc(100vh - var(--head-h)); overflow-y: auto; padding: 14px 12px;
+    border-right: 1px solid var(--border); background: var(--surface); }
+  nav.side .grp { font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-mute);
+    font-weight: 700; padding: 12px 10px 6px; }
+  nav.side a { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--r-sm);
+    color: var(--text-dim); text-decoration: none; font-weight: 550; font-size: 13.5px; }
+  nav.side a .ic { width: 18px; text-align: center; opacity: .8; }
+  nav.side a .badge { margin-left: auto; font-size: 11px; font-weight: 700; background: var(--surface-3);
+    color: var(--text-dim); border-radius: 999px; padding: 1px 7px; min-width: 20px; text-align: center; }
+  nav.side a:hover { background: var(--surface-2); color: var(--text); }
+  nav.side a.active { background: var(--accent-weak); color: var(--accent); }
+  nav.side a.active .badge { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
+  nav.side .foot { margin-top: 14px; padding: 12px 10px; border-top: 1px solid var(--border);
+    font-size: 11.5px; color: var(--text-mute); line-height: 1.7; }
+  nav.side .foot code { font-family: var(--mono); font-size: 11px; background: var(--surface-3);
+    padding: 1px 5px; border-radius: 5px; color: var(--text-dim); }
+
+  main { grid-area: main; padding: 18px; max-width: 1320px; width: 100%; }
+  main > section { scroll-margin-top: calc(var(--head-h) + 12px); margin-bottom: 22px; }
+  .sec-h { display: flex; align-items: baseline; gap: 10px; margin: 0 2px 11px; }
+  .sec-h h2 { font-size: 15px; letter-spacing: -.01em; }
+  .sec-h .hint { font-size: 12px; color: var(--text-mute); }
+  .sec-h .sp { flex: 1; }
+
+  /* ---- header controls -------------------------------------------------- */
+  .burger { display: none; }
+  .hostchip { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-dim);
+    min-width: 0; }
+  .hostchip b { color: var(--text); font-weight: 650; }
+  .hostchip .mono { color: var(--text-dim); }
+  .spacer { flex: 1 1 auto; }
+  .live { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-mute);
+    font-weight: 600; padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); white-space: nowrap; }
+  .live .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-mute); flex: none; }
+  .live.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 30%, var(--border)); }
   .live.on .dot { background: var(--ok); animation: pulse 2s infinite; }
-  @keyframes pulse {
-    0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 55%, transparent); }
-    70% { box-shadow: 0 0 0 8px transparent; } 100% { box-shadow: 0 0 0 0 transparent; }
-  }
-  button, select, input {
-    font: inherit; color: var(--text); background: var(--surface);
-    border: 1px solid var(--border); border-radius: var(--r-sm); padding: 7px 11px;
-  }
-  button { cursor: pointer; }
-  button:hover { border-color: var(--border-strong); }
+  .live.off { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 30%, var(--border)); }
+  .live.off .dot { background: var(--bad); }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 55%, transparent); }
+    70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+  .ctl { display: inline-flex; align-items: center; gap: 6px; }
+  button, select, input { font: inherit; color: var(--text); background: var(--surface);
+    border: 1px solid var(--border); border-radius: var(--r-sm); }
+  button, select { height: 34px; padding: 0 11px; }
+  input { height: 34px; padding: 0 11px; }
+  button { cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-weight: 550;
+    transition: border-color .12s, background .12s, transform .05s; }
+  button:hover { border-color: var(--border-strong); background: var(--surface-2); }
+  button:active { transform: translateY(1px); }
+  .icon-btn { width: 34px; padding: 0; justify-content: center; font-size: 15px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-  main { max-width: 1280px; margin: 0 auto; padding: 18px 20px; display: grid; gap: 16px; }
+  /* ---- ribbon ----------------------------------------------------------- */
+  .ribbon { display: flex; gap: 12px; align-items: flex-start; padding: 13px 16px; border-radius: var(--r);
+    border: 1px solid var(--border); background: var(--surface); box-shadow: var(--shadow-sm); font-size: 13.5px; }
+  .ribbon .rp { width: 10px; align-self: stretch; border-radius: 999px; flex: none; background: var(--text-mute); }
+  .ribbon.ok .rp { background: var(--ok); } .ribbon.warn .rp { background: var(--warn); } .ribbon.bad .rp { background: var(--bad); }
+  .ribbon .rb { min-width: 0; }
+  .ribbon .rt { font-weight: 700; letter-spacing: .02em; }
+  .ribbon.ok .rt { color: var(--ok); } .ribbon.warn .rt { color: var(--warn); } .ribbon.bad .rt { color: var(--bad); }
+  .ribbon .rd { color: var(--text-dim); margin-top: 2px; }
+  .ribbon .mono { color: var(--text); }
 
-  .ribbon {
-    display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
-    border: 1px solid var(--border); border-radius: var(--r);
-    padding: 11px 14px; font-size: 13px;
-  }
-  .ribbon.ok   { background: var(--ok-weak);   border-color: color-mix(in srgb, var(--ok) 35%, var(--border)); }
-  .ribbon.warn { background: var(--warn-weak); border-color: color-mix(in srgb, var(--warn) 35%, var(--border)); }
-  .ribbon.bad  { background: var(--bad-weak);  border-color: color-mix(in srgb, var(--bad) 35%, var(--border)); }
-  .ribbon b { font-weight: 700; }
-  .ribbon .mono { opacity: .85; }
+  /* ---- KPIs ------------------------------------------------------------- */
+  .kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
+  .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 13px 14px;
+    box-shadow: var(--shadow-sm); position: relative; overflow: hidden; }
+  .kpi::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--border-strong); }
+  .kpi.bad::after { background: var(--bad); } .kpi.warn::after { background: var(--warn); }
+  .kpi.ok::after { background: var(--ok); } .kpi.info::after { background: var(--info); }
+  .kpi .lab { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-mute); font-weight: 700; }
+  .kpi .big { font-size: clamp(20px, 2.4vw, 27px); font-weight: 760; margin-top: 3px; letter-spacing: -.02em; line-height: 1.05; font-variant-numeric: tabular-nums; }
+  .kpi .sub { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; }
+  .kpi.bad .big { color: var(--bad); } .kpi.warn .big { color: var(--warn); } .kpi.ok .big { color: var(--ok); }
 
-  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
-  .kpi {
-    background: var(--surface); border: 1px solid var(--border); border-radius: var(--r);
-    padding: 12px 14px; box-shadow: var(--shadow);
-  }
-  .kpi .lab { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-mute); font-weight: 650; }
-  .kpi .big { font-size: 24px; font-weight: 750; margin-top: 2px; font-variant-numeric: tabular-nums; }
-  .kpi .sub { font-size: 12px; color: var(--text-dim); }
-  .kpi.bad .big { color: var(--bad); }
-  .kpi.warn .big { color: var(--warn); }
-
-  .card {
-    background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg);
-    box-shadow: var(--shadow); overflow: hidden;
-  }
-  .card > h2 {
-    margin: 0; font-size: 13px; letter-spacing: .04em; text-transform: uppercase;
-    color: var(--text-dim); padding: 12px 16px; border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  }
-  .card > h2 .count { color: var(--text-mute); font-weight: 500; text-transform: none; letter-spacing: 0; }
+  /* ---- cards ------------------------------------------------------------ */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg);
+    box-shadow: var(--shadow-sm); overflow: hidden; }
+  .card > .ch { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px;
+    border-bottom: 1px solid var(--border); }
+  .card > .ch h3 { font-size: 12px; letter-spacing: .05em; text-transform: uppercase; color: var(--text-dim); }
+  .card > .ch .count { font-size: 12px; color: var(--text-mute); font-weight: 550; }
+  .card > .ch .tools { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .card .body { padding: 14px 16px; }
-  .card .toolbar { margin-left: auto; display: flex; gap: 8px; align-items: center; text-transform: none; letter-spacing: 0; font-weight: 400; }
-  .card .toolbar input { min-width: 180px; }
+  .card .pad0 { padding: 0; }
 
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+  /* ---- tables ----------------------------------------------------------- */
+  .tbl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .scroll-y { max-height: 460px; overflow-y: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
-  th { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-mute); font-weight: 650; position: sticky; top: 0; background: var(--surface); }
-  tr:hover td { background: color-mix(in srgb, var(--surface-2) 60%, transparent); }
-  .scroll { max-height: 420px; overflow: auto; }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  th.num { text-align: right; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; white-space: nowrap; }
+  td.wrap, th.wrap { white-space: normal; }
+  th { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-mute); font-weight: 700;
+    position: sticky; top: 0; z-index: 1; background: var(--surface-2); }
+  tbody tr:hover td { background: color-mix(in srgb, var(--surface-2) 70%, transparent); }
+  td.r, th.r { text-align: right; }
+  tr.subhead td { background: var(--surface-2); font-weight: 700; color: var(--text); }
+  tr.subhead .why { font-weight: 500; }
 
-  .chip {
-    display: inline-flex; align-items: center; gap: 5px;
-    font-size: 11.5px; font-weight: 650; border-radius: 999px; padding: 2px 9px;
-    border: 1px solid transparent; white-space: nowrap;
-  }
-  .chip.deny  { color: var(--bad);  background: var(--bad-weak);  border-color: color-mix(in srgb, var(--bad) 30%, transparent); }
-  .chip.alert { color: var(--info); background: var(--info-weak); border-color: color-mix(in srgb, var(--info) 30%, transparent); }
-  .chip.accept{ color: var(--ok);   background: var(--ok-weak);   border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
+  /* ---- chips ------------------------------------------------------------ */
+  .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 650;
+    border-radius: 999px; padding: 2px 9px; border: 1px solid transparent; white-space: nowrap; }
+  .chip.deny { color: var(--bad); background: var(--bad-weak); border-color: color-mix(in srgb, var(--bad) 28%, transparent); }
+  .chip.alert { color: var(--info); background: var(--info-weak); border-color: color-mix(in srgb, var(--info) 28%, transparent); }
+  .chip.accept { color: var(--ok); background: var(--ok-weak); border-color: color-mix(in srgb, var(--ok) 28%, transparent); }
   .chip.plain { color: var(--text-dim); background: var(--surface-3); }
-  .chip.sev-high, .chip.sev-critical { color: var(--bad); background: var(--bad-weak); }
-  .chip.sev-medium { color: var(--warn); background: var(--warn-weak); }
-  .chip.sev-low, .chip.sev-info { color: var(--info); background: var(--info-weak); }
+  .chip.sev-critical, .chip.sev-high { color: var(--bad); background: var(--bad-weak); border-color: color-mix(in srgb, var(--bad) 28%, transparent); }
+  .chip.sev-medium { color: var(--warn); background: var(--warn-weak); border-color: color-mix(in srgb, var(--warn) 28%, transparent); }
+  .chip.sev-low, .chip.sev-info { color: var(--info); background: var(--info-weak); border-color: color-mix(in srgb, var(--info) 28%, transparent); }
+  .dirpill { display: inline-flex; align-items: center; gap: 4px; color: var(--text-dim); font-size: 12px; }
+  .why { color: var(--text-dim); font-size: 12px; margin-top: 2px; white-space: normal; max-width: 42ch; }
+  .risk { color: var(--warn); font-size: 11.5px; margin-top: 1px; white-space: normal; max-width: 40ch; }
+  .muted { color: var(--text-mute); }
 
-  .attack {
-    border: 1px solid var(--border); border-radius: var(--r); padding: 12px 14px; margin-bottom: 10px;
-    background: var(--surface-2);
+  /* hit bar for rules */
+  .hit { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+  .hit .bar { height: 6px; border-radius: 999px; background: var(--surface-3); width: 64px; overflow: hidden; flex: none; }
+  .hit .bar > i { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+  .hit .bar.deny > i { background: var(--bad); } .hit .bar.alert > i { background: var(--info); }
+
+  /* ---- attack cards ----------------------------------------------------- */
+  .attacks { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
+  .attack { border: 1px solid var(--border); border-radius: var(--r); padding: 13px 14px; background: var(--surface);
+    box-shadow: var(--shadow-sm); border-left: 4px solid var(--border-strong); }
+  .attack.sev-critical, .attack.sev-high { border-left-color: var(--bad); }
+  .attack.sev-medium { border-left-color: var(--warn); }
+  .attack.sev-low, .attack.sev-info { border-left-color: var(--info); }
+  .attack .ah { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .attack .at { font-weight: 700; font-size: 13.5px; letter-spacing: -.01em; }
+  .attack .ad { color: var(--text-dim); margin: 7px 0 8px; font-size: 12.5px; }
+  .attack .am { display: flex; gap: 8px; flex-wrap: wrap; font-size: 11.5px; color: var(--text-mute); }
+  .attack .am .k { display: inline-flex; align-items: center; gap: 4px; background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; }
+
+  /* ---- chart ------------------------------------------------------------ */
+  .legend { display: flex; gap: 14px; align-items: center; font-size: 12px; color: var(--text-dim); }
+  .legend .sw { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  #timeline { width: 100%; height: 160px; display: block; }
+  #tt { position: fixed; z-index: 60; pointer-events: none; display: none; background: var(--surface);
+    border: 1px solid var(--border-strong); border-radius: var(--r-sm); box-shadow: var(--shadow-lg);
+    padding: 8px 10px; font-size: 12px; max-width: 260px; }
+
+  /* ---- states ----------------------------------------------------------- */
+  .empty { color: var(--text-mute); padding: 22px 16px; text-align: center; font-size: 13px; }
+  .errbox { color: var(--bad); font-size: 12.5px; white-space: pre-line; line-height: 1.7; }
+  .skel { color: var(--text-mute); }
+
+  /* segmented filter buttons */
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; }
+  .seg button { height: 34px; border: 0; border-radius: 0; background: var(--surface); color: var(--text-dim);
+    padding: 0 12px; font-size: 12.5px; }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button.on { background: var(--accent-weak); color: var(--accent); font-weight: 650; }
+  .search { min-width: 190px; }
+
+  /* backdrop for mobile drawer */
+  .backdrop { display: none; position: fixed; inset: 0; z-index: 25; background: rgba(0,0,0,.4); }
+
+  /* ---- responsive ------------------------------------------------------- */
+  @media (max-width: 1180px) { .kpis { grid-template-columns: repeat(3, 1fr); } }
+  @media (max-width: 960px) {
+    :root { --sb-w: 0px; }
+    .app { grid-template-columns: 1fr; grid-template-areas: "header" "main"; }
+    .brandbox { display: none; }
+    header.top { padding-left: 12px; }
+    .burger { display: inline-flex; }
+    nav.side { position: fixed; top: 0; left: 0; z-index: 40; width: 264px; height: 100vh;
+      transform: translateX(-100%); transition: transform .22s ease; box-shadow: var(--shadow-lg); }
+    nav.side.open { transform: none; }
+    nav.side .brandmini { display: flex; align-items: center; gap: 10px; padding: 4px 8px 12px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+    body.drawer .backdrop { display: block; }
+    .grid2 { grid-template-columns: 1fr; }
   }
-  .attack .head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-  .attack .title { font-weight: 700; }
-  .attack .detail { color: var(--text-dim); margin: 6px 0 4px; }
-  .attack .meta { font-size: 12px; color: var(--text-mute); display: flex; gap: 14px; flex-wrap: wrap; }
-
-  .legend { display: flex; gap: 16px; align-items: center; font-size: 12px; color: var(--text-dim); }
-  .legend .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
-
-  #timeline { width: 100%; height: 150px; display: block; }
-  #tooltip {
-    position: fixed; z-index: 50; pointer-events: none; display: none;
-    background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r-sm);
-    box-shadow: var(--shadow); padding: 8px 10px; font-size: 12px; max-width: 280px;
+  @media (min-width: 961px) { nav.side .brandmini { display: none; } }
+  @media (max-width: 620px) {
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+    main { padding: 12px; }
+    .hostchip .mono { display: none; }
+    .card > .ch .tools { width: 100%; }
+    .card > .ch .tools .search { flex: 1; min-width: 0; }
+    .attacks { grid-template-columns: 1fr; }
   }
-  .empty { color: var(--text-mute); padding: 18px; text-align: center; }
-  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  @media (max-width: 900px) { .two { grid-template-columns: 1fr; } }
-  .errors { color: var(--bad); font-size: 12.5px; white-space: pre-line; }
-  footer { max-width: 1280px; margin: 8px auto 0; padding: 0 20px; color: var(--text-mute); font-size: 12px; }
-  footer code { background: var(--surface-3); padding: 1px 6px; border-radius: 5px; }
-  .why { color: var(--text-dim); font-size: 12px; }
-  .risk { color: var(--warn); font-size: 11.5px; }
+  @media (max-width: 400px) { .kpis { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
-<header>
-  <div class="brand">
-    <div class="logo">&#x1F6E1;</div>
-    <div>ufw-nft — Live Enforcement Console<small id="hostline">connecting…</small></div>
+<div class="app">
+  <div class="brandbox">
+    <div class="logo" aria-hidden="true">&#x1F6E1;</div>
+    <div class="name">ufw-nft<small>Enforcement Console</small></div>
   </div>
-  <div class="spacer"></div>
-  <span class="live" id="live"><span class="dot"></span><span id="liveText">connecting</span></span>
-  <button id="pause" title="Pause auto-refresh">&#x23F8; Pause</button>
-  <button id="theme" title="Theme">&#x25D1;</button>
-</header>
 
-<main>
-  <div id="ribbon" class="ribbon warn"><b>Connecting…</b> waiting for the first snapshot from this host.</div>
-
-  <div class="kpis" id="kpis"></div>
-
-  <div class="card">
-    <h2>Attack analysis
-      <span class="count" id="attackCount"></span>
-      <span class="toolbar legend">
-        <span><span class="swatch" style="background:var(--chart-deny)"></span>denied</span>
-        <span><span class="swatch" style="background:var(--chart-alert)"></span>alert</span>
-      </span>
-    </h2>
-    <div class="body">
-      <svg id="timeline" role="img" aria-label="Denied and alerted packets over time"></svg>
-      <div id="attacks"></div>
+  <header class="top">
+    <button class="icon-btn burger" id="burger" aria-label="Open navigation" title="Menu">&#9776;</button>
+    <div class="hostchip" title="Host and last update">
+      <span class="dirpill" id="postureDot" style="width:9px;height:9px;border-radius:50%;background:var(--text-mute);display:inline-block"></span>
+      <b id="hostName">connecting…</b>
+      <span class="mono" id="updatedAt"></span>
     </div>
-  </div>
-
-  <div class="card">
-    <h2>Denied &amp; alerted packets
-      <span class="count" id="eventCount"></span>
-      <span class="toolbar">
-        <input id="evSearch" type="search" placeholder="filter: ip, port, rule, service…">
-        <select id="evAction"><option value="">all actions</option><option value="deny">denied</option><option value="alert">alerts</option></select>
-        <select id="evDir"><option value="">both directions</option><option value="in">inbound</option><option value="out">outbound</option></select>
-      </span>
-    </h2>
-    <div class="scroll"><table id="events">
-      <thead><tr><th>Time</th><th>Action</th><th>Dir</th><th>Source</th><th>Destination</th><th>Proto</th><th>Service</th><th>Rule &amp; reason</th></tr></thead>
-      <tbody></tbody>
-    </table></div>
-  </div>
-
-  <div class="card">
-    <h2>Enforced rules <span class="count" id="ruleCount"></span></h2>
-    <div class="scroll"><table id="rules">
-      <thead><tr><th>Chain</th><th>Rule</th><th>Match</th><th>Services</th><th>Verdict</th><th class="num">Packets</th><th class="num">Volume</th></tr></thead>
-      <tbody></tbody>
-    </table></div>
-  </div>
-
-  <div class="two">
-    <div class="card">
-      <h2>Listening services <span class="count" id="listenerCount"></span></h2>
-      <div class="scroll"><table id="listeners">
-        <thead><tr><th>Proto</th><th>Address</th><th>Service</th><th>Process</th></tr></thead>
-        <tbody></tbody>
-      </table></div>
+    <div class="spacer"></div>
+    <span class="live" id="live"><span class="dot"></span><span id="liveText">connecting</span></span>
+    <div class="ctl">
+      <select id="interval" title="Refresh interval" aria-label="Refresh interval">
+        <option value="2000">2s</option>
+        <option value="3000" selected>3s</option>
+        <option value="5000">5s</option>
+        <option value="10000">10s</option>
+        <option value="0">paused</option>
+      </select>
+      <button class="icon-btn" id="refresh" title="Refresh now" aria-label="Refresh now">&#x21bb;</button>
+      <button class="icon-btn" id="theme" title="Theme" aria-label="Toggle theme">&#x25D1;</button>
     </div>
-    <div class="card">
-      <h2>Active connections <span class="count" id="connCount"></span></h2>
-      <div class="scroll"><table id="conns">
-        <thead><tr><th>Dir</th><th>Local</th><th>Remote</th><th>Service</th><th>Process</th></tr></thead>
-        <tbody></tbody>
-      </table></div>
+  </header>
+
+  <nav class="side" id="side" aria-label="Sections">
+    <div class="brandmini">
+      <div class="logo" aria-hidden="true" style="width:30px;height:30px;font-size:16px">&#x1F6E1;</div>
+      <div class="name">ufw-nft<small>Enforcement Console</small></div>
     </div>
-  </div>
+    <div class="grp">Monitor</div>
+    <a href="#overview" data-nav="overview"><span class="ic">&#9673;</span>Overview</a>
+    <a href="#threats" data-nav="threats"><span class="ic">&#9888;</span>Threats<span class="badge" id="nav-threats">0</span></a>
+    <a href="#events" data-nav="events"><span class="ic">&#9776;</span>Events<span class="badge" id="nav-events">0</span></a>
+    <div class="grp">Enforcement</div>
+    <a href="#rules" data-nav="rules"><span class="ic">&#9636;</span>Rules<span class="badge" id="nav-rules">0</span></a>
+    <a href="#host" data-nav="host"><span class="ic">&#9635;</span>Host surface<span class="badge" id="nav-host">0</span></a>
+    <a href="#diag" data-nav="diag"><span class="ic">&#9432;</span>Diagnostics</a>
+    <div class="foot">
+      apply <code>sudo firewall apply default_allow</code><br>
+      test <code>sudo firewall trial default_deny 60</code><br>
+      undo <code>sudo firewall revert</code>
+    </div>
+  </nav>
 
-  <div class="card" id="errorCard" style="display:none">
-    <h2>Collection problems</h2>
-    <div class="body errors" id="errors"></div>
-  </div>
-</main>
+  <main>
+    <section id="overview">
+      <div class="ribbon warn" id="ribbon"><span class="rp"></span><div class="rb"><div class="rt">Connecting…</div><div class="rd">Waiting for the first snapshot from this host.</div></div></div>
+      <div class="kpis" id="kpis" style="margin-top:16px"></div>
+    </section>
 
-<footer>
-  apply: <code>sudo firewall apply default_allow</code> ·
-  test safely: <code>sudo firewall trial default_deny 60</code> ·
-  undo: <code>sudo firewall revert</code> ·
-  this page: <code>sudo firewall</code>
-</footer>
+    <section id="threats">
+      <div class="sec-h"><h2>Threat analysis</h2><span class="hint" id="threatHint"></span></div>
+      <div class="card">
+        <div class="ch">
+          <h3>Denied &amp; alerted traffic over time</h3>
+          <div class="tools legend">
+            <span><span class="sw" style="background:var(--chart-deny)"></span>denied</span>
+            <span><span class="sw" style="background:var(--chart-alert)"></span>alert</span>
+          </div>
+        </div>
+        <div class="body"><svg id="timeline" role="img" aria-label="Denied and alerted packets over time"></svg></div>
+      </div>
+      <div class="attacks" id="attacks" style="margin-top:12px"></div>
+    </section>
 
-<div id="tooltip"></div>
+    <section id="events">
+      <div class="card">
+        <div class="ch">
+          <h3>Denied &amp; alerted packets</h3><span class="count" id="eventCount"></span>
+          <div class="tools">
+            <div class="seg" id="evAction" role="group" aria-label="Filter by action">
+              <button data-v="" class="on">All</button><button data-v="deny">Denied</button><button data-v="alert">Alerts</button>
+            </div>
+            <div class="seg" id="evDir" role="group" aria-label="Filter by direction">
+              <button data-v="" class="on">Both</button><button data-v="in">In</button><button data-v="out">Out</button>
+            </div>
+            <input id="evSearch" class="search" type="search" placeholder="filter ip · port · rule · service" aria-label="Filter events">
+          </div>
+        </div>
+        <div class="pad0"><div class="scroll-y tbl-wrap"><table id="events">
+          <thead><tr><th>Time</th><th>Action</th><th>Dir</th><th>Source</th><th>Destination</th><th>Proto</th><th>Service</th><th class="wrap">Rule &amp; reason</th></tr></thead>
+          <tbody><tr><td colspan="8" class="empty skel">Loading events…</td></tr></tbody>
+        </table></div></div>
+      </div>
+    </section>
+
+    <section id="rules">
+      <div class="card">
+        <div class="ch"><h3>Enforced rules</h3><span class="count" id="ruleCount"></span></div>
+        <div class="pad0"><div class="scroll-y tbl-wrap"><table id="rules">
+          <thead><tr><th>Chain</th><th>Rule</th><th>Match</th><th>Services</th><th>Verdict</th><th class="r">Packets</th><th class="r">Volume</th></tr></thead>
+          <tbody><tr><td colspan="7" class="empty skel">Loading rules…</td></tr></tbody>
+        </table></div></div>
+      </div>
+    </section>
+
+    <section id="host">
+      <div class="sec-h"><h2>Host surface</h2><span class="hint">what this machine offers and talks to, from the kernel's own tables</span></div>
+      <div class="grid2">
+        <div class="card">
+          <div class="ch"><h3>Listening services</h3><span class="count" id="listenerCount"></span></div>
+          <div class="pad0"><div class="scroll-y tbl-wrap"><table id="listeners">
+            <thead><tr><th>Proto</th><th>Address</th><th>Service</th><th>Process</th></tr></thead>
+            <tbody><tr><td colspan="4" class="empty skel">Loading…</td></tr></tbody>
+          </table></div></div>
+        </div>
+        <div class="card">
+          <div class="ch"><h3>Active connections</h3><span class="count" id="connCount"></span></div>
+          <div class="pad0"><div class="scroll-y tbl-wrap"><table id="conns">
+            <thead><tr><th>Dir</th><th>Local</th><th>Remote</th><th>Service</th><th>Process</th></tr></thead>
+            <tbody><tr><td colspan="5" class="empty skel">Loading…</td></tr></tbody>
+          </table></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="diag">
+      <div class="card" id="errorCard" style="display:none">
+        <div class="ch"><h3>Collection diagnostics</h3></div>
+        <div class="body errbox" id="errors"></div>
+      </div>
+    </section>
+  </main>
+</div>
+<div class="backdrop" id="backdrop"></div>
+<div id="tt" role="status"></div>
 
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
+const qs = (s, r=document) => r.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
-/* theme: auto → dark → light */
-const themes = ["auto", "dark", "light"];
+/* ---- theme: auto → dark → light -------------------------------------- */
+const THEMES = ["auto","dark","light"];
 let theme = localStorage.getItem("ufw-theme") || "auto";
 applyTheme();
-$("theme").onclick = () => { theme = themes[(themes.indexOf(theme) + 1) % themes.length]; localStorage.setItem("ufw-theme", theme); applyTheme(); };
+$("theme").onclick = () => { theme = THEMES[(THEMES.indexOf(theme)+1)%THEMES.length]; localStorage.setItem("ufw-theme", theme); applyTheme(); scheduleChart(); };
 function applyTheme() {
-  if (theme === "auto") document.documentElement.removeAttribute("data-theme");
-  else document.documentElement.setAttribute("data-theme", theme);
+  const r = document.documentElement;
+  if (theme === "auto") r.removeAttribute("data-theme"); else r.setAttribute("data-theme", theme);
   $("theme").textContent = theme === "auto" ? "◑" : (theme === "dark" ? "☾" : "☀");
+  $("theme").title = "Theme: " + theme;
 }
 
-let paused = false;
-$("pause").onclick = () => {
-  paused = !paused;
-  $("pause").innerHTML = paused ? "&#x25B6; Resume" : "&#x23F8; Pause";
-  setLive(!paused && lastOk);
-};
+/* ---- mobile drawer ---------------------------------------------------- */
+function drawer(open) { document.body.classList.toggle("drawer", open); $("side").classList.toggle("open", open); }
+$("burger").onclick = () => drawer(!document.body.classList.contains("drawer"));
+$("backdrop").onclick = () => drawer(false);
 
-let lastOk = false;
-function setLive(on) {
-  $("live").classList.toggle("on", on);
-  $("liveText").textContent = on ? "live" : (paused ? "paused" : "offline");
+/* ---- polling controls ------------------------------------------------- */
+let intervalMs = 3000, timer = null, lastOk = false, busy = false;
+$("interval").onchange = () => { intervalMs = +$("interval").value; arm(); if (intervalMs) refresh(); };
+$("refresh").onclick = () => refresh();
+function arm() { if (timer) clearInterval(timer); timer = null; if (intervalMs > 0) timer = setInterval(tick, intervalMs); }
+function tick() { if (!document.hidden) refresh(); }
+document.addEventListener("visibilitychange", () => { if (!document.hidden && intervalMs) refresh(); });
+
+function setLive(state) { // "live" | "off" | "paused"
+  const el = $("live");
+  el.className = "live " + (state === "live" ? "on" : state === "off" ? "off" : "");
+  $("liveText").textContent = state;
 }
 
+/* ---- formatting ------------------------------------------------------- */
 const fmtN = (n) => Number(n ?? 0).toLocaleString();
-function fmtBytes(b) {
-  b = Number(b ?? 0);
-  if (b < 1024) return b + " B";
-  const u = ["KiB", "MiB", "GiB", "TiB"];
-  let i = -1; do { b /= 1024; i++; } while (b >= 1024 && i < u.length - 1);
-  return b.toFixed(b >= 100 ? 0 : 1) + " " + u[i];
-}
-function ago(ts) {
-  if (!ts) return "—";
-  const s = Math.max(0, Date.now() / 1000 - ts);
-  if (s < 90) return Math.round(s) + "s ago";
-  if (s < 5400) return Math.round(s / 60) + "m ago";
-  if (s < 172800) return (s / 3600).toFixed(1) + "h ago";
-  return Math.round(s / 86400) + "d ago";
-}
-const tstr = (ts) => ts ? new Date(ts * 1000).toLocaleTimeString() : "—";
+function fmtBytes(b) { b = Number(b ?? 0); if (b < 1024) return b + " B";
+  const u = ["KiB","MiB","GiB","TiB"]; let i = -1; do { b /= 1024; i++; } while (b >= 1024 && i < u.length-1);
+  return b.toFixed(b >= 100 ? 0 : 1) + " " + u[i]; }
+function ago(ts) { if (!ts) return "—"; const s = Math.max(0, Date.now()/1000 - ts);
+  if (s < 60) return Math.round(s) + "s"; if (s < 5400) return Math.round(s/60) + "m";
+  if (s < 172800) return (s/3600).toFixed(1) + "h"; return Math.round(s/86400) + "d"; }
+const tstr = (ts) => ts ? new Date(ts*1000).toLocaleTimeString() : "—";
+const hhmm = (ts) => new Date(ts*1000).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+
+/* section-level render guard: only rebuild DOM when the data slice changed */
+const _sig = {};
+function changed(key, val) { const s = JSON.stringify(val); if (_sig[key] === s) return false; _sig[key] = s; return true; }
 
 let state = null;
 
 async function refresh() {
-  if (paused) return;
+  if (busy || (intervalMs === 0 && arguments.length === 0 && !lastOk)) { /* still allow manual */ }
+  if (busy) return; busy = true;
   try {
-    const r = await fetch("/api/state", { cache: "no-store" });
+    const ctl = new AbortController();
+    const to = setTimeout(() => ctl.abort(), 8000);
+    const r = await fetch("/api/state", { cache: "no-store", signal: ctl.signal });
+    clearTimeout(to);
     state = await r.json();
     lastOk = true;
     render();
+    setLive(intervalMs ? "live" : "paused");
   } catch (e) {
-    lastOk = false;
-    $("ribbon").className = "ribbon bad";
-    $("ribbon").innerHTML = "<b>Connection lost.</b> The dashboard process is not answering — restart it with <span class='mono'>sudo firewall</span>.";
-  }
-  setLive(!paused && lastOk);
+    lastOk = false; setLive("off");
+    const rb = $("ribbon"); rb.className = "ribbon bad";
+    rb.innerHTML = '<span class="rp"></span><div class="rb"><div class="rt">Connection lost</div><div class="rd">The dashboard process is not answering — restart it with <span class="mono">sudo firewall</span>.</div></div>';
+  } finally { busy = false; }
 }
 
 function render() {
   const s = state;
-  $("hostline").textContent = (s.host || "host") + " · updated " + tstr(s.generated_at);
+  $("hostName").textContent = s.host || "host";
+  $("updatedAt").textContent = "· " + tstr(s.generated_at);
 
-  /* ribbon */
-  const rib = $("ribbon");
+  renderRibbon(s);
+  renderKPIs(s);
+  renderThreats(s);
+  renderEvents();           /* also re-runs on filter change */
+  if (changed("rules", s.chains)) renderRules(s.chains || []);
+  if (changed("host", [s.listeners, s.connections])) renderHost(s);
+  renderErrors(s.errors || []);
+  updateNav(s);
+}
+
+/* ---- ribbon + posture ------------------------------------------------- */
+function renderRibbon(s) {
+  if (!changed("ribbon", [s.enforced, s.policy])) return;
+  const rb = $("ribbon"), dot = $("postureDot");
   if (s.enforced && s.policy) {
     const p = s.policy;
-    const trial = p.mode === "trial" ? ` — <b>TRIAL</b>, auto-reverts ${p.trial_secs}s after apply` : "";
-    rib.className = "ribbon ok";
-    rib.innerHTML = `<b>ENFORCING</b> policy <span class="mono">${esc(p.name)}</span> (rev ${p.revision})
-      from <span class="mono">${esc(p.path)}</span> since ${tstr(p.applied_at)}${trial}.
-      ${p.restrictive ? "Default-deny: anything not explicitly allowed is dropped." : "Default-allow: only named traffic is denied or flagged."}`;
+    const trial = p.mode === "trial" ? ` · <b>TRIAL</b>, auto-reverts ${p.trial_secs}s after apply` : "";
+    rb.className = "ribbon ok";
+    rb.innerHTML = `<span class="rp"></span><div class="rb">
+      <div class="rt">ENFORCING</div>
+      <div class="rd">Policy <span class="mono">${esc(p.name)}</span> (rev ${p.revision}) from <span class="mono">${esc(p.path)}</span>, loaded ${tstr(p.applied_at)}${trial}.
+      ${p.restrictive ? "Default-deny: anything not explicitly allowed is dropped." : "Default-allow: only named traffic is denied or flagged."}</div></div>`;
+    dot.style.background = "var(--ok)";
   } else if (s.enforced) {
-    rib.className = "ribbon ok";
-    rib.innerHTML = "<b>ENFORCING</b> — table <span class='mono'>inet ufw</span> is loaded (no policy metadata; re-apply to record it).";
+    rb.className = "ribbon ok";
+    rb.innerHTML = '<span class="rp"></span><div class="rb"><div class="rt">ENFORCING</div><div class="rd">Table <span class="mono">inet ufw</span> is loaded (no policy metadata — re-apply to record it).</div></div>';
+    dot.style.background = "var(--ok)";
   } else {
-    rib.className = "ribbon warn";
-    rib.innerHTML = "<b>NOT ENFORCING</b> — no <span class='mono'>inet ufw</span> table is loaded. Start with <span class='mono'>sudo firewall apply default_allow</span>.";
+    rb.className = "ribbon warn";
+    rb.innerHTML = '<span class="rp"></span><div class="rb"><div class="rt">NOT ENFORCING</div><div class="rd">No <span class="mono">inet ufw</span> table is loaded. Start with <span class="mono">sudo firewall apply default_allow</span>.</div></div>';
+    dot.style.background = "var(--warn)";
   }
+}
 
-  /* KPIs */
+/* ---- KPIs ------------------------------------------------------------- */
+function renderKPIs(s) {
   const t = s.totals || {};
-  $("kpis").innerHTML = [
-    kpi("Denied packets", fmtN(t.denied_packets), fmtBytes(t.denied_bytes) + " stopped", t.denied_packets > 0 ? "bad" : ""),
-    kpi("Alerts", fmtN(t.alert_packets), "flagged for audit", t.alert_packets > 0 ? "warn" : ""),
-    kpi("Attack sources", fmtN(t.attackers), "distinct remote IPs", t.attackers > 0 ? "bad" : ""),
-    kpi("Logged events", fmtN(t.events), "last 48 h"),
-    kpi("Accepted", fmtN(t.accepted_packets), "by explicit allow rules"),
-    kpi("Listeners", fmtN((s.listeners || []).length), "open service ports"),
-  ].join("");
-
-  renderTimeline(s.events || []);
-  renderAttacks(s.attacks || []);
-  renderEvents();
-  renderRules(s.chains || []);
-  renderHost(s);
-
-  const errs = s.errors || [];
-  $("errorCard").style.display = errs.length ? "" : "none";
-  $("errors").textContent = errs.join("\n");
+  if (!changed("kpis", t)) return;
+  const cards = [
+    ["Denied packets", fmtN(t.denied_packets), fmtBytes(t.denied_bytes) + " stopped", t.denied_packets > 0 ? "bad" : "ok"],
+    ["Alerts", fmtN(t.alert_packets), "flagged for audit", t.alert_packets > 0 ? "warn" : ""],
+    ["Attack sources", fmtN(t.attackers), "distinct remote IPs", t.attackers > 0 ? "bad" : "ok"],
+    ["Logged events", fmtN(t.events), "last 48 h", "info"],
+    ["Accepted", fmtN(t.accepted_packets), "by explicit allow rules", ""],
+    ["Listeners", fmtN((s.listeners||[]).length), "open service ports", ""],
+  ];
+  $("kpis").innerHTML = cards.map(([lab,big,sub,cls]) =>
+    `<div class="kpi ${cls}"><div class="lab">${lab}</div><div class="big">${big}</div><div class="sub">${sub}</div></div>`).join("");
 }
 
-function kpi(lab, big, sub, cls) {
-  return `<div class="kpi ${cls || ""}"><div class="lab">${lab}</div><div class="big">${big}</div><div class="sub">${sub}</div></div>`;
+/* ---- threats: timeline + attack cards --------------------------------- */
+function renderThreats(s) {
+  const attacks = s.attacks || [];
+  $("threatHint").textContent = attacks.length ? `${attacks.length} pattern(s) detected across ${(s.totals||{}).attackers||0} source(s)` : "no attack patterns in the current window";
+  if (changed("timelineData", (s.events||[]).map(e => [Math.round(e.ts), e.action]))) scheduleChart();
+  if (changed("attacks", attacks)) renderAttacks(attacks);
 }
 
-/* ---- timeline: stacked deny/alert bars ---------------------------------- */
-function renderTimeline(events) {
-  const svg = $("timeline");
-  const W = svg.clientWidth || 900, H = 150, padL = 44, padB = 20, padT = 8;
-  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
-  if (!events.length) {
-    svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" fill="var(--text-mute)" font-size="13">No denied or alerted packets logged yet — that is a quiet network, not a broken page.</text>`;
-    return;
-  }
-  const now = Date.now() / 1000;
-  const span = Math.max(600, Math.min(now - events[0].ts + 60, 48 * 3600));
-  const buckets = 60, bw = span / buckets;
-  const deny = new Array(buckets).fill(0), alert = new Array(buckets).fill(0);
-  for (const e of events) {
-    const i = Math.floor((e.ts - (now - span)) / bw);
-    if (i >= 0 && i < buckets) (e.action === "deny" ? deny : alert)[i]++;
-  }
-  const max = Math.max(1, ...deny.map((d, i) => d + alert[i]));
-  const cw = (W - padL - 6) / buckets;
-  const barw = Math.max(2, cw - 2);           /* 2px gap between bars */
-  const y = (v) => (H - padB) - v / max * (H - padB - padT);
-  let out = "";
-  /* y-axis: 3 gridlines, recessive */
-  for (const f of [0.5, 1]) {
-    const v = Math.ceil(max * f);
-    out += `<line x1="${padL}" x2="${W - 4}" y1="${y(v)}" y2="${y(v)}" stroke="var(--border)" stroke-width="1"/>
-            <text x="${padL - 6}" y="${y(v) + 4}" text-anchor="end" font-size="10" fill="var(--text-mute)">${v}</text>`;
-  }
-  out += `<line x1="${padL}" x2="${W - 4}" y1="${H - padB}" y2="${H - padB}" stroke="var(--border-strong)" stroke-width="1"/>`;
-  for (let i = 0; i < buckets; i++) {
-    const x = padL + i * cw;
-    const d = deny[i], a = alert[i];
-    if (d) out += `<rect x="${x}" width="${barw}" y="${y(d)}" height="${(H - padB) - y(d)}" rx="2" fill="var(--chart-deny)" data-i="${i}"/>`;
-    if (a) out += `<rect x="${x}" width="${barw}" y="${y(d + a) }" height="${Math.max(1, y(d) - y(d + a) - (d ? 2 : 0))}" rx="2" fill="var(--chart-alert)" data-i="${i}"/>`;
-  }
-  /* sparse time labels */
-  for (const f of [0, 0.5, 1]) {
-    const ts = now - span + f * span;
-    const x = padL + f * (W - padL - 6);
-    out += `<text x="${x}" y="${H - 5}" font-size="10" fill="var(--text-mute)" text-anchor="${f === 0 ? "start" : f === 1 ? "end" : "middle"}">${new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</text>`;
-  }
-  svg.innerHTML = out;
-  svg.onmousemove = (ev) => {
-    const tgt = ev.target.closest("rect[data-i]");
-    if (!tgt) return hideTip();
-    const i = +tgt.dataset.i;
-    const from = new Date((now - span + i * bw) * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    showTip(ev, `<b>${from}</b><br>denied: ${deny[i]}<br>alerts: ${alert[i]}`);
-  };
-  svg.onmouseleave = hideTip;
-}
-
-function showTip(ev, html) {
-  const tip = $("tooltip");
-  tip.innerHTML = html;
-  tip.style.display = "block";
-  const x = Math.min(ev.clientX + 12, innerWidth - 300), yy = ev.clientY + 12;
-  tip.style.left = x + "px"; tip.style.top = yy + "px";
-}
-function hideTip() { $("tooltip").style.display = "none"; }
-
-/* ---- attacks ------------------------------------------------------------ */
-const sevIcon = { critical: "⚠", high: "⚠", medium: "▲", low: "●", info: "ℹ" };
+const SEV_ICON = { critical:"⚠", high:"⚠", medium:"▲", low:"●", info:"ℹ" };
 function renderAttacks(attacks) {
-  $("attackCount").textContent = attacks.length ? `${attacks.length} pattern(s) detected` : "";
-  if (!attacks.length) {
-    $("attacks").innerHTML = `<div class="empty">No attack patterns in the logged events. Probes will show up here the moment a denied packet lands.</div>`;
-    return;
-  }
-  $("attacks").innerHTML = attacks.map(a => `
-    <div class="attack">
-      <div class="head">
-        <span class="chip sev-${esc(a.severity)}">${sevIcon[a.severity] || ""} ${esc(a.severity.toUpperCase())}</span>
-        <span class="title">${esc(a.title)}</span>
-        <span class="chip plain">${fmtN(a.count)} packet(s)</span>
+  const el = $("attacks");
+  if (!attacks.length) { el.innerHTML = `<div class="card"><div class="empty">No attack patterns yet. Probes appear here the moment a denied packet is logged.</div></div>`; return; }
+  el.innerHTML = attacks.map(a => `
+    <div class="attack sev-${esc(a.severity)}">
+      <div class="ah">
+        <span class="chip sev-${esc(a.severity)}">${SEV_ICON[a.severity]||""} ${esc((a.severity||"").toUpperCase())}</span>
+        <span class="at">${esc(a.title)}</span>
       </div>
-      <div class="detail">${esc(a.detail)}</div>
-      <div class="meta">
-        ${a.ports && a.ports.length ? `<span>ports: ${esc(a.ports.join(", "))}</span>` : ""}
-        <span>${tstr(a.first_ts)} → ${tstr(a.last_ts)} (${ago(a.last_ts)})</span>
-        ${a.rules && a.rules.length ? `<span>rule: <span class="mono">${esc(a.rules.join(", "))}</span></span>` : ""}
+      <div class="ad">${esc(a.detail)}</div>
+      <div class="am">
+        <span class="k">${fmtN(a.count)} packet(s)</span>
+        ${a.ports && a.ports.length ? `<span class="k">ports: ${esc(a.ports.slice(0,6).join(", "))}${a.ports.length>6?"…":""}</span>` : ""}
+        <span class="k">${tstr(a.first_ts)} → ${tstr(a.last_ts)} · ${ago(a.last_ts)} ago</span>
+        ${a.rules && a.rules.length ? `<span class="k mono">${esc(a.rules.join(", "))}</span>` : ""}
       </div>
     </div>`).join("");
 }
 
-/* ---- events table ------------------------------------------------------- */
-for (const id of ["evSearch", "evAction", "evDir"]) $(id).addEventListener("input", renderEvents);
+/* ---- timeline (SVG, responsive via ResizeObserver) -------------------- */
+let chartRaf = 0;
+function scheduleChart() { if (chartRaf) return; chartRaf = requestAnimationFrame(() => { chartRaf = 0; drawTimeline(); }); }
+function drawTimeline() {
+  const svg = $("timeline"); if (!state) return;
+  const events = state.events || [];
+  const W = Math.max(320, svg.clientWidth || svg.parentElement.clientWidth || 800), H = 160;
+  const padL = 40, padR = 8, padB = 22, padT = 10;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  if (!events.length) {
+    svg.innerHTML = `<text x="${W/2}" y="${H/2}" text-anchor="middle" fill="var(--text-mute)" font-size="13">No denied or alerted packets logged yet — a quiet network, not a broken page.</text>`;
+    return;
+  }
+  const now = Date.now()/1000;
+  const span = Math.max(600, Math.min(now - events[0].ts + 60, 48*3600));
+  const buckets = 60, bw = span/buckets;
+  const deny = new Array(buckets).fill(0), alert = new Array(buckets).fill(0);
+  for (const e of events) { const i = Math.floor((e.ts - (now-span))/bw); if (i>=0 && i<buckets) (e.action==="deny"?deny:alert)[i]++; }
+  const max = Math.max(1, ...deny.map((d,i)=>d+alert[i]));
+  const cw = (W-padL-padR)/buckets, barw = Math.max(2, cw-2);
+  const y = (v) => (H-padB) - v/max*(H-padB-padT);
+  let out = "";
+  for (const f of [0.5, 1]) { const v = Math.ceil(max*f);
+    out += `<line x1="${padL}" x2="${W-padR}" y1="${y(v)}" y2="${y(v)}" stroke="var(--border)" stroke-width="1"/>`;
+    out += `<text x="${padL-6}" y="${y(v)+4}" text-anchor="end" font-size="10" fill="var(--text-mute)">${v}</text>`; }
+  out += `<line x1="${padL}" x2="${W-padR}" y1="${H-padB}" y2="${H-padB}" stroke="var(--border-strong)" stroke-width="1"/>`;
+  for (let i=0;i<buckets;i++) { const x = padL + i*cw, d = deny[i], a = alert[i];
+    if (d) out += `<rect x="${x}" width="${barw}" y="${y(d)}" height="${(H-padB)-y(d)}" rx="2" fill="var(--chart-deny)" data-i="${i}"/>`;
+    if (a) out += `<rect x="${x}" width="${barw}" y="${y(d+a)}" height="${Math.max(1, y(d)-y(d+a)-(d?2:0))}" rx="2" fill="var(--chart-alert)" data-i="${i}"/>`; }
+  for (const f of [0, 0.5, 1]) { const ts = now-span + f*span, x = padL + f*(W-padL-padR);
+    out += `<text x="${x}" y="${H-6}" font-size="10" fill="var(--text-mute)" text-anchor="${f===0?"start":f===1?"end":"middle"}">${hhmm(ts)}</text>`; }
+  svg.innerHTML = out;
+  svg.onmousemove = (ev) => { const t = ev.target.closest("rect[data-i]"); if (!t) return hideTip(); const i = +t.dataset.i;
+    showTip(ev, `<b>${hhmm(now-span+i*bw)}</b><br><span style="color:var(--bad)">■</span> denied: ${deny[i]}<br><span style="color:var(--info)">■</span> alerts: ${alert[i]}`); };
+  svg.onmouseleave = hideTip;
+}
+function showTip(ev, html) { const t = $("tt"); t.innerHTML = html; t.style.display = "block";
+  t.style.left = Math.min(ev.clientX+12, innerWidth-270) + "px"; t.style.top = (ev.clientY+12) + "px"; }
+function hideTip() { $("tt").style.display = "none"; }
+if (window.ResizeObserver) new ResizeObserver(() => scheduleChart()).observe($("timeline").parentElement);
+addEventListener("resize", scheduleChart);
+
+/* ---- events table (filters, debounced search) ------------------------- */
+let evAction = "", evDir = "", evSearch = "";
+function bindSeg(id, set) { const g = $(id); g.addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return;
+  [...g.children].forEach(x => x.classList.toggle("on", x === b)); set(b.dataset.v); renderEvents(); }); }
+bindSeg("evAction", v => evAction = v);
+bindSeg("evDir", v => evDir = v);
+let searchTimer = 0;
+$("evSearch").addEventListener("input", (e) => { clearTimeout(searchTimer); const v = e.target.value.trim().toLowerCase();
+  searchTimer = setTimeout(() => { evSearch = v; renderEvents(); }, 160); });
+
 function renderEvents() {
   if (!state) return;
-  const q = $("evSearch").value.trim().toLowerCase();
-  const act = $("evAction").value, dir = $("evDir").value;
-  let evs = (state.events || []).slice().reverse();     /* newest first */
-  evs = evs.filter(e =>
-    (!act || e.action === act) &&
-    (!dir || e.dir === dir) &&
-    (!q || [e.src, e.dst, e.rule, e.service, e.proto, e.why, String(e.dpt), String(e.spt)]
-      .some(v => v && String(v).toLowerCase().includes(q))));
-  $("eventCount").textContent = `${fmtN(evs.length)} of ${fmtN((state.events || []).length)} shown`;
-  const rows = evs.slice(0, 400).map(e => `
+  let evs = (state.events || []).slice().reverse();  /* newest first */
+  const q = evSearch;
+  evs = evs.filter(e => (!evAction || e.action === evAction) && (!evDir || e.dir === evDir) &&
+    (!q || [e.src,e.dst,e.rule,e.service,e.proto,e.why,String(e.dpt),String(e.spt)].some(v => v && String(v).toLowerCase().includes(q))));
+  $("eventCount").textContent = `${fmtN(evs.length)} of ${fmtN((state.events||[]).length)}`;
+  const rows = evs.slice(0, 500).map(e => `
     <tr>
-      <td title="${tstr(e.ts)}">${ago(e.ts)}</td>
-      <td><span class="chip ${e.action === "deny" ? "deny" : "alert"}">${e.action === "deny" ? "✕ DENIED" : "○ ALERT"}</span></td>
-      <td>${e.dir === "in" ? "⬇ in" : e.dir === "out" ? "⬆ out" : "—"}${e.iface ? ` <span class="why">${esc(e.iface)}</span>` : ""}</td>
-      <td class="mono">${esc(e.src)}${e.spt ? ":" + e.spt : ""}</td>
-      <td class="mono">${esc(e.dst)}${e.dpt ? ":" + e.dpt : ""}</td>
-      <td class="mono">${esc(e.proto)}${e.flags && e.flags.length ? " " + esc(e.flags.join(",")) : ""}${e.icmp_type != null ? " type " + e.icmp_type : ""}</td>
-      <td>${esc(e.service || "—")}${e.service_risk ? `<div class="risk">${esc(e.service_risk)}</div>` : ""}</td>
-      <td><span class="mono">${esc(e.rule || "—")}</span>${e.why ? `<div class="why">${esc(e.why)}</div>` : ""}</td>
+      <td title="${tstr(e.ts)}">${ago(e.ts)} ago</td>
+      <td><span class="chip ${e.action==="deny"?"deny":"alert"}">${e.action==="deny"?"✕ DENIED":"○ ALERT"}</span></td>
+      <td><span class="dirpill">${e.dir==="in"?"⬇ in":e.dir==="out"?"⬆ out":"—"}</span>${e.iface?`<div class="muted mono" style="font-size:11px">${esc(e.iface)}</div>`:""}</td>
+      <td class="mono">${esc(e.src)}${e.spt?":"+e.spt:""}</td>
+      <td class="mono">${esc(e.dst)}${e.dpt?":"+e.dpt:""}</td>
+      <td class="mono">${esc(e.proto)}${e.flags&&e.flags.length?" "+esc(e.flags.join(",")):""}${e.icmp_type!=null?" t"+e.icmp_type:""}</td>
+      <td>${esc(e.service||"—")}${e.service_risk?`<div class="risk">${esc(e.service_risk)}</div>`:""}</td>
+      <td class="wrap"><span class="mono">${esc(e.rule||"—")}</span>${e.why?`<div class="why">${esc(e.why)}</div>`:""}</td>
     </tr>`).join("");
-  $("events").querySelector("tbody").innerHTML = rows ||
-    `<tr><td colspan="8" class="empty">Nothing matches — or nothing has been denied yet.</td></tr>`;
+  qs("#events tbody").innerHTML = rows || `<tr><td colspan="8" class="empty">Nothing matches — or nothing has been denied yet.</td></tr>`;
 }
 
-/* ---- rules table -------------------------------------------------------- */
+/* ---- rules (grouped by chain, with hit bars) -------------------------- */
 function renderRules(chains) {
-  let total = 0;
+  let total = 0, maxHits = 1;
+  for (const c of chains) for (const r of c.rules) maxHits = Math.max(maxHits, r.packets || 0);
   const rows = [];
   for (const c of chains) {
-    rows.push(`<tr><td colspan="7" style="background:var(--surface-2)"><b>${esc(c.name)}</b>
-      <span class="why">default policy: ${esc(c.policy)} — ${c.policy === "drop" ? "anything no rule allows is denied" : "anything no rule denies is allowed"}</span></td></tr>`);
+    rows.push(`<tr class="subhead"><td colspan="7"><b>${esc(c.name)}</b> <span class="why">default ${esc(c.policy)} — ${c.policy==="drop"?"anything no rule allows is denied":"anything no rule denies is allowed"}</span></td></tr>`);
     for (const r of c.rules) {
       total++;
-      const services = (r.services || []).map(s =>
-        `${esc(s.name)}${s.risk ? `<div class="risk">${esc(s.risk)}</div>` : ""}`).join(", ") || "—";
-      const v = r.verdict === "drop" || r.verdict === "reject" ? "deny" : r.verdict === "accept" ? "accept" : "alert";
+      const v = (r.verdict==="drop"||r.verdict==="reject") ? "deny" : r.verdict==="accept" ? "accept" : "alert";
+      const services = (r.services||[]).map(s => `${esc(s.name)}${s.risk?`<div class="risk">${esc(s.risk)}</div>`:""}`).join(", ") || "<span class='muted'>—</span>";
+      const w = Math.round(100 * (r.packets||0) / maxHits);
       rows.push(`<tr>
-        <td>${esc(c.name)}</td>
-        <td><span class="mono">${esc(r.name || "(unnamed)")}</span>${r.why ? `<div class="why">${esc(r.why)}</div>` : ""}</td>
-        <td class="mono">${esc(r.matchers || "every packet")}</td>
-        <td>${services}</td>
-        <td><span class="chip ${v}">${esc(r.verdict)}</span>${r.log_kind ? ` <span class="chip plain">logged</span>` : ""}</td>
-        <td class="num">${fmtN(r.packets)}</td>
-        <td class="num">${fmtBytes(r.bytes)}</td>
+        <td class="muted">${esc(c.name)}</td>
+        <td><span class="mono">${esc(r.name||"(unnamed)")}</span>${r.why?`<div class="why">${esc(r.why)}</div>`:""}</td>
+        <td class="mono wrap" style="max-width:34ch">${esc(r.matchers||"every packet")}</td>
+        <td class="wrap">${services}</td>
+        <td><span class="chip ${v}">${esc(r.verdict)}</span>${r.log_kind?` <span class="chip plain">logged</span>`:""}</td>
+        <td class="r"><div class="hit"><span class="num">${fmtN(r.packets)}</span><span class="bar ${v}"><i style="width:${w}%"></i></span></div></td>
+        <td class="r num">${fmtBytes(r.bytes)}</td>
       </tr>`);
     }
   }
   $("ruleCount").textContent = total ? `${total} rule(s) live in the kernel` : "";
-  $("rules").querySelector("tbody").innerHTML = rows.join("") ||
-    `<tr><td colspan="7" class="empty">No ruleset is loaded.</td></tr>`;
+  qs("#rules tbody").innerHTML = rows.join("") || `<tr><td colspan="7" class="empty">No ruleset is loaded.</td></tr>`;
 }
 
-/* ---- listeners & connections -------------------------------------------- */
+/* ---- host surface ----------------------------------------------------- */
 function renderHost(s) {
   const ls = s.listeners || [];
-  $("listenerCount").textContent = ls.length ? `${ls.length} open port(s)` : "";
-  $("listeners").querySelector("tbody").innerHTML = ls.map(l => `
+  $("listenerCount").textContent = ls.length ? `${ls.length} open` : "";
+  qs("#listeners tbody").innerHTML = ls.map(l => `
     <tr>
       <td>${esc(l.proto)}</td>
-      <td class="mono">${esc(l.addr)}:${l.port}${l.addr === "0.0.0.0" || l.addr === "::" ? ` <span class="risk">reachable from any network</span>` : ""}</td>
+      <td class="mono">${esc(l.addr)}:${l.port}${(l.addr==="0.0.0.0"||l.addr==="::")?`<div class="risk">reachable from any network</div>`:""}</td>
       <td>${esc(l.service)}</td>
-      <td class="mono">${esc(l.process || "?")}${l.pid ? ` <span class="why">pid ${l.pid}</span>` : ""}</td>
+      <td class="mono">${esc(l.process||"?")}${l.pid?` <span class="muted">pid ${l.pid}</span>`:""}</td>
     </tr>`).join("") || `<tr><td colspan="4" class="empty">No listening sockets (or /proc was unreadable).</td></tr>`;
 
   const cs = s.connections || [];
   $("connCount").textContent = cs.length ? `${cs.length} established` : "";
-  $("conns").querySelector("tbody").innerHTML = cs.map(c => `
+  qs("#conns tbody").innerHTML = cs.map(c => `
     <tr>
-      <td>${c.dir === "in" ? "⬇ in" : "⬆ out"}</td>
+      <td><span class="dirpill">${c.dir==="in"?"⬇ in":"⬆ out"}</span></td>
       <td class="mono">${esc(c.local)}:${c.lport}</td>
       <td class="mono">${esc(c.remote)}:${c.rport}</td>
       <td>${esc(c.service)}</td>
-      <td class="mono">${esc(c.process || "?")}</td>
+      <td class="mono">${esc(c.process||"?")}</td>
     </tr>`).join("") || `<tr><td colspan="5" class="empty">No established connections.</td></tr>`;
 }
 
+function renderErrors(errs) {
+  if (!changed("errors", errs)) return;
+  $("errorCard").style.display = errs.length ? "" : "none";
+  $("errors").textContent = errs.join("\n");
+}
+
+/* ---- nav: badges + active-section highlight --------------------------- */
+function updateNav(s) {
+  $("nav-threats").textContent = (s.attacks||[]).length;
+  $("nav-events").textContent = fmtN((s.totals||{}).events||0);
+  let rc = 0; for (const c of (s.chains||[])) rc += c.rules.length;
+  $("nav-rules").textContent = rc;
+  $("nav-host").textContent = (s.listeners||[]).length + (s.connections||[]).length;
+}
+const navLinks = [...document.querySelectorAll("nav.side a[data-nav]")];
+navLinks.forEach(a => a.addEventListener("click", () => { if (innerWidth <= 960) drawer(false); }));
+if (window.IntersectionObserver) {
+  const byId = {}; navLinks.forEach(a => byId[a.getAttribute("href").slice(1)] = a);
+  const io = new IntersectionObserver((ents) => { ents.forEach(en => { if (en.isIntersecting) {
+    navLinks.forEach(a => a.classList.remove("active")); const a = byId[en.target.id]; if (a) a.classList.add("active"); } }); },
+    { rootMargin: "-45% 0px -50% 0px" });
+  document.querySelectorAll("main > section").forEach(sec => io.observe(sec));
+}
+
+/* ---- go --------------------------------------------------------------- */
 refresh();
-setInterval(() => { if (!document.hidden) refresh(); }, 3000);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+arm();
 </script>
 </body>
 </html>
