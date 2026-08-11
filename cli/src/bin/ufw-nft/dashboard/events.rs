@@ -194,10 +194,9 @@ fn parse_line(line: &str, boot: Option<f64>) -> Option<Event> {
         let after = parts.next()?;
         let sp = after.find(' ')?;
         (action, Some(after[..sp].to_string()), &after[sp..])
-    } else if let Some(i) = line.find("ufw-alert ") {
-        ("alert".to_string(), None, &line[i + "ufw-alert".len()..])
     } else {
-        return None;
+        let i = line.find("ufw-alert ")?;
+        ("alert".to_string(), None, &line[i + "ufw-alert".len()..])
     };
     if action != "deny" && action != "alert" {
         return None;
