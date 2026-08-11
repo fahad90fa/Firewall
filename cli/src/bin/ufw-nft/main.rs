@@ -31,8 +31,11 @@
 //! Everything lives in one table, `inet ufw`, so `revert` removes exactly what
 //! this tool added and touches no other firewall rules on the host.
 
+mod dashboard;
+mod state;
+
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 use ufw_policy_lang::{compile_file, CompileOptions};
@@ -51,6 +54,9 @@ fn main() -> ExitCode {
         Some("trial") => cmd_trial(rest),
         Some("status") => cmd_status(),
         Some("revert") => cmd_revert(),
+        Some("check") => cmd_check(rest),
+        Some("render") => cmd_render(rest),
+        Some("dashboard") => cmd_dashboard(rest),
         Some("-h") | Some("--help") | None => {
             print_usage();
             return ExitCode::SUCCESS;
@@ -81,13 +87,24 @@ USAGE:
     ufw-nft trial  <policy.yaml> <secs>   Apply it, then auto-revert after <secs> (lockout-safe)
     ufw-nft status                        Show the loaded ruleset and per-rule counters
     ufw-nft revert                        Remove the ruleset (table inet ufw)
+    ufw-nft check  <policy.yaml>          Compile and validate with nft, loading nothing
+    ufw-nft render <policy.yaml>          Print the exact ruleset `apply` would load
+    ufw-nft dashboard [addr:port]         Serve the live web console (default 127.0.0.1:8787)
     ufw-nft --version | --help
 
 This is real enforcement: after `apply`, the kernel filters this machine's
 traffic against the policy. It covers the packet-layer policy (addresses,
 ports, protocols); identity and DPI rules need the kernel module. Loading
 rules needs root — run these with sudo. Everything is confined to the
-`inet ufw` table, so `revert` removes exactly what was added."
+`inet ufw` table, so `revert` removes exactly what was added.
+
+The dashboard shows, live: every rule with its packet counters, every denied
+or alerted packet with the rule and reason that produced it, attack-pattern
+analysis per source, and this host's listening services and connections.
+
+A bare policy name is looked up under {} —
+`apply default_deny` finds base/default_deny.yaml there.",
+        POLICY_DIR
     );
 }
 
@@ -95,23 +112,28 @@ rules needs root — run these with sudo. Everything is confined to the
 
 fn cmd_apply(args: &[String]) -> Result<(), String> {
     let path = policy_arg(args)?;
-    let (nft, restrictive) = compile_ruleset(&path)?;
+    let compiled = compile_ruleset(&path)?;
 
     // The kernel's own parser validates it before we commit anything live.
-    nft_pipe(&nft, true).map_err(|e| format!("the generated ruleset failed nft's own check: {e}"))?;
-    nft_pipe(&nft, false)?;
+    nft_pipe(&compiled.nft, true)
+        .map_err(|e| format!("the generated ruleset failed nft's own check: {e}"))?;
+    nft_pipe(&compiled.nft, false)?;
+    if let Err(e) = state::record(&path, &compiled, "apply", 0) {
+        eprintln!("  note: could not record dashboard state: {e}");
+    }
 
     println!(
         "applied: {} is now enforced by the kernel (table inet ufw)",
         path.display()
     );
-    if restrictive {
+    if compiled.restrictive {
         println!(
             "\n  \u{26a0} default-drop policy: traffic this policy does not explicitly allow is now BLOCKED,\n     \
              including, potentially, your own access to this machine."
         );
     }
     println!("\n  inspect:  ufw-nft status");
+    println!("  watch:    ufw-nft dashboard   (live rules, denials, attacks)");
     println!("  undo:     ufw-nft revert   (or: sudo nft delete table inet ufw)");
     Ok(())
 }
@@ -120,7 +142,7 @@ fn cmd_trial(args: &[String]) -> Result<(), String> {
     if args.len() < 2 {
         return Err("usage: ufw-nft trial <policy.yaml> <secs>".into());
     }
-    let path = Path::new(&args[0]).to_path_buf();
+    let path = resolve_policy(&args[0])?;
     let secs: u64 = args[1]
         .parse()
         .map_err(|_| format!("`{}` is not a number of seconds", args[1]))?;
@@ -128,15 +150,19 @@ fn cmd_trial(args: &[String]) -> Result<(), String> {
         return Err("the trial duration must be at least 1 second".into());
     }
 
-    let (nft, restrictive) = compile_ruleset(&path)?;
-    nft_pipe(&nft, true).map_err(|e| format!("the generated ruleset failed nft's own check: {e}"))?;
-    nft_pipe(&nft, false)?;
+    let compiled = compile_ruleset(&path)?;
+    nft_pipe(&compiled.nft, true)
+        .map_err(|e| format!("the generated ruleset failed nft's own check: {e}"))?;
+    nft_pipe(&compiled.nft, false)?;
 
     // Arm a detached watchdog that reverts after `secs`, surviving this
     // process, the shell, and the terminal — so a lockout heals itself. If it
     // cannot be armed, revert immediately rather than leave rules up with no
     // safety net.
-    let script = format!("sleep {secs}; nft delete table inet ufw 2>/dev/null");
+    let script = format!(
+        "sleep {secs}; nft delete table inet ufw 2>/dev/null; rm -f {} 2>/dev/null",
+        state::STATE_PATH
+    );
     let armed = spawn_detached(&script);
     if !armed {
         let _ = nft_run(&["delete", "table", "inet", "ufw"]);
@@ -144,13 +170,18 @@ fn cmd_trial(args: &[String]) -> Result<(), String> {
             "could not arm the auto-revert watchdog; reverted immediately to stay safe".into(),
         );
     }
+    if let Err(e) = state::record(&path, &compiled, "trial", secs) {
+        eprintln!("  note: could not record dashboard state: {e}");
+    }
 
     println!(
         "applied: {} is enforced by the kernel (table inet ufw)",
         path.display()
     );
-    if restrictive {
-        println!("\n  \u{26a0} default-drop policy — non-allowed traffic is BLOCKED for the trial.");
+    if compiled.restrictive {
+        println!(
+            "\n  \u{26a0} default-drop policy — non-allowed traffic is BLOCKED for the trial."
+        );
     }
     println!(
         "\n  \u{23f1} TRIAL: this will AUTO-REVERT in {secs}s, even if you close the terminal.\n     \
@@ -159,6 +190,43 @@ fn cmd_trial(args: &[String]) -> Result<(), String> {
         path.display()
     );
     Ok(())
+}
+
+/// Compile and validate with `nft -c`, loading nothing. This is the command
+/// to run in CI or before a change window: it exercises the exact bytes
+/// `apply` would commit, against the kernel's own parser.
+fn cmd_check(args: &[String]) -> Result<(), String> {
+    let path = policy_arg(args)?;
+    let compiled = compile_ruleset(&path)?;
+    nft_pipe(&compiled.nft, true)
+        .map_err(|e| format!("the generated ruleset failed nft's own check: {e}"))?;
+    println!(
+        "ok: {} compiles to a ruleset nft accepts ({} would be enforced; nothing was loaded)",
+        path.display(),
+        if compiled.restrictive {
+            "default-drop"
+        } else {
+            "default-accept"
+        }
+    );
+    Ok(())
+}
+
+/// Print the exact instrumented ruleset `apply` would feed to nft.
+fn cmd_render(args: &[String]) -> Result<(), String> {
+    let path = policy_arg(args)?;
+    let compiled = compile_ruleset(&path)?;
+    print!("{}", compiled.nft);
+    Ok(())
+}
+
+fn cmd_dashboard(args: &[String]) -> Result<(), String> {
+    let bind = match args.first().map(String::as_str) {
+        None => "127.0.0.1:8787".to_string(),
+        Some(a) if a.contains(':') => a.to_string(),
+        Some(port) => format!("127.0.0.1:{port}"),
+    };
+    dashboard::serve(&bind)
 }
 
 fn cmd_status() -> Result<(), String> {
@@ -180,11 +248,13 @@ fn cmd_status() -> Result<(), String> {
 fn cmd_revert() -> Result<(), String> {
     let out = nft_run(&["delete", "table", "inet", "ufw"])?;
     if out.status.success() {
+        state::clear();
         println!("reverted: removed table inet ufw; this tool's rules are no longer enforced");
         Ok(())
     } else {
         let err = String::from_utf8_lossy(&out.stderr);
         if is_missing_table(&err) {
+            state::clear();
             println!("nothing to revert: no `inet ufw` table is loaded");
             Ok(())
         } else {
@@ -195,16 +265,65 @@ fn cmd_revert() -> Result<(), String> {
 
 // --- compilation -----------------------------------------------------------
 
-fn policy_arg(args: &[String]) -> Result<std::path::PathBuf, String> {
+/// Where `make install` / install.sh put the shipped policies.
+const POLICY_DIR: &str = "/etc/unified-firewall/policies";
+
+fn policy_arg(args: &[String]) -> Result<PathBuf, String> {
     match args.first() {
-        Some(p) => Ok(Path::new(p).to_path_buf()),
+        Some(p) => resolve_policy(p),
         None => Err("usage: ufw-nft apply <policy.yaml>".into()),
     }
 }
 
-/// Compile `path` to its nftables ruleset with per-rule counters added, and
-/// report whether the policy is default-drop (restrictive).
-fn compile_ruleset(path: &Path) -> Result<(String, bool), String> {
+/// Resolve a policy argument: an existing path wins; a bare name is looked up
+/// under the installed policy tree, so `firewall apply default_deny` works
+/// from any directory once the project is installed.
+fn resolve_policy(arg: &str) -> Result<PathBuf, String> {
+    let direct = Path::new(arg);
+    if direct.exists() {
+        return Ok(direct.to_path_buf());
+    }
+    // Only bare names get the search treatment; an explicit path that does
+    // not exist should say so, not silently match something else.
+    if !arg.contains('/') {
+        let mut names = vec![arg.to_string()];
+        if !arg.ends_with(".yaml") {
+            names.push(format!("{arg}.yaml"));
+        }
+        for sub in ["", "base", "hardening", "applications", "test"] {
+            for name in &names {
+                let candidate = Path::new(POLICY_DIR).join(sub).join(name);
+                if candidate.is_file() {
+                    return Ok(candidate);
+                }
+            }
+        }
+        return Err(format!(
+            "`{arg}` is not a file here and not a policy under {POLICY_DIR}\n\
+             (installed policies: try `ls -R {POLICY_DIR}`)"
+        ));
+    }
+    Err(format!("`{arg}` does not exist"))
+}
+
+/// Everything `apply` needs to enforce a policy and everything the dashboard
+/// later needs to explain it.
+pub struct CompiledRuleset {
+    /// The instrumented ruleset fed to nft.
+    pub nft: String,
+    /// Whether any hooked chain defaults to drop.
+    pub restrictive: bool,
+    pub policy_name: String,
+    pub revision: u64,
+    /// The compiler's JSON model of the policy (`linux/ufw_policy.json`).
+    pub policy_json: String,
+    /// Rule name → the YAML `description:`, the human "why" the dashboard
+    /// shows next to a denial.
+    pub descriptions: Vec<(String, String)>,
+}
+
+/// Compile `path` to its nftables ruleset with per-rule counters added.
+fn compile_ruleset(path: &Path) -> Result<CompiledRuleset, String> {
     let opts = CompileOptions {
         platforms: vec![Platform::Linux],
         // The equivalence verifier compares three backends; enforcing on one
@@ -214,22 +333,63 @@ fn compile_ruleset(path: &Path) -> Result<(String, bool), String> {
     };
 
     let comp = compile_file(path, &opts).map_err(|e| format!("{}: {e}", path.display()))?;
-    if comp.policy.is_none() {
-        let rendered = comp.render();
-        let sep = if rendered.is_empty() { "" } else { "\n" };
-        return Err(format!("{rendered}{sep}{} failed to compile", path.display()));
-    }
+    let policy = match &comp.policy {
+        Some(p) => p,
+        None => {
+            let rendered = comp.render();
+            let sep = if rendered.is_empty() { "" } else { "\n" };
+            return Err(format!(
+                "{rendered}{sep}{} failed to compile",
+                path.display()
+            ));
+        }
+    };
+    let policy_name = policy.name.clone();
+    let revision = policy.revision;
 
-    let raw = comp
+    let artifact = comp
         .artifact(Platform::Linux)
-        .and_then(|a| a.file(NFT_ARTIFACT))
+        .ok_or_else(|| "the compiler produced no Linux artifact".to_string())?;
+    let raw = artifact
+        .file(NFT_ARTIFACT)
         .map(|f| f.contents.clone())
         .ok_or_else(|| "the compiler produced no nftables artifact".to_string())?;
+    let policy_json = artifact
+        .file("linux/ufw_policy.json")
+        .map(|f| f.contents.clone())
+        .unwrap_or_else(|| "{}".to_string());
 
     // `policy drop;` on a hooked chain is nftables' way of spelling
     // default-deny; its presence is what makes a policy able to lock you out.
     let restrictive = raw.contains("policy drop");
-    Ok((add_counters(&raw), restrictive))
+    Ok(CompiledRuleset {
+        nft: add_counters(&raw),
+        restrictive,
+        policy_name,
+        revision,
+        policy_json,
+        descriptions: rule_descriptions(path),
+    })
+}
+
+/// Pull each rule's YAML `description:` back out of the source. Compiled
+/// rules do not carry descriptions — the kernel has no use for prose — but
+/// the dashboard does: it is the author's own words for *why* the rule
+/// exists. Best-effort: a rule from an `include:` file simply has none.
+fn rule_descriptions(path: &Path) -> Vec<(String, String)> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let (tokens, _) = ufw_policy_lang::lexer::tokenize(&text);
+    let (doc, _) = ufw_policy_lang::parser::parse(&tokens);
+    doc.rules
+        .iter()
+        .filter_map(|r| {
+            let id = r.id.as_ref()?.value.clone();
+            let desc = r.description.as_ref()?.value.clone();
+            Some((id, desc))
+        })
+        .collect()
 }
 
 /// Add a `counter` to every rule so `status` shows real per-rule packet and
@@ -272,6 +432,17 @@ fn counter_line(line: &str) -> String {
             return format!("{base}counter {verdict}{comment}");
         }
     }
+    // An alert rule has no verdict: its last statement is the log itself
+    // (`… log prefix "ufw#alert#name "`). Count it too, so `status` and the
+    // dashboard show how often the alert fired.
+    if head.ends_with('"')
+        && head.contains(" log prefix \"")
+        && !head.contains("counter log prefix \"")
+    {
+        if let Some(i) = head.rfind("log prefix \"") {
+            return format!("{}counter {}{comment}", &head[..i], &head[i..]);
+        }
+    }
     line.to_string()
 }
 
@@ -307,9 +478,7 @@ fn nft_pipe(ruleset: &str, check_only: bool) -> Result<(), String> {
     if out.status.success() {
         Ok(())
     } else {
-        Err(with_root_hint(
-            String::from_utf8_lossy(&out.stderr).trim(),
-        ))
+        Err(with_root_hint(String::from_utf8_lossy(&out.stderr).trim()))
     }
 }
 
@@ -321,7 +490,9 @@ fn nft_run(args: &[&str]) -> Result<std::process::Output, String> {
 /// process and the terminal. Returns whether it was launched.
 fn spawn_detached(script: &str) -> bool {
     let quiet = |c: &mut Command| {
-        c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        c.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
     };
     // `setsid` fully detaches; if it is missing, a plain spawn still survives
     // this process exiting, which is enough for the common case.
@@ -391,6 +562,29 @@ table inet ufw {
         let twice = counter_line(&once);
         assert_eq!(once, twice);
         assert!(once.contains("counter drop"));
+    }
+
+    #[test]
+    fn alert_rules_get_counters_on_their_log_statement() {
+        let line =
+            "        tcp dport { 5432 } log prefix \"ufw#alert#watch-db \" comment \"watch-db\"";
+        let once = counter_line(line);
+        assert!(
+            once.contains("counter log prefix \"ufw#alert#watch-db \""),
+            "{once}"
+        );
+        assert_eq!(counter_line(&once), once, "must be idempotent");
+    }
+
+    #[test]
+    fn logged_drops_keep_their_log_statement_and_gain_a_counter() {
+        let line = "        tcp dport { 23 } log prefix \"ufw#deny#no-telnet \" drop comment \"no-telnet\"";
+        let once = counter_line(line);
+        assert!(
+            once.contains("log prefix \"ufw#deny#no-telnet \" counter drop"),
+            "{once}"
+        );
+        assert_eq!(counter_line(&once), once, "must be idempotent");
     }
 
     #[test]

@@ -84,6 +84,37 @@ make generate POLICY=policies/base/default_deny.yaml
 ls build/generated/*/
 ```
 
+## Run it for real (Linux, one command)
+
+On any Debian-family host (Parrot, Kali, Ubuntu, Debian) with Rust and
+nftables installed, the packet-layer policy can enforce **today**, no kernel
+module required:
+
+```sh
+sudo ./install.sh       # build + install; activates nothing
+firewall                # the live dashboard, at http://127.0.0.1:8787
+```
+
+From then on, `firewall` in a terminal is the whole project:
+
+```sh
+firewall apply default_allow      # enforce: deny the indefensible, log the rest
+firewall trial default_deny 60    # try default-deny with a 60s auto-revert
+firewall status                   # the loaded rules, live packet counters
+firewall revert                   # back out completely
+```
+
+`firewall` (no arguments) serves a live console showing every enforced rule
+with its hit counters, every denied or alerted packet — source, port,
+service, the rule that stopped it and the policy author's reason why — plus
+attack-pattern analysis (port scans, RDP/VNC break-in attempts, SMB
+lateral-movement probes, blocked egress) and this host's listening services
+and active connections. It is read-only and binds loopback.
+
+This is real enforcement of the L3/L4 policy via `ufw-nft` (one nftables
+table, `inet ufw`, nothing else touched). Identity and DPI rules still need
+the kernel module below.
+
 ## Installing
 
 ```sh
