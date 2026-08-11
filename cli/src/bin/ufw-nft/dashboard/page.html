@@ -273,6 +273,21 @@
   .seg button.on { background: var(--accent-weak); color: var(--accent); font-weight: 650; }
   .search { min-width: 190px; }
 
+  /* ---- network manager -------------------------------------------------- */
+  .netkpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
+  @media (max-width: 900px) { .netkpis { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 420px) { .netkpis { grid-template-columns: 1fr; } }
+  .netnote { font-size: 12.5px; color: var(--text-dim); line-height: 1.65; }
+  .svc-tags { display: flex; flex-wrap: wrap; gap: 5px; max-width: 46ch; }
+  .svc-tags .st { font-size: 11px; font-weight: 600; border-radius: 6px; padding: 1px 7px; background: var(--surface-3); color: var(--text-dim); border: 1px solid var(--border); white-space: nowrap; }
+  .svc-tags .st.risk { background: var(--warn-weak); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 28%, transparent); }
+  .rolechip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 650; border-radius: 999px; padding: 2px 9px; background: var(--accent-weak); color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent); white-space: nowrap; }
+  .dot-live { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--text-mute); vertical-align: 0; }
+  .dot-live.up { background: var(--ok); }
+  button.busy { opacity: .65; pointer-events: none; }
+  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -1px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
   .backdrop { display: none; position: fixed; inset: 0; z-index: 25; background: rgba(0,0,0,.4); }
   body.drawer .backdrop, body.detail .backdrop, body.help .backdrop { display: block; }
 
@@ -351,6 +366,8 @@
     <a href="#threats" data-nav="threats"><span class="ic">&#9888;</span>Threats<span class="badge" id="nav-threats">0</span></a>
     <a href="#talkers" data-nav="talkers"><span class="ic">&#9650;</span>Top talkers</a>
     <a href="#events" data-nav="events"><span class="ic">&#9776;</span>Events<span class="badge" id="nav-events">0</span></a>
+    <div class="grp">Network</div>
+    <a href="#network" data-nav="network"><span class="ic">&#127760;</span>Network manager<span class="badge" id="nav-network">0</span></a>
     <div class="grp">Enforcement</div>
     <a href="#rules" data-nav="rules"><span class="ic">&#9636;</span>Rules<span class="badge" id="nav-rules">0</span></a>
     <a href="#host" data-nav="host"><span class="ic">&#9635;</span>Host surface<span class="badge" id="nav-host">0</span></a>
@@ -448,6 +465,33 @@
       </div>
     </section>
 
+    <section id="network">
+      <div class="sec-h"><h2>Network manager</h2><span class="hint" id="netHint">devices sharing this host's local network</span></div>
+      <div class="ribbon" id="netEthic" style="margin-bottom:14px">
+        <span class="rp" style="background:var(--info)"></span>
+        <div class="rb">
+          <div class="rt" style="color:var(--info)">What this shows &mdash; and what it can't</div>
+          <div class="rd">Every device on this host's local network, and the service ports each one leaves open &mdash; how you find the forgotten device, the unexpected open service, the thing that shouldn't be here. It reports only what a device <em>answers</em> on the network; it does <b>not</b> show what a person is doing inside their device (their screen, apps, or browsing) &mdash; that would require intercepting their traffic or software on their machine, which this does not do. Only this host's own directly-connected subnet is ever scanned.</div>
+        </div>
+      </div>
+      <div class="netkpis" id="netKpis"></div>
+      <div class="card">
+        <div class="ch">
+          <h3>Discovered devices</h3><span class="count" id="netCount"></span>
+          <div class="tools">
+            <input id="netSearch" class="search" type="search" placeholder="filter ip · vendor · host · service" aria-label="Filter devices">
+            <button id="netRescan" title="Re-read the neighbour table (instant)">Rescan</button>
+            <button id="netScan" class="scanbtn" title="Actively probe the local subnet for devices and exposed services">&#128269; Deep scan</button>
+          </div>
+        </div>
+        <div class="pad0"><div class="scroll-y tbl-wrap"><table id="devices">
+          <thead><tr><th>Address</th><th>Device</th><th>Role</th><th class="wrap">Exposed services</th><th>Link</th><th>Status</th></tr></thead>
+          <tbody><tr><td colspan="6" class="empty">Reading the neighbour table…</td></tr></tbody>
+        </table></div></div>
+      </div>
+      <div id="netNotes" class="netnote" style="margin-top:10px;display:none"></div>
+    </section>
+
     <section id="diag">
       <div class="sec-h"><h2>Diagnostics</h2><span class="hint">where the data comes from, and any collection problems</span></div>
       <div class="card"><div class="body"><div class="diag" id="diagGrid"></div>
@@ -472,7 +516,7 @@
       <dt><kbd>r</kbd></dt><dd>refresh now</dd>
       <dt><kbd>t</kbd></dt><dd>cycle theme</dd>
       <dt><kbd>e</kbd></dt><dd>export filtered events as JSON</dd>
-      <dt><kbd>1</kbd>…<kbd>6</kbd></dt><dd>jump to a section</dd>
+      <dt><kbd>1</kbd>…<kbd>7</kbd></dt><dd>jump to a section</dd>
       <dt><kbd>Esc</kbd></dt><dd>close drawer / overlay</dd>
       <dt><kbd>?</kbd></dt><dd>toggle this help</dd>
     </dl>
@@ -832,6 +876,97 @@ function renderHost(s){
     <td class="mono">${esc(c.remote)}:${c.rport}</td><td>${esc(c.service)}</td><td class="mono">${esc(c.process||"?")}</td></tr>`).join("")||`<tr><td colspan="5" class="empty">No established connections.</td></tr>`;
 }
 
+/* ---- network manager -------------------------------------------------- */
+let netState=null, netBusy=false, netSearch="", netDevices=[], netFiltered=[];
+const NET_SCAN_LABEL='&#128269; Deep scan', NET_RESCAN_LABEL='Rescan';
+function setNetStatus(html){ const el=$("netNotes"); el.innerHTML=html||""; el.style.display=html?"block":"none"; }
+async function loadNetwork(active){
+  if(netBusy) return; netBusy=true;
+  const scanBtn=$("netScan"), reBtn=$("netRescan");
+  scanBtn.classList.add("busy"); reBtn.classList.add("busy");
+  (active?scanBtn:reBtn).innerHTML=`<span class="spin"></span> ${active?"Scanning…":"Refreshing…"}`;
+  if(active) setNetStatus("Sweeping this host's local subnet — probing for devices and the services they expose. This can take a few seconds…");
+  try {
+    const ctl=new AbortController(); const to=setTimeout(()=>ctl.abort(),40000);
+    const r=await fetch("/api/network"+(active?"?scan=1":""),{cache:"no-store",signal:ctl.signal}); clearTimeout(to);
+    netState=await r.json(); renderNetwork();
+  } catch(err){ setNetStatus("Network query failed — "+esc(err&&err.message||String(err))+". The dashboard itself is still running."); }
+  finally { netBusy=false; scanBtn.classList.remove("busy"); reBtn.classList.remove("busy");
+    scanBtn.innerHTML=NET_SCAN_LABEL; reBtn.innerHTML=NET_RESCAN_LABEL; }
+}
+function renderNetwork(){
+  const v=netState; if(!v) return;
+  const devs=v.devices||[], tot=v.totals||{}, sub=(v.subnets||[])[0];
+  $("nav-network").textContent=devs.length;
+  const exposing=tot.with_services||0, reachable=tot.reachable||0;
+  $("netKpis").innerHTML=[
+    ["Devices",fmtN(devs.length),sub?`on ${esc(sub.network)}/${sub.prefix}`:"no LAN detected",""],
+    ["Reachable",fmtN(reachable),"answering on the network",reachable>0?"ok":""],
+    ["Exposing services",fmtN(exposing),"with open service ports",exposing>0?"warn":""],
+    ["This host",sub&&sub.host_ip?esc(sub.host_ip):(v.host||"—"),sub&&sub.gateway?`gateway ${esc(sub.gateway)}`:"",""],
+  ].map(([lab,big,s2,cls])=>`<div class="kpi ${cls}"><div class="lab">${lab}</div><div class="big" style="font-size:clamp(15px,1.8vw,20px)">${big}</div><div class="sub">${s2}</div></div>`).join("");
+  $("netHint").textContent = v.scanned
+    ? `active scan · ${devs.length} device(s) · swept in ${(v.scan_ms/1000).toFixed(1)}s`
+    : `passive view from the neighbour table · ${devs.length} device(s) · run a deep scan to probe services`;
+  netDevices=devs; drawDevices();
+  const notes=(v.notes||[]).concat((v.errors||[]).map(e=>"⚠ "+e));
+  setNetStatus(notes.length?notes.map(n=>"• "+esc(n)).join("<br>"):"");
+}
+function currentDevices(){ const q=netSearch;
+  return netDevices.filter(d=>!q||[d.ip,d.mac,d.vendor,d.hostname,d.role,d.iface,(d.services||[]).map(s=>s.name+" "+s.port).join(" ")].some(x=>x&&String(x).toLowerCase().includes(q))); }
+function drawDevices(){
+  const devs=currentDevices(); netFiltered=devs;
+  $("netCount").textContent=devs.length?`${devs.length} shown`:"";
+  const rows=devs.map((d,idx)=>{
+    const name=d.hostname||d.vendor||(d.is_self?"this host":d.is_gateway?"gateway":"unknown device");
+    const badges=[]; if(d.is_gateway) badges.push('<span class="chip plain">gateway</span>'); if(d.is_self) badges.push('<span class="chip accept">this host</span>');
+    const sub=(d.vendor&&d.hostname)?`<div class="muted" style="font-size:11px">${esc(d.vendor)}</div>`:"";
+    const svcs=d.services||[];
+    const svcHtml=svcs.length
+      ? `<div class="svc-tags">${svcs.slice(0,8).map(s=>`<span class="st ${s.risk?"risk":""}" title="${esc(s.risk||s.name)}">${esc(s.name)}·${s.port}</span>`).join("")}${svcs.length>8?`<span class="st">+${svcs.length-8}</span>`:""}</div>`
+      : (d.reachable?'<span class="muted">none open</span>':'<span class="muted">not scanned</span>');
+    const link=esc(d.iface)+(d.mac?`<div class="muted mono" style="font-size:11px">${esc(d.mac)}${d.mac_kind==="local"?" · rnd":""}</div>`:"");
+    const status=d.reachable?'<span class="dot-live up"></span> up':'<span class="dot-live"></span> <span class="muted">idle</span>';
+    return `<tr class="clickable" data-idx="${idx}">
+      <td class="mono">${esc(d.ip)}</td>
+      <td>${esc(name)} ${badges.join(" ")}${sub}</td>
+      <td><span class="rolechip">${esc(d.role)}</span></td>
+      <td class="wrap">${svcHtml}</td>
+      <td class="wrap">${link}</td>
+      <td>${status}</td></tr>`;
+  }).join("");
+  const tb=qs("#devices tbody");
+  tb.innerHTML=rows||`<tr><td colspan="6" class="empty">${netDevices.length?"Nothing matches this filter.":"No devices discovered yet — run a deep scan to probe the local subnet."}</td></tr>`;
+  tb.querySelectorAll("tr[data-idx]").forEach(tr=>tr.addEventListener("click",()=>openDevice(netFiltered[+tr.dataset.idx])));
+}
+function openDevice(d){
+  if(!d) return;
+  $("detailTitle").innerHTML=`<span class="rolechip">${esc(d.role)}</span> ${esc(d.hostname||d.vendor||d.ip)}`;
+  const kv=(k,val)=>val?`<div class="k">${k}</div><div class="v">${esc(val)}</div>`:"";
+  const svcs=d.services||[];
+  const svcBlock=svcs.length?`<div style="margin-top:16px"><div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-mute);font-weight:700;margin-bottom:6px">Exposed services (${svcs.length})</div>
+    <table style="font-size:12.5px"><tbody>${svcs.map(s=>`<tr><td class="mono" style="width:52px">${s.port}</td><td>${esc(s.name)}</td><td class="risk" style="margin:0;max-width:26ch">${esc(s.risk||"")}</td></tr>`).join("")}</tbody></table></div>`:"";
+  const macNote=d.mac?d.mac+(d.mac_kind==="local"?" (randomised / virtual)":d.mac_kind==="global"?" (registered vendor address)":""):null;
+  $("detailBody").innerHTML=`
+    <div class="netnote" style="margin-bottom:12px">${esc(d.summary)}</div>
+    <div class="kv">
+      ${kv("Address",d.ip)}${kv("Hostname",d.hostname)}${kv("Vendor",d.vendor)}${kv("MAC",macNote)}
+      ${kv("Interface",d.iface)}${kv("Role",d.role)}
+      ${kv("Reachable",d.reachable?"yes — answered on the network":"not confirmed")}
+      ${kv("Discovered via",d.source==="self"?"this host":d.source==="neighbour"?"kernel neighbour table (ARP)":"active scan")}
+      ${d.is_gateway?kv("Note","Default gateway — the router for this LAN."):""}
+    </div>
+    ${svcBlock}
+    <div class="drawer-actions">
+      <button data-copy="${esc(d.ip)}">Copy IP</button>${d.mac?`<button data-copy="${esc(d.mac)}">Copy MAC</button>`:""}
+    </div>
+    <div class="netnote" style="margin-top:10px;color:var(--text-mute)">This is only what ${esc(d.ip)} chooses to answer on the network. It is not, and cannot be, a view of what happens inside that device.</div>`;
+  document.body.classList.add("detail"); $("detail").classList.add("open");
+}
+$("netScan").onclick=()=>loadNetwork(true);
+$("netRescan").onclick=()=>loadNetwork(false);
+$("netSearch").addEventListener("input",e=>{ netSearch=e.target.value.trim().toLowerCase(); drawDevices(); });
+
 /* ---- diagnostics (always populated) ---------------------------------- */
 function renderDiag(s){
   if(!changed("diag",[s.enforced,s.errors,(s.events||[]).length,(s.listeners||[]).length,s.generated_at])) return;
@@ -880,7 +1015,7 @@ if(window.IntersectionObserver){ const byId={}; navLinks.forEach(a=>byId[a.getAt
   document.querySelectorAll("main > section").forEach(sec=>io.observe(sec)); }
 
 /* ---- keyboard shortcuts ---------------------------------------------- */
-const SECN=["overview","threats","talkers","events","rules","host"];
+const SECN=["overview","threats","talkers","events","network","rules","host"];
 addEventListener("keydown",(e)=>{
   if(e.metaKey||e.ctrlKey||e.altKey) return;
   const tag=(e.target.tagName||"").toLowerCase(), typing=tag==="input"||tag==="select"||tag==="textarea";
@@ -891,12 +1026,13 @@ addEventListener("keydown",(e)=>{
   else if(e.key==="t"){ $("theme").click(); }
   else if(e.key==="e"){ $("exportJson").click(); }
   else if(e.key==="?"){ toggleHelp(); }
-  else if(/[1-6]/.test(e.key)){ const id=SECN[+e.key-1]; const el=$(id); if(el){ el.scrollIntoView({behavior:"smooth"}); } }
+  else if(/[1-7]/.test(e.key)){ const id=SECN[+e.key-1]; const el=$(id); if(el){ el.scrollIntoView({behavior:"smooth"}); } }
 });
 
 /* ---- go --------------------------------------------------------------- */
 refresh();
 arm();
+loadNetwork(false);
 </script>
 </body>
 </html>

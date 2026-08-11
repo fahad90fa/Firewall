@@ -11,6 +11,7 @@
 
 mod attacks;
 mod events;
+mod network;
 mod ports;
 mod ruleset;
 mod services;
@@ -85,17 +86,25 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
         }
     }
     let request = String::from_utf8_lossy(&head);
-    let path = request
+    let target = request
         .lines()
         .next()
         .and_then(|l| l.split_whitespace().nth(1))
         .unwrap_or("/");
-    let path = path.split('?').next().unwrap_or("/");
+    let (route, query) = target.split_once('?').unwrap_or((target, ""));
 
-    match path {
+    match route {
         "/" | "/index.html" => respond(&mut stream, 200, "text/html; charset=utf-8", PAGE),
         "/api/state" => {
             let body = state_json();
+            respond(&mut stream, 200, "application/json", &body)
+        }
+        "/api/network" => {
+            // Discovery is passive by default; a scan is opt-in via ?scan=1.
+            let active = query
+                .split('&')
+                .any(|kv| kv == "scan=1" || kv == "scan=true");
+            let body = network_json(active);
             respond(&mut stream, 200, "application/json", &body)
         }
         _ => respond(&mut stream, 404, "text/plain", "not found\n"),
@@ -325,6 +334,82 @@ fn state_json() -> String {
     w.end_object();
 
     w.str_array_field("errors", errors.iter().map(|s| s.as_str()));
+    w.end_object();
+    w.finish()
+}
+
+/// Assemble the network manager view: the LAN(s) this host is directly
+/// connected to and the devices sharing them. `active` runs the bounded
+/// sweep; otherwise the passive neighbour-table view is returned instantly.
+fn network_json(active: bool) -> String {
+    let view = network::snapshot(active);
+
+    let mut w = JsonWriter::with_capacity(32 * 1024);
+    w.begin_object();
+    w.u64_field("generated_at", state::now_unix());
+    w.str_field("host", &hostname());
+    w.bool_field("scanned", view.scanned);
+    w.u64_field("scan_ms", view.scan_ms);
+
+    w.begin_array_field("subnets");
+    for s in &view.subnets {
+        w.begin_object();
+        w.str_field("iface", &s.iface);
+        w.str_field("network", &s.network.to_string());
+        w.u64_field("prefix", s.prefix as u64);
+        let host_ip = s.host_ip.map(|a| a.to_string());
+        w.opt_str_field("host_ip", host_ip.as_deref());
+        let gateway = s.gateway.map(|a| a.to_string());
+        w.opt_str_field("gateway", gateway.as_deref());
+        w.u64_field("host_count", s.host_count());
+        w.end_object();
+    }
+    w.end_array();
+
+    let mut reachable = 0u64;
+    let mut with_services = 0u64;
+    w.begin_array_field("devices");
+    for d in &view.devices {
+        if d.reachable {
+            reachable += 1;
+        }
+        if !d.services.is_empty() {
+            with_services += 1;
+        }
+        w.begin_object();
+        w.str_field("ip", &d.ip.to_string());
+        w.opt_str_field("mac", d.mac.as_deref());
+        w.str_field("mac_kind", d.mac_kind);
+        w.opt_str_field("vendor", d.vendor.as_deref());
+        w.opt_str_field("hostname", d.hostname.as_deref());
+        w.str_field("iface", &d.iface);
+        w.bool_field("is_gateway", d.is_gateway);
+        w.bool_field("is_self", d.is_self);
+        w.bool_field("reachable", d.reachable);
+        w.str_field("source", d.source);
+        w.str_field("role", d.role);
+        w.str_field("summary", &d.summary);
+        w.begin_array_field("services");
+        for svc in &d.services {
+            w.begin_object();
+            w.u64_field("port", svc.port as u64);
+            w.str_field("name", &svc.name);
+            w.opt_str_field("risk", svc.risk);
+            w.end_object();
+        }
+        w.end_array();
+        w.end_object();
+    }
+    w.end_array();
+
+    w.begin_object_field("totals");
+    w.u64_field("devices", view.devices.len() as u64);
+    w.u64_field("reachable", reachable);
+    w.u64_field("with_services", with_services);
+    w.end_object();
+
+    w.str_array_field("errors", view.errors.iter().map(|s| s.as_str()));
+    w.str_array_field("notes", view.notes.iter().map(|s| s.as_str()));
     w.end_object();
     w.finish()
 }
