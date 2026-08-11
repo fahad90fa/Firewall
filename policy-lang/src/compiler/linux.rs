@@ -355,10 +355,10 @@ fn emit_module_header(policy: &CompiledPolicy, ordered: &[CompiledRule]) -> Stri
 
     s.push_str("static const struct ufw_rule ufw_rules[] = {\n");
     for r in ordered {
-        let _ = write!(
+        let _ = writeln!(
             s,
             "    {{ .id = {}, .name = \"{}\", .stage = {}, .priority = {}, .action = {}, \
-             .direction = {}, .protocol = {}, .flags = {} }},\n",
+             .direction = {}, .protocol = {}, .flags = {} }},",
             r.id,
             escape_c(&r.name),
             stage_macro(r.layer),

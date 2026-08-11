@@ -187,7 +187,7 @@ fn address_cells(policy: &CompiledPolicy) -> Vec<IpAddr> {
                 if last <= u32::MAX as u64 {
                     out.insert(IpAddr::V4(Ipv4Addr::from(last as u32)));
                 }
-                if last + 1 <= u32::MAX as u64 {
+                if last < u32::MAX as u64 {
                     out.insert(IpAddr::V4(Ipv4Addr::from((last + 1) as u32)));
                 }
                 if base > 0 {

@@ -157,8 +157,8 @@ impl Sha256 {
         }
 
         let add = [a, b, c, d, e, f, g, h];
-        for i in 0..8 {
-            self.state[i] = self.state[i].wrapping_add(add[i]);
+        for (s, a) in self.state.iter_mut().zip(add) {
+            *s = s.wrapping_add(a);
         }
     }
 }

@@ -72,7 +72,9 @@ impl Manifest {
     /// not verified simply because it happens to exist.
     pub fn verify_artifact(&self, name: &str, content: &[u8]) -> bool {
         match self.find(name) {
-            Some(a) => a.size == content.len() as u64 && constant_time_eq(&a.sha256, &sha256(content)),
+            Some(a) => {
+                a.size == content.len() as u64 && constant_time_eq(&a.sha256, &sha256(content))
+            }
             None => false,
         }
     }
@@ -126,14 +128,18 @@ impl Manifest {
                 .get("sha256")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| format!("artifact `{name}` is missing `sha256`"))?;
-            let bytes =
-                hash::unhex(hex).ok_or_else(|| format!("artifact `{name}` has a malformed sha256"))?;
+            let bytes = hash::unhex(hex)
+                .ok_or_else(|| format!("artifact `{name}` has a malformed sha256"))?;
             if bytes.len() != 32 {
                 return Err(format!("artifact `{name}` sha256 is not 32 bytes"));
             }
             let mut sha = [0u8; 32];
             sha.copy_from_slice(&bytes);
-            artifacts.push(Artifact { name, size, sha256: sha });
+            artifacts.push(Artifact {
+                name,
+                size,
+                sha256: sha,
+            });
         }
         artifacts.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(Manifest { version, artifacts })
@@ -247,7 +253,10 @@ mod tests {
         for (src, needle) in [
             ("{}", "version"),
             (r#"{"version":"1"}"#, "artifacts"),
-            (r#"{"version":"1","artifacts":[{"size":1,"sha256":"00"}]}"#, "name"),
+            (
+                r#"{"version":"1","artifacts":[{"size":1,"sha256":"00"}]}"#,
+                "name",
+            ),
             (
                 r#"{"version":"1","artifacts":[{"name":"x","sha256":"00"}]}"#,
                 "size",
@@ -262,7 +271,10 @@ mod tests {
             ),
         ] {
             let e = Manifest::parse(src).unwrap_err();
-            assert!(e.contains(needle), "for {src:?} expected {needle:?}, got {e:?}");
+            assert!(
+                e.contains(needle),
+                "for {src:?} expected {needle:?}, got {e:?}"
+            );
         }
     }
 }

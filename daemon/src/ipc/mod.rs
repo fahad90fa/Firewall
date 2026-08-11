@@ -92,9 +92,8 @@ pub trait Transport: Send + std::fmt::Debug {
 /// more bytes.
 pub fn read_frame<R: Read>(r: &mut R) -> io::Result<Option<Vec<u8>>> {
     let mut header = [0u8; constants::HEADER_LEN];
-    match read_exact_or_eof(r, &mut header)? {
-        false => return Ok(None),
-        true => {}
+    if !read_exact_or_eof(r, &mut header)? {
+        return Ok(None);
     }
     let parsed = MessageHeader::parse(&header)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;

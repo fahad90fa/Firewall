@@ -378,7 +378,9 @@ impl Protocol {
 /// Application-layer protocol, as identified by the DPI engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
+#[derive(Default)]
 pub enum L7Protocol {
+    #[default]
     Unknown = 0,
     Http = 1,
     Tls = 2,
@@ -1294,12 +1296,6 @@ pub struct DpiScan {
     /// meaning a negative result is "not found in the inspected prefix" rather
     /// than "not present".
     pub truncated: bool,
-}
-
-impl Default for L7Protocol {
-    fn default() -> Self {
-        L7Protocol::Unknown
-    }
 }
 
 impl DpiScan {

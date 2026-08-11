@@ -1155,9 +1155,8 @@ impl Analyzer {
         }
         let mut mask = TrustMask::EMPTY;
         for e in entries {
-            match self.parse_trust_entry(e) {
-                Some(m) => mask = TrustMask(mask.0 | m.0),
-                None => {}
+            if let Some(m) = self.parse_trust_entry(e) {
+                mask = TrustMask(mask.0 | m.0)
             }
         }
         if mask.is_empty() {

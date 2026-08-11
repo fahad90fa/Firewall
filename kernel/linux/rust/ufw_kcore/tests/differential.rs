@@ -30,17 +30,16 @@ fn repo_root() -> PathBuf {
 }
 
 fn c_compiler() -> Option<&'static str> {
-    for cc in ["cc", "gcc", "clang"] {
-        if Command::new(cc)
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-        {
-            return Some(cc);
-        }
-    }
-    None
+    ["cc", "gcc", "clang"]
+        .into_iter()
+        .find(|&cc| {
+            Command::new(cc)
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        })
+        .map(|v| v as _)
 }
 
 struct Rng(u64);

@@ -31,7 +31,7 @@
 //! channel are cleaned up by the operating system, and the next start clears
 //! any stale socket file itself.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Arc;
@@ -156,7 +156,7 @@ fn run() -> Result<(), String> {
     // --- configuration ---------------------------------------------------
     let mut config = if args.config.exists() {
         Config::load(&args.config).map_err(|e| format!("{}: {e}", args.config.display()))?
-    } else if args.config == PathBuf::from(constants::DEFAULT_CONFIG_PATH_UNIX) {
+    } else if args.config == Path::new(constants::DEFAULT_CONFIG_PATH_UNIX) {
         // Running with no configuration file is legitimate: the defaults are a
         // working default-deny deployment.
         Config::default()
@@ -529,9 +529,7 @@ fn run() -> Result<(), String> {
                         // returns instantly, which is what spun the old loop.
                         events = None;
                         if daemon.kernel().connected {
-                            daemon.set_kernel_disconnected(Some(
-                                "kernel channel closed".into(),
-                            ));
+                            daemon.set_kernel_disconnected(Some("kernel channel closed".into()));
                         }
                     }
                 }

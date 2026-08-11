@@ -55,10 +55,7 @@ fn main() -> std::process::ExitCode {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             if let Err(e) = std::fs::create_dir_all(parent) {
-                eprintln!(
-                    "ufw-kmod-sim: cannot create {}: {e}",
-                    parent.display()
-                );
+                eprintln!("ufw-kmod-sim: cannot create {}: {e}", parent.display());
                 return std::process::ExitCode::FAILURE;
             }
         }

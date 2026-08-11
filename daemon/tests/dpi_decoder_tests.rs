@@ -258,6 +258,7 @@ fn harness_source(names: &Names) -> String {
         r#"
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include "dpi_decoders.h"
 
 static unsigned char corpus[1 << 20];
@@ -274,6 +275,12 @@ int main(int argc, char **argv)
         FILE *f;
         size_t len;
         unsigned count, i, pos, field;
+        /* entropy_centibits()/UfwEntropyCentibits() take their 256-entry
+         * histogram as scratch rather than declaring a 1 KiB array on the
+         * kernel stack; the hosted harness hands in a stack one. uint32_t is
+         * the underlying type of both headers' __u32/UINT32, so it passes
+         * without a conversion warning under -Werror on either tree. */
+        uint32_t counts[256];
 
         if (argc != 2)
                 return 64;
@@ -321,7 +328,7 @@ int main(int argc, char **argv)
                 }}
                 /* Entropy and protocol identification run over the same bytes
                  * and have their own arithmetic to get wrong. */
-                printf(" H=%u L=%u\n", (unsigned){entropy}(payload, plen),
+                printf(" H=%u L=%u\n", (unsigned){entropy}(payload, plen, counts),
                        (unsigned){identify}(payload, plen, 443));
         }}
         return 0;

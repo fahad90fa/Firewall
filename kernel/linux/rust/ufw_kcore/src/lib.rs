@@ -198,8 +198,8 @@ pub fn decode_http(d: &mut Decoded, data: &[u8]) {
     // The request URI: from the first space to the next whitespace, within the
     // first 64 bytes of the request line.
     let mut uri_start = 0usize;
-    for i in 0..len.min(64) {
-        if data[i] == b' ' {
+    for (i, &b) in data.iter().take(len.min(64)).enumerate() {
+        if b == b' ' {
             uri_start = i + 1;
             break;
         }
@@ -245,8 +245,7 @@ pub fn decode_http(d: &mut Decoded, data: &[u8]) {
 
     // Printable ratio of the body, for the exfil heuristics.
     let mut printable = 0u32;
-    for i in body_start..len {
-        let c = data[i];
+    for &c in &data[body_start..len] {
         if (0x20..0x7F).contains(&c) || c == b'\n' || c == b'\r' || c == b'\t' {
             printable += 1;
         }
@@ -447,8 +446,8 @@ pub fn decode_ssh(d: &mut Decoded, data: &[u8]) {
         );
     }
     let mut banner_len = 0u32;
-    for i in 0..len.min(255) {
-        if data[i] == b'\r' || data[i] == b'\n' {
+    for &b in data.iter().take(len.min(255)) {
+        if b == b'\r' || b == b'\n' {
             break;
         }
         banner_len += 1;

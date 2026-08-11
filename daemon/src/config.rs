@@ -114,7 +114,7 @@ impl Toml {
                 return err(line_no, "expected `key = value`");
             };
             let key = key.trim();
-            if !is_bare_key(key) && !(key.starts_with('"') && key.ends_with('"')) {
+            if !(is_bare_key(key) || key.starts_with('"') && key.ends_with('"')) {
                 return err(line_no, format!("invalid key `{key}`"));
             }
             let key = key.trim_matches('"');
@@ -1349,7 +1349,11 @@ cli_socket = "/run/ufw.sock"
     #[test]
     fn a_typo_in_the_watchdog_section_is_rejected() {
         let e = Config::parse("[watchdog]\nmax_fault = 3\n").unwrap_err();
-        assert!(e.message.contains("unknown configuration key"), "{}", e.message);
+        assert!(
+            e.message.contains("unknown configuration key"),
+            "{}",
+            e.message
+        );
         assert!(e.message.contains("watchdog.max_faults"), "{}", e.message);
     }
 }

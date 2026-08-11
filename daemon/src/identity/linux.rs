@@ -245,7 +245,7 @@ mod tests {
                 now_us()
             ));
             fs::create_dir_all(&root).unwrap();
-            fs::write(&root.join("stat"), "cpu 1 2 3\nbtime 1700000000\n").unwrap();
+            fs::write(root.join("stat"), "cpu 1 2 3\nbtime 1700000000\n").unwrap();
             FakeProc { root }
         }
 
