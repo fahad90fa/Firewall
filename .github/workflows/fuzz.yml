@@ -1,17 +1,30 @@
-# The coverage-guided campaign. Nightly rather than per-push, because it is
-# measured in hours and a pull request should not wait for it.
+# Coverage-guided fuzzing of the protocol decoders, which parse attacker-chosen
+# bytes in ring 0 and are the highest-risk code in the tree.
 #
-# The tripwire in `daemon/tests/dpi_decoder_tests.rs` runs on every push and
-# catches regressions; this is what finds the input nobody would guess.
+# Two tiers, on purpose:
+#   * smoke    — every push and pull request. Builds both decoder fuzzers and
+#                runs a short campaign. It is a tripwire for a harness that no
+#                longer compiles (a decoder signature drifting out from under
+#                fuzz/decoders.c) and for any crash shallow enough to surface in
+#                a minute. A PR should not merge a fuzzer that cannot build.
+#   * campaign — nightly. Measured in half-hours, with a corpus that persists
+#                between runs, it reaches the input a blind mutator never would.
+#
+# The deterministic tripwire in daemon/tests/dpi_decoder_tests.rs still runs on
+# every `cargo test`; this is the sanitized, coverage-guided other half.
 name: fuzz
 
 on:
+  push:
+  pull_request:
   schedule:
     - cron: '0 3 * * *'
   workflow_dispatch:
 
 jobs:
-  decoders:
+  # Fast, per-PR: prove both harnesses build under the sanitizers and survive a
+  # short run. Catches harness bit-rot and shallow crashes on the PR itself.
+  smoke:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -19,11 +32,54 @@ jobs:
         target: [linux, windows]
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y clang
+      - name: Install clang + sanitizer runtimes
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+          # The fuzzer/asan static archives live in a version-pinned package;
+          # link fails without them. Match whatever clang the runner ships.
+          major="$(clang --version | grep -oP 'clang version \K[0-9]+' | head -1)"
+          sudo apt-get install -y "libclang-rt-${major}-dev" \
+            || sudo apt-get install -y libclang-rt-dev || true
+      - name: Build
+        run: |
+          cd fuzz && mkdir -p corpus
+          if [ "${{ matrix.target }}" = "windows" ]; then
+            EXTRA="-DUFW_ABI_CHECK -DUFW_FUZZ_WINDOWS -I ../kernel/windows/inc"
+          else
+            EXTRA="-I ../kernel/linux/inc"
+          fi
+          clang -g -O1 -fsanitize=fuzzer,address,undefined \
+                -fno-sanitize-recover=all $EXTRA -o fuzzer decoders.c
+      - name: Smoke campaign
+        run: cd fuzz && ./fuzzer corpus/ -max_len=65536 -max_total_time=60 -print_final_stats=1
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crash-smoke-${{ matrix.target }}
+          path: fuzz/crash-*
+          if-no-files-found: ignore
 
-      # A corpus that survives between runs is the whole value of a campaign.
-      # Starting cold every night means rediscovering the same shallow paths
-      # and never reaching the deep ones.
+  # Nightly, long-running: a corpus that survives between runs is the whole
+  # value of a campaign. Starting cold every night rediscovers the same shallow
+  # paths and never reaches the deep ones.
+  campaign:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux, windows]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang + sanitizer runtimes
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+          major="$(clang --version | grep -oP 'clang version \K[0-9]+' | head -1)"
+          sudo apt-get install -y "libclang-rt-${major}-dev" \
+            || sudo apt-get install -y libclang-rt-dev || true
+
       - uses: actions/cache@v4
         with:
           path: fuzz/corpus
@@ -50,3 +106,4 @@ jobs:
         with:
           name: crash-${{ matrix.target }}
           path: fuzz/crash-*
+          if-no-files-found: ignore

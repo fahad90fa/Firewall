@@ -185,8 +185,17 @@ static __u32 place(struct ufw_stream_ctx *ctx, __u32 offset,
 		/* Retransmission or overlap. If it lies entirely within what
 		 * has already been accepted it is a plain retransmission and
 		 * carries no new information. If it extends past, the
-		 * overlapping prefix is a rewrite attempt. */
-		if (offset + len <= ctx->len)
+		 * overlapping prefix is a rewrite attempt.
+		 *
+		 * Written as `len <= ctx->len - offset` rather than
+		 * `offset + len <= ctx->len`: offset < ctx->len holds in this
+		 * branch, so (ctx->len - offset) cannot underflow, and the
+		 * comparison never forms offset+len. The sum would wrap a u32
+		 * for any caller that handed in an unclamped sequence offset,
+		 * silently turning injected bytes into a "retransmission" that
+		 * is dropped — an evasion. This keeps place() sound on its own,
+		 * not only under the caller's current clamping. */
+		if (len <= ctx->len - offset)
 			return 0;
 
 		ctx->truncated = 1;
@@ -246,6 +255,13 @@ int ufw_stream_observe(const struct sk_buff *skb,
 		hlen = th->doff * 4u;
 		if (hlen < sizeof(*th))
 			return 0;
+		/* Validate before subtracting: a short or malformed frame can
+		 * leave transport_offset + hlen past skb->len, which would
+		 * underflow payload_len to a near-4 GiB value. The bound check
+		 * below would still reject it, but not underflowing in the
+		 * first place keeps the arithmetic locally correct. */
+		if (skb->len < skb_transport_offset(skb) + hlen)
+			return 0;
 		payload = (const __u8 *)th + hlen;
 		payload_len = skb->len - skb_transport_offset(skb) - hlen;
 		offset = ntohl(th->seq);
@@ -254,8 +270,14 @@ int ufw_stream_observe(const struct sk_buff *skb,
 
 		if (!uh)
 			return 0;
+		/* uh->len is attacker-chosen. A value below the 8-byte UDP
+		 * header would underflow payload_len; reject it before the
+		 * subtraction rather than leaning on the later bound check to
+		 * catch the wrapped result. */
+		if ((unsigned int)ntohs(uh->len) < sizeof(*uh))
+			return 0;
 		payload = (const __u8 *)uh + sizeof(*uh);
-		payload_len = ntohs(uh->len) - sizeof(*uh);
+		payload_len = (unsigned int)ntohs(uh->len) - (unsigned int)sizeof(*uh);
 		/* A datagram is self-contained: there is no sequence space,
 		 * so each one is scanned on its own. Accumulating datagrams
 		 * into a stream would fabricate boundaries that the receiving

@@ -5,16 +5,20 @@ attacker-chosen bytes in ring 0. They are the highest-risk code here, and both
 headers are deliberately free of every kernel API so that a hosted compiler can
 reach them.
 
-## Two harnesses, on purpose
+## Three tiers, on purpose
 
 | | Runs | Finds |
 | --- | --- | --- |
 | `daemon/tests/dpi_decoder_tests.rs` | every `cargo test` | the regression somebody pushed on Tuesday |
-| `fuzz/decoders.c` | a campaign, for hours | the bug needing a nine-byte prefix nobody would guess |
+| `fuzz.yml` **smoke** | every push and pull request | a harness that no longer compiles, or a crash shallow enough to surface in a minute |
+| `fuzz.yml` **campaign** | nightly, for half an hour a target | the bug needing a nine-byte prefix nobody would guess |
 
-The in-tree one is deterministic and takes under a second. The campaign one is
-coverage-guided and needs clang with `-fsanitize=fuzzer`, which is why it is
-not in CI's critical path.
+The in-tree one is deterministic and takes under a second. The smoke tier
+builds both decoder fuzzers under the sanitizers and runs a short campaign, so a
+decoder signature drifting out from under `fuzz/decoders.c` fails the PR that
+caused it rather than a nightly run nobody is watching. The campaign is
+coverage-guided with a corpus that persists between runs, which is why it stays
+off the per-PR path.
 
 ## Running the campaign
 
@@ -63,7 +67,12 @@ regression waiting to be reintroduced.
 ## What is not fuzzed yet
 
 - The stream reassembler. It holds per-flow state across calls, so it needs a
-  stateful harness that replays segment sequences rather than one buffer.
+  stateful harness that replays segment sequences rather than one buffer. Its
+  length and offset arithmetic has been reviewed and hardened to be
+  overflow-safe on its own rather than only under the caller's clamping
+  (`place()` compares `len <= ctx->len - offset` instead of forming
+  `offset + len`; the TCP/UDP payload lengths are validated before the
+  subtraction that would otherwise underflow), but that is review, not fuzzing.
 - The netlink and IOCTL message decoders. Lower risk — the peer is the daemon,
   which is not an arbitrary process — but not zero.
 - The YAML policy and signature parsers. They run in userland at load time, so

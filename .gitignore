@@ -34,4 +34,7 @@ DerivedData/
 kernel/linux/ebpf/*.o
 fuzz/corpus/
 fuzz/fuzz-*
+fuzz/fuzzer
+fuzz/fuzzer-*
 fuzz/crash-*
+fuzz/*-corpus/
