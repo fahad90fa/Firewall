@@ -459,7 +459,13 @@ struct UFWCIDR {
             guard address.bytes.count > fullBytes, other.bytes.count > fullBytes else {
                 return false
             }
-            let mask = UInt8(0xFF << (8 - restBits))
+            // The partial byte's mask: its top `restBits` bits. Written as
+            // ~(UInt8.max >> restBits) rather than UInt8(0xFF << (8 - restBits)):
+            // the latter shifts an Int whose value never fits a byte (0xFF << 7
+            // is 0x7F80), so the UInt8 conversion traps for every sub-byte
+            // prefix — /9, /12, /28 and the like. That crash sat unseen because
+            // the harness that exercises this arithmetic never actually ran.
+            let mask = ~(UInt8.max >> restBits)
             if (address.bytes[fullBytes] & mask) != (other.bytes[fullBytes] & mask) {
                 return false
             }
