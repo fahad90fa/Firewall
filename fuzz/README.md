@@ -1,19 +1,30 @@
 # Fuzzing
 
-Two things here read attacker-chosen bytes in ring 0, which makes them the
-highest-risk code in the tree:
+Three things here read bytes the kernel did not build itself, in ring 0, which
+makes them the highest-risk code in the tree:
 
-- the protocol decoders in `kernel/{linux,windows}/inc/dpi_decoders.h`, and
+- the protocol decoders in `kernel/{linux,windows}/inc/dpi_decoders.h`,
 - the stream reassembler's placement arithmetic in
-  `kernel/linux/inc/stream_place.h`.
+  `kernel/linux/inc/stream_place.h`, and
+- the Aho-Corasick table decoder and scan in
+  `kernel/linux/inc/dpi_automaton.h`.
 
-Both are deliberately free of every kernel API so that a hosted compiler can
-reach them. Each has its own harness, because the risk has two shapes: a decoder
-sees **one buffer**, while the reassembler holds per-flow state and indexes a
-fixed buffer with an attacker-influenced offset, so its bug is one that needs a
-particular *sequence* of segments — an overlap that rewinds the write cursor, a
-gap, a sequence number that wraps the u32, a segment straddling the 32 KiB
-budget. `reassembly.c` replays such sequences; `decoders.c` cannot express them.
+All three are deliberately free of every kernel API so that a hosted compiler
+can reach them, and each has its own harness because the risk has three shapes:
+
+- **`decoders.c`** — a decoder sees **one buffer** of payload.
+- **`reassembly.c`** — the reassembler holds per-flow state and indexes a fixed
+  buffer with an attacker-influenced offset, so its bug is one that needs a
+  particular *sequence* of segments — an overlap that rewinds the write cursor,
+  a gap, a sequence number that wraps the u32, a segment straddling the 32 KiB
+  budget. `decoders.c` cannot express those.
+- **`automaton.c`** — the daemon ships a compiled multi-pattern table over
+  netlink; the kernel decodes it and walks it over the reassembled stream. The
+  decoder is a length-prefixed binary parser with per-state transition and
+  output slices — an off-by-one there is an out-of-bounds index — and the peer
+  is trusted to be the daemon but not to be correct. The harness allocates the
+  table arrays at exactly the reported size, so a stray index is an ASan abort,
+  and drives the scan and per-condition decision on top.
 
 ## Three tiers, on purpose
 
@@ -34,7 +45,7 @@ off the per-PR path.
 
 ```sh
 cd fuzz
-mkdir -p corpus corpus-reassembly
+mkdir -p corpus corpus-reassembly corpus-automaton
 
 # Decoders — one corpus serves both, since they are meant to be equivalent, so
 # coverage found against one is coverage worth trying against the other.
@@ -53,6 +64,14 @@ clang -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all \
 clang -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all \
       -I ../kernel/linux/inc -o fuzz-reassembly reassembly.c
 ./fuzz-reassembly corpus-reassembly/ -max_len=65536 -jobs=$(nproc)
+
+# Automaton — seeded from valid tables, because random bytes almost never form
+# one that decodes. Start the corpus from the committed seeds (see
+# seeds/automaton/README.md for the format), then let the fuzzer grow it.
+cp -n seeds/automaton/table-* corpus-automaton/ 2>/dev/null || true
+clang -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all \
+      -I ../kernel/linux/inc -o fuzz-automaton automaton.c
+./fuzz-automaton corpus-automaton/ -max_len=65536 -jobs=$(nproc)
 ```
 
 ## Seeding

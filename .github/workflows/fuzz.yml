@@ -49,6 +49,11 @@ jobs:
             source: reassembly.c
             corpus: corpus-reassembly
             extra: -I ../kernel/linux/inc
+          - name: automaton
+            source: automaton.c
+            corpus: corpus-automaton
+            seeds: seeds/automaton
+            extra: -I ../kernel/linux/inc
     steps:
       - uses: actions/checkout@v4
       - name: Install clang + sanitizer runtimes
@@ -63,6 +68,12 @@ jobs:
       - name: Build
         run: |
           cd fuzz && mkdir -p "${{ matrix.corpus }}"
+          # A target with committed seeds (the automaton table format is too
+          # structured for random bytes to reach) starts its corpus from them.
+          if [ -n "${{ matrix.seeds }}" ]; then
+            find "${{ matrix.seeds }}" -type f ! -name '*.md' \
+              -exec cp -n {} "${{ matrix.corpus }}/" \;
+          fi
           clang -g -O1 -fsanitize=fuzzer,address,undefined \
                 -fno-sanitize-recover=all ${{ matrix.extra }} \
                 -o fuzzer "${{ matrix.source }}"
@@ -97,6 +108,11 @@ jobs:
             source: reassembly.c
             corpus: corpus-reassembly
             extra: -I ../kernel/linux/inc
+          - name: automaton
+            source: automaton.c
+            corpus: corpus-automaton
+            seeds: seeds/automaton
+            extra: -I ../kernel/linux/inc
     steps:
       - uses: actions/checkout@v4
       - name: Install clang + sanitizer runtimes
@@ -116,6 +132,10 @@ jobs:
       - name: Build
         run: |
           cd fuzz && mkdir -p "${{ matrix.corpus }}"
+          if [ -n "${{ matrix.seeds }}" ]; then
+            find "${{ matrix.seeds }}" -type f ! -name '*.md' \
+              -exec cp -n {} "${{ matrix.corpus }}/" \;
+          fi
           clang -g -O1 -fsanitize=fuzzer,address,undefined \
                 -fno-sanitize-recover=all ${{ matrix.extra }} \
                 -o fuzzer "${{ matrix.source }}"
