@@ -1,12 +1,19 @@
-# Coverage-guided fuzzing of the protocol decoders, which parse attacker-chosen
-# bytes in ring 0 and are the highest-risk code in the tree.
+# Coverage-guided fuzzing of the ring-0 parsing surface — the code that reads
+# attacker-chosen bytes in kernel context and is the highest-risk in the tree.
+#
+# Two harnesses, because there are two shapes of that risk:
+#   * decoders.c    — each protocol decoder sees one buffer.
+#   * reassembly.c  — the stream reassembler holds per-flow state across calls
+#                     and indexes a fixed buffer with an attacker-influenced
+#                     offset, so its bug is one that needs a *sequence* of
+#                     segments (an overlap, a gap, a wrapped sequence number).
 #
 # Two tiers, on purpose:
-#   * smoke    — every push and pull request. Builds both decoder fuzzers and
-#                runs a short campaign. It is a tripwire for a harness that no
-#                longer compiles (a decoder signature drifting out from under
-#                fuzz/decoders.c) and for any crash shallow enough to surface in
-#                a minute. A PR should not merge a fuzzer that cannot build.
+#   * smoke    — every push and pull request. Builds every harness under the
+#                sanitizers and runs a short campaign. It is a tripwire for a
+#                harness that no longer compiles (a signature drifting out from
+#                under the harness) and for any crash shallow enough to surface
+#                in a minute. A PR should not merge a fuzzer that cannot build.
 #   * campaign — nightly. Measured in half-hours, with a corpus that persists
 #                between runs, it reaches the input a blind mutator never would.
 #
@@ -22,14 +29,26 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Fast, per-PR: prove both harnesses build under the sanitizers and survive a
+  # Fast, per-PR: prove every harness builds under the sanitizers and survives a
   # short run. Catches harness bit-rot and shallow crashes on the PR itself.
   smoke:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        target: [linux, windows]
+        include:
+          - name: linux-decoders
+            source: decoders.c
+            corpus: corpus
+            extra: -I ../kernel/linux/inc
+          - name: windows-decoders
+            source: decoders.c
+            corpus: corpus
+            extra: -DUFW_ABI_CHECK -DUFW_FUZZ_WINDOWS -I ../kernel/windows/inc
+          - name: reassembly
+            source: reassembly.c
+            corpus: corpus-reassembly
+            extra: -I ../kernel/linux/inc
     steps:
       - uses: actions/checkout@v4
       - name: Install clang + sanitizer runtimes
@@ -43,20 +62,16 @@ jobs:
             || sudo apt-get install -y libclang-rt-dev || true
       - name: Build
         run: |
-          cd fuzz && mkdir -p corpus
-          if [ "${{ matrix.target }}" = "windows" ]; then
-            EXTRA="-DUFW_ABI_CHECK -DUFW_FUZZ_WINDOWS -I ../kernel/windows/inc"
-          else
-            EXTRA="-I ../kernel/linux/inc"
-          fi
+          cd fuzz && mkdir -p "${{ matrix.corpus }}"
           clang -g -O1 -fsanitize=fuzzer,address,undefined \
-                -fno-sanitize-recover=all $EXTRA -o fuzzer decoders.c
+                -fno-sanitize-recover=all ${{ matrix.extra }} \
+                -o fuzzer "${{ matrix.source }}"
       - name: Smoke campaign
-        run: cd fuzz && ./fuzzer corpus/ -max_len=65536 -max_total_time=60 -print_final_stats=1
+        run: cd fuzz && ./fuzzer "${{ matrix.corpus }}/" -max_len=65536 -max_total_time=60 -print_final_stats=1
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: crash-smoke-${{ matrix.target }}
+          name: crash-smoke-${{ matrix.name }}
           path: fuzz/crash-*
           if-no-files-found: ignore
 
@@ -69,7 +84,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [linux, windows]
+        include:
+          - name: linux-decoders
+            source: decoders.c
+            corpus: corpus
+            extra: -I ../kernel/linux/inc
+          - name: windows-decoders
+            source: decoders.c
+            corpus: corpus
+            extra: -DUFW_ABI_CHECK -DUFW_FUZZ_WINDOWS -I ../kernel/windows/inc
+          - name: reassembly
+            source: reassembly.c
+            corpus: corpus-reassembly
+            extra: -I ../kernel/linux/inc
     steps:
       - uses: actions/checkout@v4
       - name: Install clang + sanitizer runtimes
@@ -82,28 +109,24 @@ jobs:
 
       - uses: actions/cache@v4
         with:
-          path: fuzz/corpus
-          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
-          restore-keys: fuzz-corpus-${{ matrix.target }}-
+          path: fuzz/${{ matrix.corpus }}
+          key: fuzz-corpus-${{ matrix.name }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.name }}-
 
       - name: Build
         run: |
-          cd fuzz && mkdir -p corpus
-          if [ "${{ matrix.target }}" = "windows" ]; then
-            EXTRA="-DUFW_ABI_CHECK -DUFW_FUZZ_WINDOWS -I ../kernel/windows/inc"
-          else
-            EXTRA="-I ../kernel/linux/inc"
-          fi
+          cd fuzz && mkdir -p "${{ matrix.corpus }}"
           clang -g -O1 -fsanitize=fuzzer,address,undefined \
-                -fno-sanitize-recover=all $EXTRA -o fuzzer decoders.c
+                -fno-sanitize-recover=all ${{ matrix.extra }} \
+                -o fuzzer "${{ matrix.source }}"
 
       - name: Campaign
-        run: cd fuzz && ./fuzzer corpus/ -max_len=65536 -max_total_time=1800 -print_final_stats=1
+        run: cd fuzz && ./fuzzer "${{ matrix.corpus }}/" -max_len=65536 -max_total_time=1800 -print_final_stats=1
 
       # A crash that is not kept is a crash that gets rediscovered next month.
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: crash-${{ matrix.target }}
+          name: crash-${{ matrix.name }}
           path: fuzz/crash-*
           if-no-files-found: ignore

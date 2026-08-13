@@ -33,6 +33,7 @@ DerivedData/
 *.swp
 kernel/linux/ebpf/*.o
 fuzz/corpus/
+fuzz/corpus-reassembly/
 fuzz/fuzz-*
 fuzz/fuzzer
 fuzz/fuzzer-*

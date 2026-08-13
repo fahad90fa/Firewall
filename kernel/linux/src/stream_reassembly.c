@@ -32,6 +32,9 @@
 
 #include "../inc/module.h"
 #include "../inc/stream.h"
+/* The placement arithmetic — the only part that indexes a buffer with an
+ * attacker-influenced offset — lives here so a hosted fuzzer can reach it. */
+#include "../inc/stream_place.h"
 /* ufw_dpi_identify() is a header-only inline; include its definition. */
 #include "../inc/dpi_decoders.h"
 
@@ -174,63 +177,27 @@ static void reclaim(unsigned int bucket, __u64 now)
  * Returns the number of *new* bytes accepted. Overlaps with already-present
  * data are discarded and mark the context truncated; see the file header.
  *
+ * The arithmetic itself is `ufw_stream_place()` in stream_place.h, shared
+ * verbatim with the fuzzer so what CI fuzzes is what ships. This wrapper adds
+ * the two things placement has no business knowing about: the context struct it
+ * writes through, and the per-CPU statistics counter. `trunc_events` carries
+ * back how many times placement would have bumped `reassembly_truncated`, so
+ * the counter reads exactly as it did before the extraction.
+ *
  * Caller holds the lock.
  */
 static __u32 place(struct ufw_stream_ctx *ctx, __u32 offset,
 		   const __u8 *data, __u32 len)
 {
-	__u32 space;
+	__u32 trunc_events = 0;
+	__u32 accepted;
 
-	if (offset < ctx->len) {
-		/* Retransmission or overlap. If it lies entirely within what
-		 * has already been accepted it is a plain retransmission and
-		 * carries no new information. If it extends past, the
-		 * overlapping prefix is a rewrite attempt.
-		 *
-		 * Written as `len <= ctx->len - offset` rather than
-		 * `offset + len <= ctx->len`: offset < ctx->len holds in this
-		 * branch, so (ctx->len - offset) cannot underflow, and the
-		 * comparison never forms offset+len. The sum would wrap a u32
-		 * for any caller that handed in an unclamped sequence offset,
-		 * silently turning injected bytes into a "retransmission" that
-		 * is dropped — an evasion. This keeps place() sound on its own,
-		 * not only under the caller's current clamping. */
-		if (len <= ctx->len - offset)
-			return 0;
-
-		ctx->truncated = 1;
-		UFW_COUNT(reassembly_truncated);
-		len -= (ctx->len - offset);
-		data += (ctx->len - offset);
-		offset = ctx->len;
-	}
-
-	if (offset > ctx->len) {
-		/*
-		 * A gap. The bytes before it have not arrived, so appending
-		 * here would produce a byte sequence that never appeared on
-		 * the wire — the exact false-positive-and-false-negative
-		 * problem that per-packet matching has. Hold the context at
-		 * its current length and mark it truncated; if the missing
-		 * segment arrives later it will be placed normally.
-		 */
-		ctx->truncated = 1;
-		UFW_COUNT(reassembly_truncated);
-		return 0;
-	}
-
-	space = UFW_STREAM_MAX_BYTES - ctx->len;
-	if (len > space) {
-		len = space;
-		ctx->truncated = 1;
-		UFW_COUNT(reassembly_truncated);
-	}
-	if (!len)
-		return 0;
-
-	memcpy(ctx->data + ctx->len, data, len);
-	ctx->len += len;
-	return len;
+	accepted = ufw_stream_place(ctx->data, &ctx->len, &ctx->truncated,
+				    UFW_STREAM_MAX_BYTES, offset, data, len,
+				    &trunc_events);
+	if (trunc_events)
+		UFW_ADD(reassembly_truncated, trunc_events);
+	return accepted;
 }
 
 int ufw_stream_observe(const struct sk_buff *skb,
@@ -330,19 +297,15 @@ int ufw_stream_observe(const struct sk_buff *skb,
 	ctx->last_seen = now;
 
 	if (facts->protocol == IPPROTO_TCP) {
-		if (!ctx->seq_valid) {
-			ctx->base_seq = offset;
-			ctx->seq_valid = 1;
-		}
-		/* Unsigned wraparound is correct here: TCP sequence numbers
-		 * wrap, and the difference is what matters. */
-		offset = offset - ctx->base_seq;
-		if (offset > UFW_STREAM_MAX_BYTES) {
-			/* Past the budget entirely. Nothing to place. */
-			ctx->truncated = 1;
-			offset = ctx->len;
-			payload_len = 0;
-		}
+		/* Normalize the raw sequence number to a buffer offset (and zero
+		 * payload_len for a segment past the budget). Shared with the
+		 * fuzzer via stream_place.h; unsigned wraparound is intentional,
+		 * because TCP sequence numbers wrap and the distance is what
+		 * indexes the buffer. */
+		offset = ufw_stream_seq_offset(offset, &ctx->base_seq,
+					       &ctx->seq_valid, &ctx->truncated,
+					       ctx->len, UFW_STREAM_MAX_BYTES,
+					       &payload_len);
 	} else {
 		/* Each datagram is scanned alone. */
 		ctx->len = 0;
