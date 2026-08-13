@@ -51,7 +51,11 @@ final class UFWFilterDataProvider: NEFilterDataProvider {
     private var engine: UFWRuleEngine = .fromGeneratedPolicy()
     private let identity = UFWIdentityResolver()
     private let streams = UFWStreamHandler()
+    #if os(iOS)
+    // Packet-level (connectionless) filtering is an iOS-only surface; see the
+    // Packets MARK below and the macOS note in PacketHandler.swift.
     private let packets = UFWPacketHandler()
+    #endif
     private var bridge: UFWIPCBridge?
     private var control: UFWControlSocket?
     private let installed = UFWInstalledSnapshot()
@@ -285,7 +289,26 @@ final class UFWFilterDataProvider: NEFilterDataProvider {
     }
 
     // MARK: Packets
+    //
+    // Packet-level filtering and remediation are iOS-only NetworkExtension
+    // surfaces: handleNewPacket / NEFilterPacket / NEFilterPacketVerdict and
+    // handleRemediation / NEFilterRemediationVerdict are all marked
+    // @available(macOS, unavailable). A NEFilterDataProvider on macOS is never
+    // handed these callbacks, so the code is scoped to iOS rather than compiled
+    // against symbols the macOS SDK does not define — which is what had left the
+    // macos-extension type-check red.
+    //
+    // Enforcing connectionless traffic (principally ICMP) on macOS needs a
+    // separate NEFilterPacketProvider: a distinct system-extension provider with
+    // its own principal class, configuration and entitlement. That is not yet
+    // built — it is recorded as macOS's remaining integration work in
+    // docs/design/production_readiness.md. On macOS today this provider decides
+    // flows (handleNewFlow) and inspects their streams (handleInboundData /
+    // handleOutboundData); connectionless packets are left to the system, the
+    // same permissive default the flow path already takes for traffic it cannot
+    // attribute.
 
+    #if os(iOS)
     override func handleNewPacket(_ packet: NEFilterPacket) -> NEFilterPacketVerdict {
         packets.handle(packet, engine: engine, queue: queue, bridge: bridge)
     }
@@ -297,6 +320,7 @@ final class UFWFilterDataProvider: NEFilterDataProvider {
         // centrally managed host firewall is for.
         .drop()
     }
+    #endif
 }
 
 /// Enforcement mode, set by the daemon over XPC.

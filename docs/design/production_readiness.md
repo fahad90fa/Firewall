@@ -169,11 +169,29 @@ just a type-check. Fixing that also surfaced a latent CI bug: the
 its type-check could not resolve `UFWGeneratedPolicy`; the job now runs
 `make generate` first, like its Linux and eBPF siblings.
 
-**What is still open:** the framework-linked files (`NEFilterDataProvider`,
-`IPCBridge`, the identity resolver) still only type-check — they need a real
-Network Extension host to run — and macOS still owes its share of the soak hours
-from gap 1. "Cross-platform" is only as strong as its weakest platform, and while
-macOS's *logic* now runs under test, its *integration* does not.
+The framework-linked files had in fact stopped type-checking at all: the packet
+path (`PacketHandler.swift`, and the `handleNewPacket` / `handleRemediation`
+overrides) was written against `NEFilterPacket`, `NEFilterPacketVerdict` and
+`NEFilterRemediationVerdict`, every one of which is `@available(macOS,
+unavailable)` — iOS-only NetworkExtension surfaces. On macOS a
+`NEFilterDataProvider` never receives those callbacks, so the code is now scoped
+to iOS with `#if os(iOS)`, and the `macos-extension` type-check compiles the
+provider it actually is: flow decisions (`handleNewFlow`) and stream inspection
+(`handleInboundData` / `handleOutboundData`).
+
+**What is still open:** two things, now stated separately because they are
+different sizes. First, **connectionless (packet-layer, principally ICMP)
+enforcement on macOS is not implemented** — it needs a distinct
+`NEFilterPacketProvider` system-extension provider, with its own principal
+class, configuration and entitlement, which is real integration work rather than
+a symbol fix. Until it exists, macOS decides flows and inspects their streams
+but leaves connectionless packets to the system, a genuine capability gap from
+the Linux and Windows packet layers. Second, the framework-linked files
+(`NEFilterDataProvider`, `IPCBridge`, the identity resolver) type-check but still
+need a real Network Extension host to *run*, and macOS still owes its share of
+the soak hours from gap 1. "Cross-platform" is only as strong as its weakest
+platform, and while macOS's *logic* now runs under test, its *integration* does
+not.
 
 ## Why 3, and not 1, and not 6
 

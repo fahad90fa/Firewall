@@ -30,6 +30,13 @@ import Foundation
 import NetworkExtension
 import os.log
 
+// iOS only. NEFilterPacket and NEFilterPacketVerdict — and the
+// NEFilterDataProvider.handleNewPacket callback that drives this handler — are
+// unavailable on macOS, where packet-level filtering is a separate
+// NEFilterPacketProvider (see the Packets note in NEFilterDataProvider.swift).
+// Scoping the type to iOS keeps the packet path intact for that platform
+// without referencing symbols the macOS SDK does not define.
+#if os(iOS)
 final class UFWPacketHandler {
     private let log = Logger(subsystem: "com.unifiedfirewall.extension", category: "packet")
 
@@ -116,3 +123,4 @@ final class UFWPacketHandler {
         return facts
     }
 }
+#endif
