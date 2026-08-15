@@ -1094,7 +1094,10 @@ rules:
             "rules:\n  - id: a\n    action: allow\n    rate_limit:\n      rate: 50\n      \
              per: second\n      burst: 100\n",
         );
-        let rl = doc.rules[0].rate_limit.as_ref().expect("a rate_limit block");
+        let rl = doc.rules[0]
+            .rate_limit
+            .as_ref()
+            .expect("a rate_limit block");
         assert_eq!(rl.rate.as_ref().unwrap().value, "50");
         assert_eq!(rl.per.as_ref().unwrap().value, "second");
         assert_eq!(rl.burst.as_ref().unwrap().value, "100");

@@ -1271,7 +1271,10 @@ mod tests {
             burst: 0,
         });
         let nft = nft_artifact(&build(vec![r]));
-        assert!(nft.contains("ct state new limit rate 200/second accept"), "{nft}");
+        assert!(
+            nft.contains("ct state new limit rate 200/second accept"),
+            "{nft}"
+        );
         assert!(!nft.contains("burst"), "{nft}");
     }
 

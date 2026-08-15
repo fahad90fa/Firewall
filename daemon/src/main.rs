@@ -1151,7 +1151,11 @@ impl Supervisor {
         );
         self.state.with_fleet(|f| {
             f.set_target(bundle.revision, bundle.canary_percent);
-            f.record(&self.state.host_id, self.state.active_revision(), ufw_shared::now_us());
+            f.record(
+                &self.state.host_id,
+                self.state.active_revision(),
+                ufw_shared::now_us(),
+            );
         });
 
         // A host outside the canary group holds off until the rollout widens;
@@ -1168,7 +1172,12 @@ impl Supervisor {
         }
 
         let origin = format!("fleet bundle revision {}", bundle.revision);
-        self.install_compiled(policy, &origin, &origin, compiled.diagnostics.warning_count())
+        self.install_compiled(
+            policy,
+            &origin,
+            &origin,
+            compiled.diagnostics.warning_count(),
+        )
     }
 }
 
@@ -1230,9 +1239,7 @@ impl ControlPlane for Supervisor {
                 channel
                     .install_signatures(&payload, self.timeout())
                     .map_err(|e| {
-                        ApiError::internal(format!(
-                            "signature reload rejected by the module: {e}"
-                        ))
+                        ApiError::internal(format!("signature reload rejected by the module: {e}"))
                     })?;
             }
         }

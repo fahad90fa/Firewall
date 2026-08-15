@@ -37,8 +37,15 @@ pub fn run(args: &[String], options: &GlobalOptions, transport: &mut dyn Transpo
     }
 }
 
-fn distribute(args: &[String], options: &GlobalOptions, transport: &mut dyn Transport) -> CliResult {
-    let positionals = super::positionals(args, &["--revision", "--to", "--canary-percent", "--canary-seconds"]);
+fn distribute(
+    args: &[String],
+    options: &GlobalOptions,
+    transport: &mut dyn Transport,
+) -> CliResult {
+    let positionals = super::positionals(
+        args,
+        &["--revision", "--to", "--canary-percent", "--canary-seconds"],
+    );
     let policy = positionals
         .first()
         .ok_or_else(|| CliError::Usage("fleet distribute needs a <POLICY> file".into()))?;
@@ -106,14 +113,15 @@ fn distribute(args: &[String], options: &GlobalOptions, transport: &mut dyn Tran
 fn status(options: &GlobalOptions, transport: &mut dyn Transport) -> CliResult {
     let raw = client::call(transport, RequestBuilder::new("fleet-status").finish())?;
     Ok(emit(options.format, &raw, |v| {
-        let enabled = v
-            .get("enabled")
-            .and_then(|b| b.as_bool())
-            .unwrap_or(false);
+        let enabled = v.get("enabled").and_then(|b| b.as_bool()).unwrap_or(false);
         let mut out = String::new();
         out.push_str(&format!(
             "fleet control: {}\n",
-            if enabled { "enabled" } else { "disabled (set api.fleet_secret)" }
+            if enabled {
+                "enabled"
+            } else {
+                "disabled (set api.fleet_secret)"
+            }
         ));
         out.push_str(&format!(
             "target revision {} · canary {}% · {} member(s), {} converged\n\n",
@@ -128,7 +136,10 @@ fn status(options: &GlobalOptions, transport: &mut dyn Transport) -> CliResult {
                 t.push([
                     text(m, "host_id"),
                     number(m, "revision").to_string(),
-                    if m.get("in_canary").and_then(|b| b.as_bool()).unwrap_or(false) {
+                    if m.get("in_canary")
+                        .and_then(|b| b.as_bool())
+                        .unwrap_or(false)
+                    {
                         "yes".into()
                     } else {
                         "no".into()

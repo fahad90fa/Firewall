@@ -118,8 +118,7 @@ impl BundlePoster for HttpPoster {
 
 impl HttpPoster {
     fn try_post(&self, member: &str, body: &str) -> Result<(u16, String), String> {
-        let mut stream =
-            TcpStream::connect(member).map_err(|e| format!("connect failed: {e}"))?;
+        let mut stream = TcpStream::connect(member).map_err(|e| format!("connect failed: {e}"))?;
         let _ = stream.set_read_timeout(Some(self.timeout));
         let _ = stream.set_write_timeout(Some(self.timeout));
         let auth = self

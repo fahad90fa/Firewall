@@ -243,7 +243,11 @@ impl Request {
                 let members: Vec<String> = value
                     .get("members")
                     .and_then(|m| m.as_array())
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 if members.is_empty() {
                     return Err(ApiError::bad_request("`members` must be a non-empty list"));
@@ -502,12 +506,10 @@ impl Router {
             ApiError::bad_request("fleet is not configured; set `api.fleet_secret`")
         })?;
         let installed = self.state.active_revision();
-        verifier
-            .accept(&bundle, installed)
-            .map_err(|e| match e {
-                crate::fleet::BundleError::NotAuthentic => ApiError::forbidden(e.to_string()),
-                _ => ApiError::conflict(e.to_string()),
-            })?;
+        verifier.accept(&bundle, installed).map_err(|e| match e {
+            crate::fleet::BundleError::NotAuthentic => ApiError::forbidden(e.to_string()),
+            _ => ApiError::conflict(e.to_string()),
+        })?;
 
         // The host compiles the bundle itself, so it validates it itself.
         let compiled = ufw_policy_lang::compile_str(
@@ -979,7 +981,10 @@ mod tests {
             .router
             .dispatch(Request::ReloadSignatures, Authority::ReadOnly)
             .unwrap_err();
-        assert_eq!(err.status, 403, "a signature reload changes the kernel state");
+        assert_eq!(
+            err.status, 403,
+            "a signature reload changes the kernel state"
+        );
         h.router
             .dispatch(Request::ReloadSignatures, Authority::Admin)
             .unwrap();
@@ -1098,7 +1103,10 @@ mod tests {
         };
         // Read-only cannot push a policy to the host.
         assert_eq!(
-            h.router.dispatch(bundle.clone(), Authority::ReadOnly).unwrap_err().status,
+            h.router
+                .dispatch(bundle.clone(), Authority::ReadOnly)
+                .unwrap_err()
+                .status,
             403
         );
         // Admin routes to the control plane, which installs it.
@@ -1117,7 +1125,10 @@ mod tests {
             canary_seconds: 300,
         };
         assert_eq!(
-            h.router.dispatch(req.clone(), Authority::ReadOnly).unwrap_err().status,
+            h.router
+                .dispatch(req.clone(), Authority::ReadOnly)
+                .unwrap_err()
+                .status,
             403
         );
         h.router.dispatch(req, Authority::Admin).unwrap();

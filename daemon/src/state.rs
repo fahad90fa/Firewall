@@ -434,7 +434,10 @@ impl DaemonState {
         w.str_field("host", &self.host_id);
         let fleet = self.fleet.lock().unwrap();
         w.u64_field("target_revision", fleet.target_revision());
-        w.u64_field("target_canary_percent", fleet.target_canary_percent() as u64);
+        w.u64_field(
+            "target_canary_percent",
+            fleet.target_canary_percent() as u64,
+        );
         w.u64_field("members", fleet.len() as u64);
         w.u64_field("converged", fleet.converged() as u64);
         w.begin_array_field("roster");

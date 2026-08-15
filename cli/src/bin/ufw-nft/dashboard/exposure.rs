@@ -82,7 +82,13 @@ fn source_scope(matchers: &str) -> Option<String> {
     let tail = tail.strip_prefix("!=").unwrap_or(tail).trim_start();
     if let Some(rest) = tail.strip_prefix('{') {
         let inner = rest.find('}').map(|j| &rest[..j]).unwrap_or(rest);
-        Some(inner.split(',').map(str::trim).collect::<Vec<_>>().join(", "))
+        Some(
+            inner
+                .split(',')
+                .map(str::trim)
+                .collect::<Vec<_>>()
+                .join(", "),
+        )
     } else {
         Some(tail.split_whitespace().next().unwrap_or("").to_string())
     }
@@ -169,10 +175,9 @@ pub fn analyze(rs: &Ruleset) -> Exposure {
                             service: service.clone(),
                             scope: scope_label.clone(),
                             title: format!("{service} open to the world"),
-                            detail:
-                                "A public-facing service; open to the internet is expected. \
+                            detail: "A public-facing service; open to the internet is expected. \
                                  Ensure a WAF/edge sits in front for the application layer."
-                                    .into(),
+                                .into(),
                             rule: r.name.clone(),
                             packets: r.packets,
                         });
@@ -185,10 +190,9 @@ pub fn analyze(rs: &Ruleset) -> Exposure {
                             service: service.clone(),
                             scope: scope_label.clone(),
                             title: format!("{service} open to the world"),
-                            detail:
-                                "A non-standard port open to any source. Confirm it is a \
+                            detail: "A non-standard port open to any source. Confirm it is a \
                                  service you mean to expose, and scope it if not."
-                                    .into(),
+                                .into(),
                             rule: r.name.clone(),
                             packets: r.packets,
                         });
@@ -278,8 +282,14 @@ mod tests {
         let e = analyze(&rs_from(WEB));
         assert_eq!(e.grade, "hardened", "score was {}", e.score);
         // 80 and 443 world-open (public, low), 22 scoped to management (good).
-        assert!(e.findings.iter().any(|f| f.port == Some(22) && f.severity == "good"));
-        assert!(e.findings.iter().any(|f| f.port == Some(443) && f.severity == "low"));
+        assert!(e
+            .findings
+            .iter()
+            .any(|f| f.port == Some(22) && f.severity == "good"));
+        assert!(e
+            .findings
+            .iter()
+            .any(|f| f.port == Some(443) && f.severity == "low"));
         // The output chain (postgres egress) is not an inbound exposure.
         assert!(!e.findings.iter().any(|f| f.port == Some(5432)));
     }

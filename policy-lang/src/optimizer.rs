@@ -1017,7 +1017,10 @@ mod tests {
             zones: vec![],
             negate: false,
         };
-        assert!(is_ebpf_expressible(&r), "header-only allow is normally eligible");
+        assert!(
+            is_ebpf_expressible(&r),
+            "header-only allow is normally eligible"
+        );
         r.rate_limit = Some(RateLimit {
             rate: 50,
             per: RatePer::Second,

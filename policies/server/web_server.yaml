@@ -146,6 +146,27 @@ signature_groups:
     - web-expression-injection
     - web-git-directory-probe
     - web-dotenv-probe
+  # OWASP application-layer attacks — the injection and abuse primitives a WAF
+  # is built for, matched on the plaintext HTTP this origin receives behind a
+  # TLS-terminating edge. Defense in depth beside an edge WAF, not a
+  # replacement for one; see `sig-rules/exploits/web_owasp.yaml`.
+  web_owasp:
+    - owasp-sqli-tautology
+    - owasp-sqli-time-based
+    - owasp-sqli-benchmark
+    - owasp-sqli-stacked-drop
+    - owasp-xss-script-tag
+    - owasp-xss-javascript-uri
+    - owasp-xss-event-handler
+    - owasp-cmdi-substitution
+    - owasp-cmdi-shell-path
+    - owasp-lfi-etc-passwd
+    - owasp-lfi-php-wrapper
+    - owasp-lfi-proc-environ
+    - owasp-ssrf-cloud-metadata
+    - owasp-xxe-external-entity
+    - owasp-deser-java-stream
+    - owasp-nosqli-where
   # Structural HTTP anomalies from the protocol signature set.
   http_structural:
     - http-conflicting-framing
@@ -326,7 +347,7 @@ rules:
     destination:
       ports: web
     dpi:
-      signatures: [web_attacks, http_structural]
+      signatures: [web_attacks, web_owasp, http_structural]
       protocols: [http]
       on_match: deny
     tags: [ips, server]
