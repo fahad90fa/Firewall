@@ -60,7 +60,14 @@ jobs:
           # links into a standalone binary with the harness (which supplies its
           # own minimal UFWGeneratedPolicy). The binary exits non-zero, naming
           # the property, if the engine disagrees with a checked expectation.
-          swiftc -O -sdk "$(xcrun --show-sdk-path)" \
+          #
+          # Built -Onone, not -O: a correctness harness gains nothing from
+          # optimization, and an optimized build turns a runtime trap (an
+          # overflowing conversion, a nil unwrap) into a bare "Trace/BPT trap"
+          # with no location, whereas -Onone prints "Fatal error: ...: line N".
+          # For a harness whose whole job is to surface such faults, the
+          # diagnosable build is the correct one.
+          swiftc -Onone -g -sdk "$(xcrun --show-sdk-path)" \
                  -target arm64-apple-macos13 \
                  -o "$RUNNER_TEMP/ruleengine_harness" \
                  kernel/macos/NetworkExtension/RuleEngine.swift \

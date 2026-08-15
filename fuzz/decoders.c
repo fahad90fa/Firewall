@@ -81,8 +81,13 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         }
 
         /* Entropy and identification read the same bytes with their own
-         * arithmetic, and are cheap enough to run on every input. */
-        (void)UFW_ENTROPY(data, (uint32_t)size);
+         * arithmetic, and are cheap enough to run on every input. entropy
+         * takes its 256-entry scratch buffer from the caller: the kernel hands
+         * in a per-CPU one to stay off the module stack, the fuzzer a local. */
+        {
+                uint32_t counts[256];
+                (void)UFW_ENTROPY(data, (uint32_t)size, counts);
+        }
         (void)UFW_IDENTIFY(data, size, 443);
         return 0;
 }

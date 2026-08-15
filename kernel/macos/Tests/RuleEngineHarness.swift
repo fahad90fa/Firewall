@@ -255,16 +255,28 @@ func testPortsAndGlobs() {
 
 // MARK: - main
 
-testAddressParsing()
-testCIDR()
-testZones()
-testEvaluation()
-testIdentityAsymmetry()
-testPortsAndGlobs()
+// Swift permits top-level executable statements only in a file named
+// main.swift; this harness is compiled alongside RuleEngine.swift, so the two
+// files form a module with no main.swift, and the entry point has to be an
+// explicit @main type rather than bare top-level calls. (The declarations above
+// — the checks and the `failures` counter — are legal at file scope; only the
+// statements that *run* them are not, which is what had kept this from
+// compiling once the type-check ahead of it started passing.)
+@main
+enum RuleEngineHarnessMain {
+    static func main() {
+        testAddressParsing()
+        testCIDR()
+        testZones()
+        testEvaluation()
+        testIdentityAsymmetry()
+        testPortsAndGlobs()
 
-if failures > 0 {
-    print("\(failures) RuleEngine harness check(s) failed")
-    exit(1)
+        if failures > 0 {
+            print("\(failures) RuleEngine harness check(s) failed")
+            exit(1)
+        }
+        print("all RuleEngine harness checks passed")
+        exit(0)
+    }
 }
-print("all RuleEngine harness checks passed")
-exit(0)

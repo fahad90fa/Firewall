@@ -213,6 +213,20 @@ int main(void)
 
 #[test]
 fn the_generated_ebpf_header_compiles_against_the_fast_path_structs() {
+    // common.h is a Linux eBPF header: it includes <linux/types.h>, which exists
+    // only on a Linux host. The check is meaningful only there, and the Linux CI
+    // job runs it; on macOS or Windows there is no kernel header set to compile
+    // against, so skip rather than fail. (The sibling Linux and Windows ABI
+    // checks above are self-contained — their headers carry a hosted-types
+    // fallback — which is why they run everywhere and only this one is gated.)
+    if !cfg!(target_os = "linux") {
+        eprintln!(
+            "eBPF common.h needs Linux kernel headers (<linux/types.h>); \
+             skipping the eBPF ABI check on this host"
+        );
+        return;
+    }
+
     let Some(cc) = c_compiler() else {
         eprintln!("no C compiler found; skipping the eBPF ABI check");
         return;
