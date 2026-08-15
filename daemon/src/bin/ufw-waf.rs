@@ -79,7 +79,11 @@ fn main() {
         "ufw-waf: {} → {} ({}), blocking at {} and above",
         opts.listen,
         opts.backend,
-        if acceptor.is_some() { "TLS" } else { "plaintext" },
+        if acceptor.is_some() {
+            "TLS"
+        } else {
+            "plaintext"
+        },
         opts.block_at.as_str(),
     );
 
@@ -229,7 +233,9 @@ OPTIONS:
 fn parse_args() -> Result<Options, String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let get = |flag: &str| -> Option<String> {
-        args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1).cloned())
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1).cloned())
     };
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!("{USAGE}");
@@ -237,7 +243,9 @@ fn parse_args() -> Result<Options, String> {
     }
     let listen = get("--listen").ok_or("--listen <ADDR> is required")?;
     let backend = get("--backend").ok_or("--backend <ADDR> is required")?;
-    let sig_dir = get("--sig-dir").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("sig-rules"));
+    let sig_dir = get("--sig-dir")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("sig-rules"));
     let block_at = match get("--block-severity").as_deref() {
         None | Some("medium") => Severity::Medium,
         Some("low") => Severity::Low,

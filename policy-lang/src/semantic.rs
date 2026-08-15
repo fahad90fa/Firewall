@@ -570,7 +570,9 @@ impl Analyzer {
                     rl.span,
                     "`rate_limit:` applies only to `allow` and `allow-inspect` rules",
                 )
-                .with_help("a rate limit throttles permitted traffic; a deny has nothing to throttle"),
+                .with_help(
+                    "a rate limit throttles permitted traffic; a deny has nothing to throttle",
+                ),
             );
             return None;
         }
@@ -1684,7 +1686,9 @@ mod tests {
              destination:\n      ports: [22]\n    rate_limit:\n      rate: 50\n      \
              per: second\n      burst: 100\n"
         ));
-        let rl = p.rules[0].rate_limit.expect("the rate limit lowered onto the rule");
+        let rl = p.rules[0]
+            .rate_limit
+            .expect("the rate limit lowered onto the rule");
         assert_eq!(rl.rate, 50);
         assert_eq!(rl.per, RatePer::Second);
         assert_eq!(rl.burst, 100);
@@ -1696,7 +1700,10 @@ mod tests {
             "{BASE}rules:\n  - id: a\n    action: deny\n    protocol: tcp\n    \
              rate_limit:\n      rate: 50\n      per: second\n"
         ));
-        assert!(d.has_errors(), "a rate limit on a deny has nothing to throttle");
+        assert!(
+            d.has_errors(),
+            "a rate limit on a deny has nothing to throttle"
+        );
     }
 
     #[test]

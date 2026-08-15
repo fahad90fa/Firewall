@@ -69,7 +69,10 @@ pub fn parse_facts(request: &[u8]) -> HttpFacts {
     let body = &request[head_end..];
     facts.body_length = body.len() as u64;
 
-    let printable = request.iter().filter(|b| b.is_ascii_graphic() || **b == b' ').count();
+    let printable = request
+        .iter()
+        .filter(|b| b.is_ascii_graphic() || **b == b' ')
+        .count();
     facts.printable_ratio = if request.is_empty() {
         100
     } else {
@@ -169,7 +172,8 @@ impl WafEngine {
 
     /// Whether a request should be blocked (a match at or above the threshold).
     pub fn is_blocked(&self, request: &[u8]) -> Option<WafHit> {
-        self.inspect(request).filter(|h| h.severity >= self.block_at)
+        self.inspect(request)
+            .filter(|h| h.severity >= self.block_at)
     }
 }
 
@@ -229,18 +233,16 @@ fn percent_decode(input: &[u8]) -> Vec<u8> {
     let mut i = 0;
     while i < input.len() {
         match input[i] {
-            b'%' if i + 2 < input.len() => {
-                match (hex_val(input[i + 1]), hex_val(input[i + 2])) {
-                    (Some(h), Some(l)) => {
-                        out.push((h << 4) | l);
-                        i += 3;
-                    }
-                    _ => {
-                        out.push(b'%');
-                        i += 1;
-                    }
+            b'%' if i + 2 < input.len() => match (hex_val(input[i + 1]), hex_val(input[i + 2])) {
+                (Some(h), Some(l)) => {
+                    out.push((h << 4) | l);
+                    i += 3;
                 }
-            }
+                _ => {
+                    out.push(b'%');
+                    i += 1;
+                }
+            },
             b'+' => {
                 out.push(b' ');
                 i += 1;
@@ -269,9 +271,7 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || haystack.len() < needle.len() {
         return None;
     }
-    haystack
-        .windows(needle.len())
-        .position(|w| w == needle)
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 fn trim_cr(line: &[u8]) -> &[u8] {
@@ -279,7 +279,10 @@ fn trim_cr(line: &[u8]) -> &[u8] {
 }
 
 fn trim_ascii(b: &[u8]) -> &[u8] {
-    let start = b.iter().position(|c| !c.is_ascii_whitespace()).unwrap_or(b.len());
+    let start = b
+        .iter()
+        .position(|c| !c.is_ascii_whitespace())
+        .unwrap_or(b.len());
     let end = b
         .iter()
         .rposition(|c| !c.is_ascii_whitespace())
@@ -345,7 +348,8 @@ mod tests {
     #[test]
     fn an_ssrf_metadata_grab_is_critical() {
         let e = engine();
-        let req = b"GET /fetch?url=http://169.254.169.254/latest/meta-data/ HTTP/1.1\r\nHost: x\r\n\r\n";
+        let req =
+            b"GET /fetch?url=http://169.254.169.254/latest/meta-data/ HTTP/1.1\r\nHost: x\r\n\r\n";
         let hit = e.is_blocked(req).expect("SSRF metadata is a block");
         assert_eq!(hit.signature, "owasp-ssrf-cloud-metadata");
         assert_eq!(hit.severity, Severity::Critical);
@@ -371,8 +375,7 @@ mod tests {
     fn the_highest_severity_match_wins() {
         let e = engine();
         // Contains both an SSRF metadata grab (critical) and a script tag (high).
-        let req =
-            b"GET /?u=http://169.254.169.254/&q=<script> HTTP/1.1\r\nHost: x\r\n\r\n";
+        let req = b"GET /?u=http://169.254.169.254/&q=<script> HTTP/1.1\r\nHost: x\r\n\r\n";
         let hit = e.inspect(req).unwrap();
         assert_eq!(hit.severity, Severity::Critical);
     }
@@ -384,7 +387,9 @@ mod tests {
         // engine must decode before matching.
         let e = engine();
         let req = b"GET /items?id=1%27%20or%201%3D1-- HTTP/1.1\r\nHost: shop\r\n\r\n";
-        let hit = e.inspect(req).expect("an encoded SQLi must still be caught");
+        let hit = e
+            .inspect(req)
+            .expect("an encoded SQLi must still be caught");
         assert_eq!(hit.signature, "owasp-sqli-tautology");
     }
 

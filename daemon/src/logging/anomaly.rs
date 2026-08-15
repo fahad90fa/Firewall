@@ -523,7 +523,9 @@ mod tests {
     fn an_anomaly_renders_as_an_alert_log_event() {
         let mut e = engine();
         establish(&mut e, "/opt/dropper");
-        let a = e.observe(&allow("/opt/dropper", "203.0.113.9", 200)).unwrap();
+        let a = e
+            .observe(&allow("/opt/dropper", "203.0.113.9", 200))
+            .unwrap();
         let event = a.to_event("host-a", 7);
         let text = event.to_json();
         let v = ufw_shared::json::parse(&text).unwrap();
