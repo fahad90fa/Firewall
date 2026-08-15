@@ -339,15 +339,25 @@ struct UFWAutomaton {
     }
 
     /// Follow one input byte, falling back along failure links until a
-    /// transition exists or the root is reached. Amortised O(1) per byte: a
-    /// fallback strictly decreases depth, and depth rises by at most one per
-    /// byte. The `state == 0` exit is what stops the root trapping on a byte
-    /// no pattern starts with.
+    /// transition exists or the root is reached. Amortised O(1) per byte on a
+    /// well-formed table: a fallback strictly decreases depth, and depth rises
+    /// by at most one per byte. The `state == 0` exit is what stops the root
+    /// trapping on a byte no pattern starts with.
+    ///
+    /// The walk is additionally capped at `stateCount` hops. Depth-decreasing
+    /// is a property of the table, which is decoded from bytes the daemon is not
+    /// trusted to be correct about; the loader bounds-checks every index but not
+    /// that a fail link points to a shallower state, so a malformed one could
+    /// form a cycle that never reaches the root. A valid chain never approaches
+    /// the cap; a cyclic one can no longer loop forever. (Kept identical to the
+    /// Linux and Windows traversals.)
     private func step(_ trie: Trie, _ state: Int, _ byte: UInt8) -> Int {
         var current = state
+        var hops = trie.stateCount
         while true {
             if let next = transition(trie, current, byte) { return next }
-            if current == 0 { return 0 }
+            if current == 0 || hops == 0 { return 0 }
+            hops -= 1
             current = states[trie.stateBase + current].fail
         }
     }
