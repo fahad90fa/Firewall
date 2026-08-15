@@ -29,11 +29,27 @@ Two rules of thumb the layering enforces:
 
 ## The WAF, in front of the origin
 
-The host IPS (`sig-rules/exploits/web_attacks.yaml`) catches the handful of
-inbound primitives that are unambiguous on the wire — Log4Shell, Shellshock,
-traversal. It is **not** a WAF: it does not do the full OWASP rule set, virtual
-patching, or bot management, and on HTTPS it cannot see the request at all
-(the payload is encrypted until the app or a proxy terminates TLS).
+The host IPS carries two layers of web-attack signatures: exploitation
+primitives (`sig-rules/exploits/web_attacks.yaml` — Log4Shell, Shellshock,
+traversal) and an **OWASP application-attack set**
+(`sig-rules/exploits/web_owasp.yaml` — SQL injection, XSS, command/file
+injection, SSRF, XXE, insecure deserialization, NoSQL injection). That is real
+application-layer detection, and the `web_server.yaml` policy wires it into the
+inbound IPS.
+
+It is still **not a full WAF**, and the difference is worth being precise about:
+no request normalization, no OWASP Core Rule Set depth, no virtual patching or
+bot management — and, the load-bearing limit, **no TLS termination**. The DPI
+engine inspects bytes on the wire, so it sees **plaintext HTTP**, not the
+encrypted payload of an HTTPS connection.
+
+That limit is exactly why the layering below matters rather than defeating it.
+A TLS-terminating load balancer or WAF proxy decrypts the request and forwards
+**plaintext HTTP** to the origin — and this firewall, on that origin, inspects
+that plaintext. So the OWASP signatures fire as **defense in depth behind the
+edge**, and on any plaintext HTTP the host serves directly (internal APIs,
+services, HTTP-before-redirect). They complement an edge WAF; they do not
+replace one.
 
 Put a real WAF where it can see decrypted requests — at a reverse proxy in front
 of the app. A minimal Coraza/ModSecurity reverse proxy that fronts the web
