@@ -1,0 +1,332 @@
+# Public web server.
+#
+# This is the inverse of the workstation baselines. A workstation initiates
+# everything and accepts nothing; a server exists to accept. So the shape of
+# the policy flips: inbound is where the deliberate openings are, and every
+# opening is a named service on a named port, not a relaxation of the default.
+#
+# Three postures are expressed here, and the order they are written in is the
+# order they must be read in:
+#
+#   1. Inbound is default-deny with a short allow-list. The web ports are open
+#      to the world because that is what a web server is for; everything else
+#      inbound — including the management protocols an attacker probes first —
+#      is denied. SSH is reachable only from the management network.
+#
+#   2. The open web ports are `allow-inspect`, not `allow`. That one word is
+#      the difference between "the packet is permitted and evaluation stops"
+#      and "the packet is permitted *provisionally* and the stream layer still
+#      runs". Because the world can reach these ports, the world's traffic is
+#      exactly what the inbound IPS must see — so the permit is the kind that a
+#      later `on_match: deny` can still override.
+#
+#   3. Egress is identity-gated, the same discipline as `zero_trust.yaml`. A
+#      web server that is compromised through its own application is the normal
+#      case, not the exotic one, and the value of the firewall at that point is
+#      that the web process cannot open a shell to the internet: it may reach
+#      its database and resolve names, and nothing else.
+#
+# What this does NOT do: it is not a web application firewall. The inbound IPS
+# catches unambiguous exploitation primitives (Log4Shell, Shellshock, request
+# smuggling, traversal), not the full space of application-logic attacks. Put a
+# real WAF in front of the site; this is the host-layer floor beneath it. See
+# `docs/design/protection_roadmap.md`.
+
+version: 1
+
+metadata:
+  name: web-server
+  description: "A public HTTP/HTTPS server: open service ports, identity-gated egress, inbound IPS"
+  revision: 1
+  author: security-engineering
+
+defaults:
+  action: deny
+  log: true
+  priority: 1000
+  stateful: true
+
+address_groups:
+  loopback: [127.0.0.0/8, ::1/128]
+  rfc1918: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+  link_local: [169.254.0.0/16, fe80::/10]
+  # The network operations reach the box from. SSH and any future admin
+  # surface is scoped to this and nothing else, so a stolen credential is not
+  # enough without also being on this network.
+  management: [10.20.0.0/24]
+  # The tiers this server is allowed to talk *to*. A web server is a client of
+  # its data stores and of nothing else.
+  database_tier: [10.30.10.0/24]
+  cache_tier: [10.30.20.0/24]
+  resolvers: [10.10.0.53/32, 10.10.1.53/32]
+  time_servers: [10.10.0.123/32]
+  package_mirror: [10.10.5.0/24]
+
+port_groups:
+  web: [80, 443]
+  ssh: [22]
+  dns: [53]
+  ntp: [123]
+  postgres: [5432]
+  redis: [6379]
+  https: [443]
+  # Credential-bearing and remote-execution protocols. A server has even less
+  # reason to speak these outbound than a workstation does.
+  lateral:
+    - 135
+    - 137-139
+    - 445
+    - 3389
+    - 5985-5986
+    - 5900-5910
+
+applications:
+  system_resolver:
+    description: "The platform stub resolver"
+    trust: [system]
+    platforms:
+      linux:
+        paths: [/usr/lib/systemd/systemd-resolved, /usr/sbin/nscd]
+      macos:
+        path: /usr/libexec/mDNSResponder
+      windows:
+        path: "C:\\Windows\\System32\\svchost.exe"
+        signer: "Microsoft Windows"
+
+  system_time:
+    trust: [system]
+    platforms:
+      linux:
+        paths: [/usr/lib/systemd/systemd-timesyncd, /usr/sbin/chronyd]
+      macos:
+        path: /usr/libexec/timed
+      windows:
+        path: "C:\\Windows\\System32\\svchost.exe"
+        signer: "Microsoft Windows"
+
+  # The web application itself. Its egress rights are the tightest in the file
+  # precisely because it is the process most likely to be compromised: it is
+  # the one parsing untrusted input all day.
+  web_app:
+    description: "The application server process behind the listener"
+    trust: [">= trusted"]
+    require_valid_signature: true
+    platforms:
+      linux:
+        paths: [/opt/app/bin/appserver, /usr/sbin/nginx]
+      macos:
+        bundle_id: com.contoso.appserver
+        team_id: ABCDE12345
+      windows:
+        path: "C:\\Program Files\\Contoso\\App\\appserver.exe"
+        signer: "Contoso Ltd"
+
+  package_manager:
+    description: "The OS package manager, for patching"
+    trust: [system]
+    platforms:
+      linux:
+        paths: [/usr/bin/apt-get, /usr/bin/dpkg, /usr/bin/dnf, /usr/bin/yum]
+      macos:
+        path: /usr/sbin/softwareupdate
+      windows:
+        path: "C:\\Windows\\System32\\svchost.exe"
+        signer: "Microsoft Windows"
+
+signature_groups:
+  # The inbound catch. These are the exploitation and recon primitives that
+  # are unambiguous on the wire; the full set lives in
+  # `sig-rules/exploits/web_attacks.yaml`.
+  web_attacks:
+    - web-log4shell-jndi
+    - web-shellshock-function
+    - web-traversal-encoded
+    - web-null-byte-injection
+    - web-sqli-union-select
+    - web-expression-injection
+    - web-git-directory-probe
+    - web-dotenv-probe
+  # Structural HTTP anomalies from the protocol signature set.
+  http_structural:
+    - http-conflicting-framing
+    - http-path-traversal
+    - http-header-flood
+    - http-oversized-uri
+  lateral_movement:
+    - smb-exec-service-install
+    - wmi-remote-process-create
+
+network_profile:
+  internal: [rfc1918]
+  gateways: [10.0.0.1]
+  dns_servers: [10.10.0.53, 10.10.1.53]
+  perimeter_crossing_requires_dpi: true
+
+rules:
+  # --- Local plumbing -----------------------------------------------------
+  - id: allow-loopback
+    priority: 10
+    layer: packet
+    action: allow
+    destination:
+      addresses: [loopback]
+
+  - id: allow-neighbour-discovery
+    description: "IPv6 does not function without it, and it grants no reachability"
+    priority: 20
+    layer: packet
+    action: allow
+    protocol: icmpv6
+    destination:
+      addresses: [link_local]
+
+  # --- Lateral movement, denied before anything can permit it -------------
+  - id: deny-lateral-egress-tcp
+    description: "This server has no business initiating SMB/RPC/RDP/WinRM/VNC"
+    priority: 30
+    layer: packet
+    action: deny
+    protocol: tcp
+    destination:
+      ports: lateral
+    tags: [hardening, server]
+
+  - id: deny-lateral-egress-udp
+    priority: 31
+    layer: packet
+    action: deny
+    protocol: udp
+    destination:
+      ports: lateral
+    tags: [hardening, server]
+
+  # --- The service the box exists to offer --------------------------------
+  #
+  # Open to the world, and *provisional*: `allow-inspect` decides the packet
+  # stage but lets the stream stage run, which is where the inbound IPS below
+  # gets to deny an exploitation attempt riding a permitted connection.
+  - id: allow-web-inbound
+    description: "HTTP and HTTPS from anywhere; kept inspectable for the inbound IPS"
+    priority: 100
+    layer: packet
+    direction: inbound
+    action: allow-inspect
+    protocol: tcp
+    destination:
+      ports: web
+    tags: [server, exposed]
+
+  # Administration, scoped to the network operations actually reach the box
+  # from. A terminal allow: SSH from the management network is trusted and is
+  # not run through the web IPS.
+  - id: allow-ssh-admin
+    description: "SSH, only from the management network"
+    priority: 110
+    layer: packet
+    direction: inbound
+    action: allow
+    protocol: tcp
+    source:
+      addresses: [management]
+    destination:
+      ports: ssh
+    tags: [server, admin]
+
+  # There is deliberately no explicit `deny-inbound-other` rule, and no
+  # terminal `deny-unnamed` at the stream stage — which is where this policy
+  # departs from `zero_trust.yaml`, and why. `zero_trust` can write a
+  # catch-all stream deny because none of its permitted flows are provisional:
+  # every allow it grants is terminal at the packet or identity stage. This
+  # server's whole point is a *provisional* inbound permit — `allow-web-inbound`
+  # is `allow-inspect`, so a clean web request reaches the stream stage still
+  # only provisionally allowed. A blanket `deny-unnamed` there would catch that
+  # clean request and deny every legitimate page load. The terminal for this
+  # policy is therefore `defaults.action: deny`: a provisional allow that no
+  # stream rule overrides *stands*, and everything else falls to the default.
+
+  # --- Egress: identity-gated, the same as a zero-trust workstation -------
+  - id: resolver-dns
+    description: "Only the stub resolver resolves; the app goes through it"
+    priority: 200
+    direction: outbound
+    action: allow
+    protocol: udp
+    application: system_resolver
+    destination:
+      addresses: [resolvers]
+      ports: dns
+
+  - id: time-sync
+    priority: 210
+    direction: outbound
+    action: allow
+    protocol: udp
+    application: system_time
+    destination:
+      addresses: [time_servers]
+      ports: ntp
+
+  - id: web-app-to-database
+    description: "The application reaching its own data store, and nothing else"
+    priority: 220
+    direction: outbound
+    action: allow
+    protocol: tcp
+    application: web_app
+    destination:
+      addresses: [database_tier]
+      ports: postgres
+
+  - id: web-app-to-cache
+    priority: 230
+    direction: outbound
+    action: allow
+    protocol: tcp
+    application: web_app
+    destination:
+      addresses: [cache_tier]
+      ports: redis
+
+  - id: package-updates
+    description: "Patching from the internal mirror; perimeter-upgraded to inspected"
+    priority: 240
+    direction: outbound
+    action: allow
+    protocol: tcp
+    application: package_manager
+    destination:
+      addresses: [package_mirror]
+      ports: https
+
+  # --- Inspection ---------------------------------------------------------
+  #
+  # The inbound web IPS. Base action `allow`, so a clean HTTP stream is
+  # permitted at the stream stage; `on_match: deny` overrides that the moment
+  # a request carries one of the exploitation primitives. Scoped `inbound` so
+  # it inspects traffic arriving at the listener, which is the untrusted side.
+  - id: web-attack-ips
+    description: "Deny inbound HTTP that carries an exploitation or recon primitive"
+    priority: 300
+    layer: stream
+    direction: inbound
+    action: allow
+    protocol: tcp
+    destination:
+      ports: web
+    dpi:
+      signatures: [web_attacks, http_structural]
+      protocols: [http]
+      on_match: deny
+    tags: [ips, server]
+
+  - id: lateral-movement-ips
+    description: "Service-install and remote-exec patterns, if a flow ever forms"
+    priority: 310
+    layer: stream
+    action: allow
+    protocol: tcp
+    dpi:
+      signatures: [lateral_movement]
+      protocols: [http]
+      on_match: deny
+    tags: [ips]
