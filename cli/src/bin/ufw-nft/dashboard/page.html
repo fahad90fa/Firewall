@@ -223,6 +223,7 @@
   .chip.sev-critical, .chip.sev-high { color: var(--bad); background: var(--bad-weak); border-color: color-mix(in srgb, var(--bad) 28%, transparent); }
   .chip.sev-medium { color: var(--warn); background: var(--warn-weak); border-color: color-mix(in srgb, var(--warn) 28%, transparent); }
   .chip.sev-low, .chip.sev-info { color: var(--info); background: var(--info-weak); border-color: color-mix(in srgb, var(--info) 28%, transparent); }
+  .chip.sev-good { color: var(--ok); background: var(--ok-weak); border-color: color-mix(in srgb, var(--ok) 28%, transparent); }
   .dirpill { display: inline-flex; align-items: center; gap: 4px; color: var(--text-dim); font-size: 12px; }
   .why { color: var(--text-dim); font-size: 12px; margin-top: 2px; white-space: normal; max-width: 42ch; }
   .risk { color: var(--warn); font-size: 11.5px; margin-top: 1px; white-space: normal; max-width: 40ch; }
@@ -237,7 +238,19 @@
   .attack { border: 1px solid var(--border); border-radius: var(--r); padding: 13px 14px; background: var(--surface); box-shadow: var(--shadow-sm);
     border-left: 4px solid var(--border-strong); cursor: pointer; transition: box-shadow .12s, transform .06s; }
   .attack:hover { box-shadow: var(--shadow); transform: translateY(-1px); }
-  .attack.sev-critical, .attack.sev-high { border-left-color: var(--bad); } .attack.sev-medium { border-left-color: var(--warn); } .attack.sev-low, .attack.sev-info { border-left-color: var(--info); }
+  .attack.sev-critical, .attack.sev-high { border-left-color: var(--bad); } .attack.sev-medium { border-left-color: var(--warn); } .attack.sev-low, .attack.sev-info { border-left-color: var(--info); } .attack.sev-good { border-left-color: var(--ok); }
+  .exp-sum { display: grid; grid-template-columns: auto repeat(3, 1fr); gap: 12px; align-items: stretch; }
+  @media (max-width: 720px) { .exp-sum { grid-template-columns: 1fr 1fr; } }
+  .grade { display: flex; flex-direction: column; justify-content: center; padding: 14px 18px; border-radius: var(--r); border: 1px solid var(--border); background: var(--surface); min-width: 150px; }
+  .grade .gv { font-size: 26px; font-weight: 800; letter-spacing: -.02em; text-transform: capitalize; }
+  .grade .gs { font-size: 12px; color: var(--text-mute); margin-top: 2px; }
+  .grade.g-hardened { border-left: 4px solid var(--ok); } .grade.g-hardened .gv { color: var(--ok); }
+  .grade.g-reasonable { border-left: 4px solid var(--warn); } .grade.g-reasonable .gv { color: var(--warn); }
+  .grade.g-exposed { border-left: 4px solid var(--bad); } .grade.g-exposed .gv { color: var(--bad); }
+  .grade.g-unknown { border-left: 4px solid var(--border-strong); } .grade.g-unknown .gv { color: var(--text-mute); }
+  .exp-stat { display: flex; flex-direction: column; justify-content: center; padding: 14px 16px; border-radius: var(--r); border: 1px solid var(--border); background: var(--surface); }
+  .exp-stat .n { font-size: 22px; font-weight: 750; } .exp-stat .l { font-size: 11.5px; color: var(--text-mute); }
+  .attack .sc { display: inline-flex; align-items: center; gap: 4px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; font-size: 11.5px; }
   .attack .ah { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .attack .at { font-weight: 700; font-size: 13.5px; letter-spacing: -.01em; }
   .attack .ad { color: var(--text-dim); margin: 7px 0 8px; font-size: 12.5px; }
@@ -369,6 +382,7 @@
     <div class="grp">Network</div>
     <a href="#network" data-nav="network"><span class="ic">&#127760;</span>Network manager<span class="badge" id="nav-network">0</span></a>
     <div class="grp">Enforcement</div>
+    <a href="#exposure" data-nav="exposure"><span class="ic">&#128737;</span>Attack surface<span class="badge" id="nav-exposure">0</span></a>
     <a href="#rules" data-nav="rules"><span class="ic">&#9636;</span>Rules<span class="badge" id="nav-rules">0</span></a>
     <a href="#host" data-nav="host"><span class="ic">&#9635;</span>Host surface<span class="badge" id="nav-host">0</span></a>
     <a href="#diag" data-nav="diag"><span class="ic">&#9432;</span>Diagnostics</a>
@@ -437,6 +451,12 @@
           <tbody><tr><td colspan="8" class="empty">Loading events…</td></tr></tbody>
         </table></div></div>
       </div>
+    </section>
+
+    <section id="exposure">
+      <div class="sec-h"><h2>Attack surface</h2><span class="hint" id="expHint">what this host accepts inbound, and to whom — derived from the live ruleset</span></div>
+      <div class="exp-sum" id="expSum"></div>
+      <div class="attacks" id="expFindings" style="margin-top:12px"></div>
     </section>
 
     <section id="rules">
@@ -614,6 +634,7 @@ function render(){
   renderEvents();
   if (changed("rules",s.chains)) renderRules(s.chains||[]);
   if (changed("host",[s.listeners,s.connections])) renderHost(s);
+  if (changed("exposure",s.exposure)) renderExposure(s);
   renderDiag(s);
   updateNav(s);
 }
@@ -691,7 +712,7 @@ function renderThreats(s){
   if(changed("timelineData",[(s.events||[]).map(e=>[Math.round(e.ts),e.action]),rangeMin])) scheduleChart();
   if(changed("attacks",attacks)) renderAttacks(attacks);
 }
-const SEV_ICON={critical:"⚠",high:"⚠",medium:"▲",low:"●",info:"ℹ"};
+const SEV_ICON={critical:"⚠",high:"⚠",medium:"▲",low:"●",info:"ℹ",good:"✓"};
 function renderAttacks(attacks){
   const el=$("attacks");
   if(!attacks.length){ el.innerHTML=`<div class="card"><div class="empty">No attack patterns yet. Probes appear here the moment a denied packet is logged.</div></div>`; return; }
@@ -706,6 +727,33 @@ function renderAttacks(attacks){
     </div>`).join("");
   el.querySelectorAll(".attack[data-src]").forEach(c=>{ const go=()=>filterTo(c.dataset.src==="this host"?"":c.dataset.src);
     c.addEventListener("click",go); c.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); go(); } }); });
+}
+
+/* ---- attack surface (server exposure) --------------------------------- */
+function renderExposure(s){
+  const e=s.exposure||{grade:"unknown",score:0,open_world:0,scoped:0,findings:[]};
+  const f=e.findings||[];
+  const risky=f.filter(x=>x.severity!=="good"&&x.severity!=="low").length;
+  $("expHint").textContent = e.grade==="unknown"
+    ? "no ufw-nft table is loaded — nothing to assess"
+    : `grade ${e.grade} · ${e.open_world} port(s) open to any source, ${e.scoped} scoped`;
+  $("expSum").innerHTML =
+    `<div class="grade g-${esc(e.grade)}"><div class="gv">${esc(e.grade)}</div><div class="gs">exposure score ${e.score}/100</div></div>`+
+    `<div class="exp-stat"><div class="n">${e.open_world}</div><div class="l">ports open to any source</div></div>`+
+    `<div class="exp-stat"><div class="n">${e.scoped}</div><div class="l">ports scoped to a source set</div></div>`+
+    `<div class="exp-stat"><div class="n" style="color:${risky?"var(--bad)":"var(--ok)"}">${risky}</div><div class="l">sensitive service(s) exposed</div></div>`;
+  const el=$("expFindings");
+  if(!f.length){ el.innerHTML=`<div class="card"><div class="empty">${e.grade==="unknown"?"Load a policy to see this host's inbound attack surface.":"Nothing notable is exposed inbound — no world-open sensitive services."}</div></div>`; return; }
+  el.innerHTML=f.map(x=>`
+    <div class="attack sev-${esc(x.severity)}">
+      <div class="ah"><span class="chip sev-${esc(x.severity)}">${SEV_ICON[x.severity]||""} ${esc((x.severity||"").toUpperCase())}</span><span class="at">${esc(x.title)}</span></div>
+      <div class="ad">${esc(x.detail)}</div>
+      <div class="am">
+        ${x.port!=null?`<span class="k">port ${x.port}${x.service?" ("+esc(x.service)+")":""}</span>`:""}
+        <span class="sc">from: ${esc(x.scope)}</span>
+        ${x.packets?`<span class="k">${fmtN(x.packets)} packet(s) seen</span>`:""}
+        ${x.rule?`<span class="k mono">${esc(x.rule)}</span>`:""}</div>
+    </div>`).join("");
 }
 
 /* ---- timeline --------------------------------------------------------- */
@@ -1007,6 +1055,8 @@ function updateNav(s){
   $("nav-events").textContent=fmtN((s.totals||{}).events||0);
   let rc=0; for(const c of (s.chains||[])) rc+=c.rules.length; $("nav-rules").textContent=rc;
   $("nav-host").textContent=(s.listeners||[]).length+(s.connections||[]).length;
+  const ex=((s.exposure||{}).findings||[]).filter(x=>x.severity!=="good"&&x.severity!=="low").length;
+  const ne=$("nav-exposure"); ne.textContent=ex; ne.parentElement.classList.toggle("hot",ex>0);
 }
 const navLinks=[...document.querySelectorAll("nav.side a[data-nav]")];
 navLinks.forEach(a=>a.addEventListener("click",()=>{ if(innerWidth<=960) drawer(false); }));
@@ -1015,7 +1065,7 @@ if(window.IntersectionObserver){ const byId={}; navLinks.forEach(a=>byId[a.getAt
   document.querySelectorAll("main > section").forEach(sec=>io.observe(sec)); }
 
 /* ---- keyboard shortcuts ---------------------------------------------- */
-const SECN=["overview","threats","talkers","events","network","rules","host"];
+const SECN=["overview","threats","talkers","events","network","exposure","rules","host"];
 addEventListener("keydown",(e)=>{
   if(e.metaKey||e.ctrlKey||e.altKey) return;
   const tag=(e.target.tagName||"").toLowerCase(), typing=tag==="input"||tag==="select"||tag==="textarea";
