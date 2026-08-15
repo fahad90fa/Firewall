@@ -354,10 +354,18 @@ mod tests {
 
     impl LogFile {
         fn new(lines: &[String]) -> Self {
+            // A per-process counter, not just pid+timestamp: cargo runs these
+            // tests in parallel in one process, so two sample() calls landing in
+            // the same microsecond would otherwise build the *same* directory —
+            // and the first LogFile to drop would remove_dir_all it out from
+            // under the other, mid-read. The atomic makes every temp dir unique.
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static SEQ: AtomicU64 = AtomicU64::new(0);
             let dir = std::env::temp_dir().join(format!(
-                "ufwctl-logs-{}-{}",
+                "ufwctl-logs-{}-{}-{}",
                 std::process::id(),
-                ufw_shared::now_us()
+                ufw_shared::now_us(),
+                SEQ.fetch_add(1, Ordering::Relaxed)
             ));
             std::fs::create_dir_all(&dir).unwrap();
             let path = dir.join("events.jsonl");
