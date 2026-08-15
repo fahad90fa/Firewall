@@ -165,6 +165,17 @@ impl ControlPlane for TestSupervisor {
     fn reload_policy(&self) -> Result<String, ApiError> {
         self.install("watcher")
     }
+    fn reload_signatures(&self) -> Result<String, ApiError> {
+        // The harness ships no signature directory; refreshing with the
+        // resident set exercises the no-op path (identical digest).
+        match self
+            .state
+            .refresh_signatures((*self.state.signatures()).clone())
+        {
+            None => Ok("signatures unchanged".into()),
+            Some(revision) => Ok(format!("signatures reloaded: revision {revision}")),
+        }
+    }
     fn validate_policy(&self) -> Result<String, ApiError> {
         policy_loader::load(&self.policy)
             .map(|l| format!("{} rules", l.policy.rules.len()))

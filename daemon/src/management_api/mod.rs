@@ -49,6 +49,9 @@ pub enum Request {
     ListRevisions,
     /// Recompile from disk and install.
     ReloadPolicy,
+    /// Reload the DPI signature set from disk without a daemon restart, and
+    /// reinstall it in the kernel if the module inspects payloads.
+    ReloadSignatures,
     /// Validate the on-disk policy without installing it.
     ValidatePolicy,
     /// Diff the on-disk policy against what is installed.
@@ -89,6 +92,7 @@ impl Request {
             | Request::Ping => Authority::ReadOnly,
 
             Request::ReloadPolicy
+            | Request::ReloadSignatures
             | Request::Rollback { .. }
             | Request::FlushPolicy
             | Request::SetMode { .. }
@@ -104,6 +108,7 @@ impl Request {
             Request::GetRule { .. } => "get-rule",
             Request::ListRevisions => "list-revisions",
             Request::ReloadPolicy => "reload-policy",
+            Request::ReloadSignatures => "reload-signatures",
             Request::ValidatePolicy => "validate-policy",
             Request::DiffPolicy => "diff-policy",
             Request::Rollback { .. } => "rollback",
@@ -137,6 +142,7 @@ impl Request {
             },
             "list-revisions" => Request::ListRevisions,
             "reload-policy" => Request::ReloadPolicy,
+            "reload-signatures" => Request::ReloadSignatures,
             "validate-policy" => Request::ValidatePolicy,
             "diff-policy" => Request::DiffPolicy,
             "rollback" => Request::Rollback {
@@ -254,6 +260,7 @@ impl Response {
 /// non-reentrant.
 pub trait ControlPlane: Send + Sync {
     fn reload_policy(&self) -> Result<String, ApiError>;
+    fn reload_signatures(&self) -> Result<String, ApiError>;
     fn validate_policy(&self) -> Result<String, ApiError>;
     fn diff_policy(&self) -> Result<String, ApiError>;
     fn rollback(&self, revision: u64) -> Result<String, ApiError>;
@@ -305,6 +312,7 @@ impl Router {
             Request::ListSignatures => Ok(Response::ok(self.signatures_json())),
             Request::ResolveIdentity { pid } => Ok(Response::ok(self.identity_json(pid))),
             Request::ReloadPolicy => self.control.reload_policy().map(Response::ok),
+            Request::ReloadSignatures => self.control.reload_signatures().map(Response::ok),
             Request::ValidatePolicy => self.control.validate_policy().map(Response::ok),
             Request::DiffPolicy => self.control.diff_policy().map(Response::ok),
             Request::Rollback { revision } => self.control.rollback(revision).map(Response::ok),
@@ -329,6 +337,9 @@ impl Router {
         w.begin_object();
         w.bool_field("ok", true);
         w.u64_field("count", set.len() as u64);
+        w.u64_field("revision", self.state.signature_revision());
+        w.str_field("digest", &self.state.signature_digest_hex());
+        w.u64_field("loaded_at", self.state.signature_loaded_at_us());
         w.begin_array_field("signatures");
         for sig in set.signatures.values() {
             sig.write_json(&mut w);
@@ -580,6 +591,9 @@ pub(crate) mod testing {
         fn reload_policy(&self) -> Result<String, ApiError> {
             self.record("reload")
         }
+        fn reload_signatures(&self) -> Result<String, ApiError> {
+            self.record("reload-signatures")
+        }
         fn validate_policy(&self) -> Result<String, ApiError> {
             self.record("validate")
         }
@@ -735,6 +749,20 @@ mod tests {
         assert!(h.control.called("reload"));
         assert!(h.control.called("rollback:3"));
         assert!(h.control.called("set-mode:monitor"));
+    }
+
+    #[test]
+    fn reloading_signatures_is_admin_only_and_reaches_the_control_plane() {
+        let h = harness();
+        let err = h
+            .router
+            .dispatch(Request::ReloadSignatures, Authority::ReadOnly)
+            .unwrap_err();
+        assert_eq!(err.status, 403, "a signature reload changes the kernel state");
+        h.router
+            .dispatch(Request::ReloadSignatures, Authority::Admin)
+            .unwrap();
+        assert!(h.control.called("reload-signatures"));
     }
 
     #[test]

@@ -1087,6 +1087,56 @@ impl ControlPlane for Supervisor {
         self.install("policy directory")
     }
 
+    fn reload_signatures(&self) -> Result<String, ApiError> {
+        // Reload the whole set from disk. A malformed file is logged and
+        // skipped, never fatal — the same posture as startup, because one bad
+        // entry in a threat-intel drop must not disarm inspection entirely.
+        let (set, problems) = signatures::load_dir(&self.config.policy.signature_dir);
+        for problem in &problems {
+            self.state.logs.note(
+                &self.config.daemon.host_id,
+                Severity::Error,
+                EventKind::SystemFault,
+                format!("signature: {problem}"),
+            );
+        }
+
+        let count = set.len();
+        let patterns = set.patterns().len();
+
+        // Fail-closed ordering: install into the kernel *before* swapping the
+        // in-memory set, so a set the module rejects leaves the previously
+        // installed one resident in both the kernel and the daemon — exactly
+        // as a failed policy reload keeps the previous policy.
+        if let Some(channel) = self.state.channel() {
+            if self.state.kernel().capabilities.has(Capabilities::DPI) {
+                let payload = set.encode();
+                channel
+                    .install_signatures(&payload, self.timeout())
+                    .map_err(|e| {
+                        ApiError::internal(format!(
+                            "signature reload rejected by the module: {e}"
+                        ))
+                    })?;
+            }
+        }
+
+        let skipped = if problems.is_empty() {
+            String::new()
+        } else {
+            format!(", {} skipped", problems.len())
+        };
+        match self.state.refresh_signatures(set) {
+            None => Ok(ufw_daemon::management_api::simple(
+                "signatures unchanged; nothing to reload",
+            )),
+            Some(revision) => Ok(ufw_daemon::management_api::simple(&format!(
+                "signatures reloaded: revision {revision}, {count} signature(s), \
+                 {patterns} pattern(s){skipped}"
+            ))),
+        }
+    }
+
     fn validate_policy(&self) -> Result<String, ApiError> {
         let loaded = policy_loader::load(&self.config.policy)
             .map_err(|e| ApiError::bad_request(e.to_string()))?;
