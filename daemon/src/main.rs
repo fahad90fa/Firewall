@@ -265,6 +265,22 @@ fn run() -> Result<(), String> {
         daemon.set_signatures(signatures);
     }
 
+    // --- fleet -----------------------------------------------------------
+    //
+    // A configured secret is what turns the fleet control surface on. Without
+    // it, the daemon is a single host with no distribution point, and the
+    // fleet endpoints report themselves disabled rather than trusting an
+    // unauthenticated bundle.
+    if let Some(secret) = &config.api.fleet_secret {
+        daemon.set_fleet_verifier(ufw_daemon::fleet::Verifier::new(secret.clone()));
+        logs.note(
+            &config.daemon.host_id,
+            Severity::Notice,
+            EventKind::PolicyChange,
+            "fleet control enabled: policy bundles are authenticated before install",
+        );
+    }
+
     // --- kernel ----------------------------------------------------------
     let connection = ipc::establish(
         &config.ipc.endpoint,
@@ -992,11 +1008,25 @@ impl Supervisor {
     fn install(&self, origin: &str) -> Result<String, ApiError> {
         let loaded = policy_loader::load(&self.config.policy)
             .map_err(|e| ApiError::bad_request(e.to_string()))?;
+        let source = loaded.source.display().to_string();
+        self.install_compiled(loaded.policy, origin, &source, loaded.warning_count)
+    }
 
+    /// Stage, install over IPC, and commit an already-compiled policy. Shared
+    /// by the disk reload path ([`install`](Self::install)) and the fleet
+    /// bundle push, so a pushed bundle installs through exactly the same
+    /// fail-closed pipeline as a local reload.
+    fn install_compiled(
+        &self,
+        policy: ufw_shared::policy_types::CompiledPolicy,
+        origin: &str,
+        source_desc: &str,
+        warning_count: usize,
+    ) -> Result<String, ApiError> {
         let now = ufw_shared::now_us();
         let staged = self
             .state
-            .with_policies(|store| store.stage(loaded.policy.clone(), origin, now));
+            .with_policies(|store| store.stage(policy.clone(), origin, now));
 
         let Some(staged) = staged else {
             return Ok(ufw_daemon::management_api::simple(
@@ -1071,20 +1101,156 @@ impl Supervisor {
         });
 
         Ok(ufw_daemon::management_api::simple(&format!(
-            "revision {revision} installed from {}: {summary}{}",
-            loaded.source.display(),
-            if loaded.warning_count > 0 {
-                format!(" ({} warning(s))", loaded.warning_count)
+            "revision {revision} installed from {source_desc}: {summary}{}",
+            if warning_count > 0 {
+                format!(" ({warning_count} warning(s))")
             } else {
                 String::new()
             }
         )))
+    }
+
+    /// Authenticate a signed fleet bundle and, if this host is in the rollout,
+    /// install it through the shared pipeline. A bundle that fails
+    /// authentication, is stale, or does not compile is refused without
+    /// touching the installed policy — fail-closed, exactly like a bad reload.
+    fn install_signed_bundle(
+        &self,
+        bundle: &ufw_daemon::fleet::Bundle,
+    ) -> Result<String, ApiError> {
+        let verifier = self.state.fleet_verifier().ok_or_else(|| {
+            ApiError::bad_request("fleet is not configured; set `api.fleet_secret`")
+        })?;
+        verifier
+            .accept(bundle, self.state.active_revision())
+            .map_err(|e| match e {
+                ufw_daemon::fleet::BundleError::NotAuthentic => ApiError::forbidden(e.to_string()),
+                _ => ApiError::conflict(e.to_string()),
+            })?;
+
+        // The host compiles the bundle's source itself, so it validates what it
+        // is about to run rather than trusting the distribution point.
+        let compiled = ufw_policy_lang::compile_str(
+            "fleet-bundle",
+            &bundle.source,
+            &ufw_policy_lang::CompileOptions::default(),
+        );
+        let Some(policy) = compiled.policy.clone() else {
+            return Err(ApiError::bad_request(format!(
+                "bundle revision {} does not compile:\n{}",
+                bundle.revision,
+                compiled.render()
+            )));
+        };
+
+        // Record the rollout target and this host's canary membership.
+        let in_canary = ufw_daemon::fleet::in_canary(
+            &self.state.host_id,
+            bundle.revision,
+            bundle.canary_percent,
+        );
+        self.state.with_fleet(|f| {
+            f.set_target(bundle.revision, bundle.canary_percent);
+            f.record(&self.state.host_id, self.state.active_revision(), ufw_shared::now_us());
+        });
+
+        // A host outside the canary group holds off until the rollout widens;
+        // it has authenticated and validated the bundle, it just does not apply
+        // it yet. This is what makes a staged rollout staged.
+        if !in_canary {
+            return Ok(ufw_daemon::management_api::simple(&format!(
+                "bundle revision {} authenticated; this host is not in the {}% canary, holding at \
+                 revision {}",
+                bundle.revision,
+                bundle.canary_percent,
+                self.state.active_revision()
+            )));
+        }
+
+        let origin = format!("fleet bundle revision {}", bundle.revision);
+        self.install_compiled(policy, &origin, &origin, compiled.diagnostics.warning_count())
     }
 }
 
 impl ControlPlane for Supervisor {
     fn reload_policy(&self) -> Result<String, ApiError> {
         self.install("policy directory")
+    }
+
+    fn install_bundle(&self, bundle: &ufw_daemon::fleet::Bundle) -> Result<String, ApiError> {
+        self.install_signed_bundle(bundle)
+    }
+
+    fn distribute_bundle(
+        &self,
+        members: &[String],
+        bundle: &ufw_daemon::fleet::Bundle,
+    ) -> Result<String, ApiError> {
+        let verifier = self.state.fleet_verifier().ok_or_else(|| {
+            ApiError::bad_request("fleet is not configured; set `api.fleet_secret`")
+        })?;
+        // Sign here, once, and reuse the same bearer token the operator gave
+        // the local API to authenticate to each member's.
+        let poster = ufw_daemon::fleet_client::HttpPoster {
+            auth_token: self.config.api.auth_token.clone(),
+            timeout: self.timeout(),
+        };
+        let results =
+            ufw_daemon::fleet_client::distribute(&verifier, bundle.clone(), members, &poster);
+        Ok(ufw_daemon::fleet_client::results_json(
+            bundle.revision,
+            &results,
+        ))
+    }
+
+    fn reload_signatures(&self) -> Result<String, ApiError> {
+        // Reload the whole set from disk. A malformed file is logged and
+        // skipped, never fatal — the same posture as startup, because one bad
+        // entry in a threat-intel drop must not disarm inspection entirely.
+        let (set, problems) = signatures::load_dir(&self.config.policy.signature_dir);
+        for problem in &problems {
+            self.state.logs.note(
+                &self.config.daemon.host_id,
+                Severity::Error,
+                EventKind::SystemFault,
+                format!("signature: {problem}"),
+            );
+        }
+
+        let count = set.len();
+        let patterns = set.patterns().len();
+
+        // Fail-closed ordering: install into the kernel *before* swapping the
+        // in-memory set, so a set the module rejects leaves the previously
+        // installed one resident in both the kernel and the daemon — exactly
+        // as a failed policy reload keeps the previous policy.
+        if let Some(channel) = self.state.channel() {
+            if self.state.kernel().capabilities.has(Capabilities::DPI) {
+                let payload = set.encode();
+                channel
+                    .install_signatures(&payload, self.timeout())
+                    .map_err(|e| {
+                        ApiError::internal(format!(
+                            "signature reload rejected by the module: {e}"
+                        ))
+                    })?;
+            }
+        }
+
+        let skipped = if problems.is_empty() {
+            String::new()
+        } else {
+            format!(", {} skipped", problems.len())
+        };
+        match self.state.refresh_signatures(set) {
+            None => Ok(ufw_daemon::management_api::simple(
+                "signatures unchanged; nothing to reload",
+            )),
+            Some(revision) => Ok(ufw_daemon::management_api::simple(&format!(
+                "signatures reloaded: revision {revision}, {count} signature(s), \
+                 {patterns} pattern(s){skipped}"
+            ))),
+        }
     }
 
     fn validate_policy(&self) -> Result<String, ApiError> {

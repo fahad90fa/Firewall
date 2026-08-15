@@ -749,6 +749,20 @@ fn nft_rule(policy: &CompiledPolicy, r: &CompiledRule, chain_dir: Direction) -> 
         if let Some(log) = log {
             parts.push(log);
         }
+        // A rate limit lowers to nft's native `limit` statement: the rule
+        // matches — and accepts — up to the rate, and excess *new* connections
+        // fail the match and fall through to the default deny. That is exactly
+        // SYN-flood and brute-force dampening, enforced in the kernel's own
+        // conntrack path with no module involvement.
+        if let Some(rl) = &r.rate_limit {
+            if matches!(r.effective_action(), Action::Allow | Action::AllowInspect) {
+                let mut limit = format!("ct state new limit rate {}/{}", rl.rate, rl.per.as_nft());
+                if rl.burst > 0 {
+                    let _ = write!(limit, " burst {} packets", rl.burst);
+                }
+                parts.push(limit);
+            }
+        }
         if let Some(v) = verdict {
             parts.push(v.to_string());
         }
@@ -1229,6 +1243,36 @@ mod tests {
             .unwrap()
             .contents
             .clone()
+    }
+
+    #[test]
+    fn a_rate_limited_allow_emits_a_native_nft_limit_statement() {
+        let mut r = header_rule(1, "ssh-in", 10, Direction::Inbound);
+        r.action = Action::Allow;
+        r.rate_limit = Some(RateLimit {
+            rate: 20,
+            per: RatePer::Minute,
+            burst: 5,
+        });
+        let nft = nft_artifact(&build(vec![r]));
+        assert!(
+            nft.contains("ct state new limit rate 20/minute burst 5 packets accept"),
+            "{nft}"
+        );
+    }
+
+    #[test]
+    fn a_rate_limit_with_no_burst_omits_the_burst_clause() {
+        let mut r = header_rule(1, "web-in", 10, Direction::Inbound);
+        r.action = Action::Allow;
+        r.rate_limit = Some(RateLimit {
+            rate: 200,
+            per: RatePer::Second,
+            burst: 0,
+        });
+        let nft = nft_artifact(&build(vec![r]));
+        assert!(nft.contains("ct state new limit rate 200/second accept"), "{nft}");
+        assert!(!nft.contains("burst"), "{nft}");
     }
 
     #[test]

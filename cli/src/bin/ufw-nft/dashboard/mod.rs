@@ -11,6 +11,7 @@
 
 mod attacks;
 mod events;
+mod exposure;
 mod network;
 mod ports;
 mod ruleset;
@@ -134,6 +135,7 @@ fn respond(stream: &mut TcpStream, code: u16, ctype: &str, body: &str) -> std::i
 /// endpoint down.
 fn state_json() -> String {
     let rs = ruleset::load();
+    let exposure = exposure::analyze(&rs);
     let (events, mut errors) = events::collect(MAX_EVENTS);
     let attacks = attacks::classify(&events);
     let (listeners, conns, svc_errors) = services::snapshot();
@@ -280,6 +282,31 @@ fn state_json() -> String {
         w.end_object();
     }
     w.end_array();
+
+    // --- exposure (inbound attack surface) --------------------------------
+    w.begin_object_field("exposure");
+    w.str_field("grade", &exposure.grade);
+    w.u64_field("score", exposure.score as u64);
+    w.u64_field("open_world", exposure.open_world as u64);
+    w.u64_field("scoped", exposure.scoped as u64);
+    w.begin_array_field("findings");
+    for f in &exposure.findings {
+        w.begin_object();
+        w.str_field("severity", &f.severity);
+        match f.port {
+            Some(p) => w.u64_field("port", p as u64),
+            None => w.null_field("port"),
+        }
+        w.str_field("service", &f.service);
+        w.str_field("scope", &f.scope);
+        w.str_field("title", &f.title);
+        w.str_field("detail", &f.detail);
+        w.str_field("rule", &f.rule);
+        w.u64_field("packets", f.packets);
+        w.end_object();
+    }
+    w.end_array();
+    w.end_object();
 
     // --- host surface -----------------------------------------------------
     w.begin_array_field("listeners");

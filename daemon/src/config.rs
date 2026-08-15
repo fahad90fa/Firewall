@@ -466,6 +466,10 @@ pub struct LoggingConfig {
     pub correlation: bool,
     pub correlation_window_secs: u64,
     pub correlation_threshold: usize,
+    /// Enable the egress-baseline anomaly detector.
+    pub anomaly: bool,
+    /// How long an identity is observed before its baseline is trusted.
+    pub anomaly_learning_secs: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -545,6 +549,11 @@ pub struct ApiConfig {
     /// Bearer token required by the network-facing APIs. Absent means those
     /// APIs refuse to start on a non-loopback address.
     pub auth_token: Option<String>,
+    /// Shared secret that authenticates fleet policy bundles (HMAC-SHA256).
+    /// Absent means the fleet control surface is disabled. Distinct from
+    /// `auth_token`: that gates *reaching* the API, this gates *trusting a
+    /// bundle*, and they belong to different parties.
+    pub fleet_secret: Option<String>,
     pub max_body_bytes: usize,
     /// Serve the network-facing APIs without TLS.
     ///
@@ -613,6 +622,8 @@ impl Default for Config {
                 correlation: true,
                 correlation_window_secs: 300,
                 correlation_threshold: 3,
+                anomaly: true,
+                anomaly_learning_secs: 3600,
             },
             api: ApiConfig {
                 cli_socket: PathBuf::from(constants::DEFAULT_CLI_SOCKET_UNIX),
@@ -620,6 +631,7 @@ impl Default for Config {
                 grpc_bind: None,
                 allow_from: Vec::new(),
                 auth_token: None,
+                fleet_secret: None,
                 max_body_bytes: constants::MAX_API_BODY,
                 allow_plaintext: false,
                 tls: crate::tls::TlsConfig::default(),
@@ -668,6 +680,8 @@ const KNOWN_KEYS: &[&str] = &[
     "logging.correlation",
     "logging.correlation_window_secs",
     "logging.correlation_threshold",
+    "logging.anomaly",
+    "logging.anomaly_learning_secs",
     "logging.file.enabled",
     "logging.file.path",
     "logging.file.max_bytes",
@@ -688,6 +702,7 @@ const KNOWN_KEYS: &[&str] = &[
     "api.grpc_bind",
     "api.allow_from",
     "api.auth_token",
+    "api.fleet_secret",
     "api.max_body_bytes",
     "api.tls_cert",
     "api.tls_key",
@@ -826,6 +841,12 @@ impl Config {
         if let Some(v) = doc.u64("logging.correlation_window_secs")? {
             c.logging.correlation_window_secs = v.max(1);
         }
+        if let Some(v) = doc.bool("logging.anomaly")? {
+            c.logging.anomaly = v;
+        }
+        if let Some(v) = doc.u64("logging.anomaly_learning_secs")? {
+            c.logging.anomaly_learning_secs = v.max(60);
+        }
         if let Some(v) = doc.u64("logging.correlation_threshold")? {
             c.logging.correlation_threshold = (v as usize).max(2);
         }
@@ -901,6 +922,7 @@ impl Config {
                 })?);
         }
         c.api.auth_token = doc.string("api.auth_token")?;
+        c.api.fleet_secret = doc.string("api.fleet_secret")?;
         c.api.tls.cert_path = doc.string("api.tls_cert")?.map(PathBuf::from);
         c.api.tls.key_path = doc.string("api.tls_key")?.map(PathBuf::from);
         c.api.tls.client_ca_path = doc.string("api.tls_client_ca")?.map(PathBuf::from);
@@ -1007,6 +1029,15 @@ impl Config {
                     0,
                     "`api.auth_token` must be at least 32 characters; it is the only thing \
                      standing between the network and policy write access",
+                );
+            }
+        }
+        if let Some(secret) = &self.api.fleet_secret {
+            if secret.len() < 32 {
+                return err(
+                    0,
+                    "`api.fleet_secret` must be at least 32 characters; it authenticates \
+                     every policy bundle the fleet installs",
                 );
             }
         }

@@ -188,6 +188,7 @@ pub mod codes {
     /// `--deny-warnings` reject every policy that inspects payload at all,
     /// which teaches operators to turn the flag off.
     pub const DPI_BUFFER_BUDGET: &str = "N0404";
+    pub const RATE_LIMIT_PLATFORM: &str = "N0405";
 }
 
 /// One diagnostic.

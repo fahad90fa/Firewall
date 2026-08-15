@@ -104,6 +104,8 @@ fn logging_config() -> LoggingConfig {
         correlation: true,
         correlation_window_secs: 300,
         correlation_threshold: 3,
+        anomaly: false,
+        anomaly_learning_secs: 3600,
     }
 }
 
@@ -162,6 +164,32 @@ impl TestSupervisor {
 impl ControlPlane for TestSupervisor {
     fn reload_policy(&self) -> Result<String, ApiError> {
         self.install("watcher")
+    }
+    fn reload_signatures(&self) -> Result<String, ApiError> {
+        // The harness ships no signature directory; refreshing with the
+        // resident set exercises the no-op path (identical digest).
+        match self
+            .state
+            .refresh_signatures((*self.state.signatures()).clone())
+        {
+            None => Ok("signatures unchanged".into()),
+            Some(revision) => Ok(format!("signatures reloaded: revision {revision}")),
+        }
+    }
+    fn install_bundle(&self, bundle: &ufw_daemon::fleet::Bundle) -> Result<String, ApiError> {
+        // No fleet verifier in the harness; report the revision offered.
+        Ok(format!("bundle revision {} received", bundle.revision))
+    }
+    fn distribute_bundle(
+        &self,
+        members: &[String],
+        bundle: &ufw_daemon::fleet::Bundle,
+    ) -> Result<String, ApiError> {
+        Ok(format!(
+            "distributed revision {} to {} member(s)",
+            bundle.revision,
+            members.len()
+        ))
     }
     fn validate_policy(&self) -> Result<String, ApiError> {
         policy_loader::load(&self.policy)

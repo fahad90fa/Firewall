@@ -238,6 +238,7 @@ pub fn route(request: &HttpRequest) -> Result<Request, ApiError> {
         ("GET", "/v1/revisions") => Ok(Request::ListRevisions),
         ("GET", "/v1/trust") => Ok(Request::ListTrust),
         ("GET", "/v1/signatures") => Ok(Request::ListSignatures),
+        ("GET", "/v1/fleet") => Ok(Request::FleetStatus),
         ("GET", p) if p.starts_with("/v1/rules/") => Ok(Request::GetRule {
             key: percent_decode(&p["/v1/rules/".len()..]),
         }),
@@ -246,6 +247,11 @@ pub fn route(request: &HttpRequest) -> Result<Request, ApiError> {
         ("POST", "/v1/policy/diff") => Ok(Request::DiffPolicy),
         ("POST", "/v1/policy/flush") => Ok(Request::FlushPolicy),
         ("POST", "/v1/policy/rollback") => parse_body(&request.body),
+        ("POST", "/v1/signatures/reload") => Ok(Request::ReloadSignatures),
+        ("POST", "/v1/fleet/enroll") => parse_body(&request.body),
+        ("POST", "/v1/fleet/verify") => parse_body(&request.body),
+        ("POST", "/v1/fleet/push") => parse_body(&request.body),
+        ("POST", "/v1/fleet/distribute") => parse_body(&request.body),
         ("POST", "/v1/mode") => parse_body(&request.body),
         ("POST", "/v1/identity/resolve") => parse_body(&request.body),
         ("POST", "/v1/shutdown") => Ok(Request::Shutdown),
@@ -549,6 +555,7 @@ mod tests {
             grpc_bind: None,
             allow_from: Vec::new(),
             auth_token: None,
+            fleet_secret: None,
             max_body_bytes: 64 * 1024,
             cors_origins: Vec::new(),
         }

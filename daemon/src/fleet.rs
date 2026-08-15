@@ -43,7 +43,7 @@
 //! by construction: connections that were established under the old rules
 //! close and retry under the new ones.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::time::Duration;
 
 use ufw_shared::hash;
@@ -214,6 +214,89 @@ pub fn in_canary(host_id: &str, revision: u64, percent: u8) -> bool {
     let digest = hash::sha256(&input);
     let bucket = u16::from_le_bytes([digest[0], digest[1]]) % 100;
     bucket < percent as u16
+}
+
+/// A fleet member's last-known state, as this control point sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FleetMember {
+    pub host_id: String,
+    /// The revision the member last reported running.
+    pub revision: u64,
+    /// Whether the member is a canary for the current target rollout.
+    pub in_canary: bool,
+    pub last_seen_us: u64,
+}
+
+/// An in-memory roster of the hosts a control point has heard from.
+///
+/// This is the single-process model of a fleet: a daemon acting as the
+/// distribution point holds the members that have checked in, the revision each
+/// reports, and whether each is a canary for the current rollout. A genuine
+/// cross-host deployment adds a transport on top — but the trust decisions
+/// (authenticate a bundle with [`Verifier`], place a host in a canary with
+/// [`in_canary`]) are the same either way and already live in this module. The
+/// registry is what makes them reachable: enumerate members, set a rollout
+/// target, and report convergence.
+#[derive(Debug, Clone, Default)]
+pub struct FleetRegistry {
+    members: BTreeMap<String, FleetMember>,
+    target_revision: u64,
+    target_canary_percent: u8,
+}
+
+impl FleetRegistry {
+    /// Record a member's heartbeat, recomputing its canary membership against
+    /// the current target.
+    pub fn record(&mut self, host_id: &str, revision: u64, now_us: u64) {
+        let in_canary = self.target_revision != 0
+            && in_canary(host_id, self.target_revision, self.target_canary_percent);
+        self.members.insert(
+            host_id.to_string(),
+            FleetMember {
+                host_id: host_id.to_string(),
+                revision,
+                in_canary,
+                last_seen_us: now_us,
+            },
+        );
+    }
+
+    /// Set the rollout the control point is currently distributing.
+    pub fn set_target(&mut self, revision: u64, canary_percent: u8) {
+        self.target_revision = revision;
+        self.target_canary_percent = canary_percent;
+    }
+
+    pub fn target_revision(&self) -> u64 {
+        self.target_revision
+    }
+
+    pub fn target_canary_percent(&self) -> u8 {
+        self.target_canary_percent
+    }
+
+    pub fn len(&self) -> usize {
+        self.members.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.members.is_empty()
+    }
+
+    pub fn members(&self) -> impl Iterator<Item = &FleetMember> {
+        self.members.values()
+    }
+
+    /// Members reporting the target revision or newer — the rollout's progress.
+    pub fn converged(&self) -> usize {
+        if self.target_revision == 0 {
+            return 0;
+        }
+        self.members
+            .values()
+            .filter(|m| m.revision >= self.target_revision)
+            .count()
+    }
 }
 
 /// What a rollback decision is made from.
@@ -614,5 +697,34 @@ mod tests {
         }
         assert_eq!(m.previous(), Some(998));
         assert!(m.history.len() <= 16);
+    }
+
+    #[test]
+    fn the_registry_records_members_and_reports_convergence() {
+        let mut reg = FleetRegistry::default();
+        reg.set_target(7, 100);
+        reg.record("host-a", 7, 1000);
+        reg.record("host-b", 6, 1001); // still on the old revision
+        reg.record("host-a", 7, 2000); // a second heartbeat updates, not dupes
+
+        assert_eq!(reg.len(), 2);
+        assert_eq!(reg.converged(), 1, "only host-a reports the target");
+        let a = reg.members().find(|m| m.host_id == "host-a").unwrap();
+        assert_eq!(a.last_seen_us, 2000);
+        assert!(a.in_canary, "a 100% canary includes everyone");
+    }
+
+    #[test]
+    fn canary_membership_is_recomputed_against_the_target() {
+        let mut reg = FleetRegistry::default();
+        // No target set yet: nobody is a canary.
+        reg.record("host-a", 1, 10);
+        assert!(!reg.members().next().unwrap().in_canary);
+
+        // A 0% canary excludes everyone; a member re-recorded reflects it.
+        reg.set_target(3, 0);
+        reg.record("host-a", 1, 20);
+        assert!(!reg.members().next().unwrap().in_canary);
+        assert_eq!(reg.converged(), 0);
     }
 }

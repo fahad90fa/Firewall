@@ -19,6 +19,7 @@ use ufw_shared::json::JsonWriter;
 use ufw_shared::policy_types::CompiledPolicy;
 use ufw_shared::protocol::{Capabilities, EnforcementMode, KernelStats};
 
+use crate::fleet::{FleetRegistry, Verifier};
 use crate::identity::IdentityService;
 use crate::logging::LogHandle;
 use crate::policy_store::PolicyStore;
@@ -122,6 +123,20 @@ pub struct DaemonState {
     /// because signatures outlive any one policy revision: a threat-intel
     /// update replaces these without touching the installed rules.
     signatures: RwLock<Arc<SignatureSet>>,
+    /// Monotonic version of the loaded signature set. 0 means none loaded yet;
+    /// startup sets it to 1, and each *changed* runtime refresh bumps it.
+    signature_revision: AtomicU64,
+    /// Content digest of the loaded set, so a refresh that changes nothing is
+    /// recognised as a no-op rather than a churned revision.
+    signature_digest: RwLock<[u8; 32]>,
+    signature_loaded_at_us: AtomicU64,
+
+    /// Fleet control state. Present only when a fleet secret is configured;
+    /// the registry is the in-memory roster of members that have checked in,
+    /// and the verifier authenticates pushed bundles. Lazily initialised so
+    /// the common single-host daemon pays nothing for it.
+    fleet: Mutex<FleetRegistry>,
+    fleet_verifier: RwLock<Option<Verifier>>,
 
     shutdown: AtomicBool,
     policy_reloads: AtomicU64,
@@ -161,6 +176,11 @@ impl DaemonState {
             identity,
             logs,
             signatures: RwLock::new(Arc::new(SignatureSet::default())),
+            signature_revision: AtomicU64::new(0),
+            signature_digest: RwLock::new([0u8; 32]),
+            signature_loaded_at_us: AtomicU64::new(0),
+            fleet: Mutex::new(FleetRegistry::default()),
+            fleet_verifier: RwLock::new(None),
             shutdown: AtomicBool::new(false),
             policy_reloads: AtomicU64::new(0),
             failed_reloads: AtomicU64::new(0),
@@ -336,8 +356,99 @@ impl DaemonState {
         Arc::clone(&self.signatures.read().unwrap())
     }
 
+    /// Install the initial signature set at startup: revision 1, digest seeded.
     pub fn set_signatures(&self, set: SignatureSet) {
+        *self.signature_digest.write().unwrap() = set.version();
         *self.signatures.write().unwrap() = Arc::new(set);
+        self.signature_revision.store(1, Ordering::SeqCst);
+        self.signature_loaded_at_us
+            .store(ufw_shared::now_us(), Ordering::Relaxed);
+    }
+
+    /// Swap in a refreshed signature set, but only if it actually differs.
+    ///
+    /// Returns the new revision when the set changed, or `None` when it was
+    /// byte-identical to the resident one — so a periodic reload of an
+    /// unchanged directory is a genuine no-op, not a churned revision and a
+    /// needless kernel reinstall. Mirrors the policy store's "stage returns
+    /// nothing when the compile is unchanged".
+    pub fn refresh_signatures(&self, set: SignatureSet) -> Option<u64> {
+        let new_digest = set.version();
+        {
+            let current = self.signature_digest.read().unwrap();
+            if *current == new_digest {
+                return None;
+            }
+        }
+        *self.signature_digest.write().unwrap() = new_digest;
+        *self.signatures.write().unwrap() = Arc::new(set);
+        let revision = self.signature_revision.fetch_add(1, Ordering::SeqCst) + 1;
+        self.signature_loaded_at_us
+            .store(ufw_shared::now_us(), Ordering::Relaxed);
+        Some(revision)
+    }
+
+    pub fn signature_revision(&self) -> u64 {
+        self.signature_revision.load(Ordering::SeqCst)
+    }
+
+    pub fn signature_loaded_at_us(&self) -> u64 {
+        self.signature_loaded_at_us.load(Ordering::Relaxed)
+    }
+
+    /// Hex of the loaded set's content digest, for status and diagnostics.
+    pub fn signature_digest_hex(&self) -> String {
+        ufw_shared::hash::hex(&*self.signature_digest.read().unwrap())
+    }
+
+    // --- fleet ----------------------------------------------------------
+
+    /// Install the bundle verifier built from the configured fleet secret.
+    /// Its presence is what enables the fleet control surface.
+    pub fn set_fleet_verifier(&self, verifier: Verifier) {
+        *self.fleet_verifier.write().unwrap() = Some(verifier);
+    }
+
+    pub fn fleet_verifier(&self) -> Option<Verifier> {
+        self.fleet_verifier.read().unwrap().clone()
+    }
+
+    pub fn fleet_enabled(&self) -> bool {
+        self.fleet_verifier.read().unwrap().is_some()
+    }
+
+    /// Operate on the fleet registry under its lock.
+    pub fn with_fleet<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut FleetRegistry) -> R,
+    {
+        f(&mut self.fleet.lock().unwrap())
+    }
+
+    /// The fleet roster as JSON, for `fleet-status`.
+    pub fn fleet_status_json(&self) -> String {
+        let mut w = ufw_shared::json::JsonWriter::with_capacity(2048);
+        w.begin_object();
+        w.bool_field("ok", true);
+        w.bool_field("enabled", self.fleet_enabled());
+        w.str_field("host", &self.host_id);
+        let fleet = self.fleet.lock().unwrap();
+        w.u64_field("target_revision", fleet.target_revision());
+        w.u64_field("target_canary_percent", fleet.target_canary_percent() as u64);
+        w.u64_field("members", fleet.len() as u64);
+        w.u64_field("converged", fleet.converged() as u64);
+        w.begin_array_field("roster");
+        for m in fleet.members() {
+            w.begin_object();
+            w.str_field("host_id", &m.host_id);
+            w.u64_field("revision", m.revision);
+            w.bool_field("in_canary", m.in_canary);
+            w.u64_field("last_seen", m.last_seen_us);
+            w.end_object();
+        }
+        w.end_array();
+        w.end_object();
+        w.finish()
     }
 
     /// Signatures the active policy names that no loaded file defines.
@@ -437,6 +548,7 @@ impl DaemonState {
         w.u64_field("dropped_queue_full", logs.dropped_queue_full);
         w.u64_field("sink_errors", logs.sink_errors);
         w.u64_field("correlations", logs.correlations);
+        w.u64_field("anomalies", logs.anomalies);
         w.end_object();
 
         w.begin_object_field("traffic");
@@ -532,6 +644,8 @@ mod tests {
             correlation: false,
             correlation_window_secs: 300,
             correlation_threshold: 3,
+            anomaly: false,
+            anomaly_learning_secs: 3600,
         }
     }
 
@@ -710,5 +824,31 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(10));
         s.request_shutdown();
         assert!(watcher.join().unwrap());
+    }
+
+    #[test]
+    fn refreshing_signatures_bumps_on_change_and_is_a_no_op_otherwise() {
+        let (s, _l) = state();
+        // Before any load the digest is zero and the revision is 0.
+        assert_eq!(s.signature_revision(), 0);
+
+        // The first refresh registers as a change (the empty set's real digest
+        // differs from the zero seed) and lands at revision 1.
+        assert_eq!(s.refresh_signatures(SignatureSet::default()), Some(1));
+        assert_eq!(s.signature_revision(), 1);
+
+        // Reloading a byte-identical set is a genuine no-op: no swap, no bump.
+        assert_eq!(s.refresh_signatures(SignatureSet::default()), None);
+        assert_eq!(s.signature_revision(), 1);
+    }
+
+    #[test]
+    fn the_startup_load_seeds_revision_one_and_a_digest() {
+        let (s, _l) = state();
+        s.set_signatures(SignatureSet::default());
+        assert_eq!(s.signature_revision(), 1);
+        assert_ne!(s.signature_digest_hex(), "0".repeat(64));
+        // A subsequent reload of the same set is then correctly a no-op.
+        assert_eq!(s.refresh_signatures(SignatureSet::default()), None);
     }
 }

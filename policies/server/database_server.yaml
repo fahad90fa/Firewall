@@ -1,0 +1,232 @@
+# Database server.
+#
+# The web server's policy is about surviving its own exposure; a database
+# server's is about never being exposed in the first place. It holds the data
+# every other tier is protecting, and it should be reachable by exactly one
+# set of peers — the application servers — on exactly one port. Everything
+# about this file is narrower than the web server's, and that narrowness is
+# the control.
+#
+# Two things worth stating plainly:
+#
+#   1. Inbound is source-scoped, not just port-scoped. `allow-postgres-inbound`
+#      names *who* may connect (the application tier) as well as *where* (5432).
+#      An attacker who reaches this network segment but is not in the
+#      application tier gets the same answer as one on the public internet.
+#
+#   2. The inbound permit is a terminal `allow`, not `allow-inspect`, and the
+#      comment says why: there is no protocol decoder for the PostgreSQL wire
+#      format in this build, so there is nothing for a stream stage to inspect.
+#      Claiming inspection we cannot perform would be worse than admitting we
+#      do L3/L4 admission control here and mean it. The protection on this box
+#      is segmentation; DPI belongs where a decoder exists (HTTP, DNS, TLS).
+#
+# The egress posture is the strictest in the repository: a database server
+# resolves names, sets its clock, and streams backups to one destination. It
+# has no reason to originate a connection to anywhere else, and if it does, the
+# default denies it.
+
+version: 1
+
+metadata:
+  name: database-server
+  description: "A data-tier host: one inbound service, source-scoped to the app tier, near-zero egress"
+  revision: 1
+  author: security-engineering
+
+defaults:
+  action: deny
+  log: true
+  priority: 1000
+  stateful: true
+
+address_groups:
+  loopback: [127.0.0.0/8, ::1/128]
+  rfc1918: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+  link_local: [169.254.0.0/16, fe80::/10]
+  management: [10.20.0.0/24]
+  # The only peers permitted to open a database connection. This is the
+  # application tier and nothing else — not the whole subnet, not "internal".
+  app_tier: [10.30.0.0/24]
+  # Where backups go. One destination, on the internal backup network.
+  backup_target: [10.10.9.10/32]
+  resolvers: [10.10.0.53/32, 10.10.1.53/32]
+  time_servers: [10.10.0.123/32]
+
+port_groups:
+  postgres: [5432]
+  ssh: [22]
+  dns: [53]
+  ntp: [123]
+  backup: [443]
+  lateral:
+    - 135
+    - 137-139
+    - 445
+    - 3389
+    - 5985-5986
+    - 5900-5910
+
+applications:
+  system_resolver:
+    trust: [system]
+    platforms:
+      linux:
+        paths: [/usr/lib/systemd/systemd-resolved, /usr/sbin/nscd]
+      macos:
+        path: /usr/libexec/mDNSResponder
+      windows:
+        path: "C:\\Windows\\System32\\svchost.exe"
+        signer: "Microsoft Windows"
+
+  system_time:
+    trust: [system]
+    platforms:
+      linux:
+        paths: [/usr/lib/systemd/systemd-timesyncd, /usr/sbin/chronyd]
+      macos:
+        path: /usr/libexec/timed
+      windows:
+        path: "C:\\Windows\\System32\\svchost.exe"
+        signer: "Microsoft Windows"
+
+  backup_agent:
+    description: "The backup process, the only thing allowed to stream data out"
+    trust: [">= trusted"]
+    require_valid_signature: true
+    platforms:
+      linux:
+        paths: [/opt/backup/bin/backupd]
+      macos:
+        bundle_id: com.contoso.backup
+        team_id: ABCDE12345
+      windows:
+        path: "C:\\Program Files\\Contoso\\Backup\\backupd.exe"
+        signer: "Contoso Ltd"
+
+signature_groups:
+  lateral_movement:
+    - smb-exec-service-install
+    - wmi-remote-process-create
+
+network_profile:
+  internal: [rfc1918]
+  gateways: [10.0.0.1]
+  dns_servers: [10.10.0.53, 10.10.1.53]
+  perimeter_crossing_requires_dpi: true
+
+rules:
+  # --- Local plumbing -----------------------------------------------------
+  - id: allow-loopback
+    priority: 10
+    layer: packet
+    action: allow
+    destination:
+      addresses: [loopback]
+
+  - id: allow-neighbour-discovery
+    priority: 20
+    layer: packet
+    action: allow
+    protocol: icmpv6
+    destination:
+      addresses: [link_local]
+
+  # --- Lateral movement, denied first -------------------------------------
+  - id: deny-lateral-egress-tcp
+    priority: 30
+    layer: packet
+    action: deny
+    protocol: tcp
+    destination:
+      ports: lateral
+    tags: [hardening, server]
+
+  - id: deny-lateral-egress-udp
+    priority: 31
+    layer: packet
+    action: deny
+    protocol: udp
+    destination:
+      ports: lateral
+    tags: [hardening, server]
+
+  # --- The one service, source-scoped to the application tier -------------
+  #
+  # Terminal `allow`: the peer set is the control, and there is no PostgreSQL
+  # decoder to inspect the stream even if we wanted to. A connection from
+  # anywhere outside `app_tier` never reaches this rule and falls to the
+  # default deny.
+  - id: allow-postgres-inbound
+    description: "PostgreSQL, only from the application tier"
+    priority: 100
+    layer: packet
+    direction: inbound
+    action: allow
+    protocol: tcp
+    source:
+      addresses: [app_tier]
+    destination:
+      ports: postgres
+    tags: [server, exposed]
+
+  - id: allow-ssh-admin
+    description: "SSH, only from the management network"
+    priority: 110
+    layer: packet
+    direction: inbound
+    action: allow
+    protocol: tcp
+    source:
+      addresses: [management]
+    destination:
+      ports: ssh
+    tags: [server, admin]
+
+  # --- Egress: resolve, keep time, back up. Nothing else. -----------------
+  - id: resolver-dns
+    priority: 200
+    direction: outbound
+    action: allow
+    protocol: udp
+    application: system_resolver
+    destination:
+      addresses: [resolvers]
+      ports: dns
+
+  - id: time-sync
+    priority: 210
+    direction: outbound
+    action: allow
+    protocol: udp
+    application: system_time
+    destination:
+      addresses: [time_servers]
+      ports: ntp
+
+  - id: database-backup
+    description: "The backup agent streaming to the one backup destination"
+    priority: 220
+    direction: outbound
+    action: allow
+    protocol: tcp
+    application: backup_agent
+    destination:
+      addresses: [backup_target]
+      ports: backup
+
+  # --- Defense in depth ---------------------------------------------------
+  #
+  # If a lateral-movement flow ever forms over an HTTP-shaped channel — a
+  # compromised admin tool, say — the IPS denies it. On a database server this
+  # should never fire; that it exists is the point of defense in depth.
+  - id: lateral-movement-ips
+    priority: 300
+    layer: stream
+    action: allow
+    protocol: tcp
+    dpi:
+      signatures: [lateral_movement]
+      protocols: [http]
+      on_match: deny
+    tags: [ips]

@@ -465,6 +465,7 @@ impl Analyzer {
         let layer = self.resolve_layer(rule, defaults, app_variants[0].1.is_some(), dpi.is_some());
 
         let schedule = rule.schedule.as_ref().and_then(|s| self.lower_schedule(s));
+        let rate_limit = self.lower_rate_limit(rule, action);
 
         let log = rule
             .log
@@ -544,12 +545,102 @@ impl Analyzer {
                 stateful,
                 ebpf_eligible: false,
                 tags: tags.clone(),
+                rate_limit,
             };
 
             self.apply_perimeter_upgrade(&mut compiled, profile, rule.span);
             out.push(compiled);
         }
         out
+    }
+
+    /// Lower and validate a `rate_limit:` block. Returns `None` (with a
+    /// diagnostic) when the rule cannot carry one, so a broken rate limit is a
+    /// build error rather than a silently dropped control.
+    fn lower_rate_limit(&mut self, rule: &ast::Rule, action: Action) -> Option<RateLimit> {
+        let rl = rule.rate_limit.as_ref()?;
+
+        // A rate limit throttles a permit; on a deny it is meaningless (the
+        // packet is already dropped), and silently accepting it would hide a
+        // policy the author got wrong.
+        if !matches!(action, Action::Allow | Action::AllowInspect) {
+            self.diags.push(
+                Diagnostic::error(
+                    codes::BAD_LITERAL,
+                    rl.span,
+                    "`rate_limit:` applies only to `allow` and `allow-inspect` rules",
+                )
+                .with_help("a rate limit throttles permitted traffic; a deny has nothing to throttle"),
+            );
+            return None;
+        }
+
+        let Some(rate) = rl
+            .rate
+            .as_ref()
+            .and_then(|r| self.parse_u32(r, 1_000_000, "rate_limit.rate"))
+        else {
+            if rl.rate.is_none() {
+                self.diags.push(Diagnostic::error(
+                    codes::MISSING_FIELD,
+                    rl.span,
+                    "`rate_limit:` needs a `rate:` (connections per unit)",
+                ));
+            }
+            return None;
+        };
+        if rate == 0 {
+            self.diags.push(Diagnostic::error(
+                codes::BAD_LITERAL,
+                rl.rate.as_ref().map(|r| r.span).unwrap_or(rl.span),
+                "`rate_limit.rate` must be at least 1",
+            ));
+            return None;
+        }
+
+        let per = match &rl.per {
+            Some(p) => match RatePer::parse(&p.value) {
+                Some(v) => v,
+                None => {
+                    self.diags.push(
+                        Diagnostic::error(
+                            codes::UNKNOWN_ENUM,
+                            p.span,
+                            format!("`{}` is not a rate unit", p.value),
+                        )
+                        .with_help("use `second`, `minute` or `hour`"),
+                    );
+                    return None;
+                }
+            },
+            None => RatePer::Second,
+        };
+
+        let burst = rl
+            .burst
+            .as_ref()
+            .and_then(|b| self.parse_u32(b, 1_000_000, "rate_limit.burst"))
+            .unwrap_or(0);
+
+        // Honest about the capability gap: nftables enforces this on Linux; the
+        // WFP and Network Extension backends do not yet, so the rule permits at
+        // the same verdict on all three — it is only throttled on Linux.
+        let name = rule
+            .id
+            .as_ref()
+            .map(|i| i.value.as_str())
+            .unwrap_or("this rule");
+        self.note(
+            codes::RATE_LIMIT_PLATFORM,
+            rl.span,
+            format!(
+                "`{name}` caps new connections at {rate}/{} (burst {burst}); enforced on Linux \
+                 via nftables, not yet on Windows or macOS",
+                per.as_nft()
+            ),
+        );
+
+        Some(RateLimit { rate, per, burst })
     }
 
     /// Defense Layer 1: when the profile says perimeter crossings must be
@@ -1584,6 +1675,56 @@ mod tests {
     #[test]
     fn missing_version_is_an_error() {
         assert!(diags_of("rules:\n  - id: a\n    action: allow\n").has_code(codes::MISSING_FIELD));
+    }
+
+    #[test]
+    fn a_valid_rate_limit_lowers_onto_the_rule() {
+        let p = compile_ok(&format!(
+            "{BASE}rules:\n  - id: a\n    action: allow\n    protocol: tcp\n    \
+             destination:\n      ports: [22]\n    rate_limit:\n      rate: 50\n      \
+             per: second\n      burst: 100\n"
+        ));
+        let rl = p.rules[0].rate_limit.expect("the rate limit lowered onto the rule");
+        assert_eq!(rl.rate, 50);
+        assert_eq!(rl.per, RatePer::Second);
+        assert_eq!(rl.burst, 100);
+    }
+
+    #[test]
+    fn a_rate_limit_on_a_deny_is_rejected() {
+        let d = diags_of(&format!(
+            "{BASE}rules:\n  - id: a\n    action: deny\n    protocol: tcp\n    \
+             rate_limit:\n      rate: 50\n      per: second\n"
+        ));
+        assert!(d.has_errors(), "a rate limit on a deny has nothing to throttle");
+    }
+
+    #[test]
+    fn a_rate_limit_without_a_rate_is_rejected() {
+        let d = diags_of(&format!(
+            "{BASE}rules:\n  - id: a\n    action: allow\n    rate_limit:\n      per: second\n"
+        ));
+        assert!(d.has_errors());
+    }
+
+    #[test]
+    fn a_rate_limit_defaults_per_to_second_and_burst_to_zero() {
+        let p = compile_ok(&format!(
+            "{BASE}rules:\n  - id: a\n    action: allow\n    rate_limit:\n      rate: 5\n"
+        ));
+        let rl = p.rules[0].rate_limit.unwrap();
+        assert_eq!(rl.per, RatePer::Second);
+        assert_eq!(rl.burst, 0);
+    }
+
+    #[test]
+    fn a_rate_limit_does_not_change_the_verdict() {
+        // Equivalence rests on this: a rate limit is metadata on an allow, not
+        // a new decision, so the compiled action is unchanged.
+        let p = compile_ok(&format!(
+            "{BASE}rules:\n  - id: a\n    action: allow\n    rate_limit:\n      rate: 5\n"
+        ));
+        assert_eq!(p.rules[0].action, Action::Allow);
     }
 
     #[test]
