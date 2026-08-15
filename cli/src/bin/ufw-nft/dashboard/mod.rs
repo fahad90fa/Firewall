@@ -204,6 +204,7 @@ fn state_json() -> String {
             w.u64_field("packets", r.packets);
             w.u64_field("bytes", r.bytes);
             w.opt_str_field("why", descriptions.get(r.name.as_str()).copied());
+            w.opt_str_field("rate_limit", r.rate_limit.as_deref());
             w.begin_array_field("services");
             let mut seen = std::collections::BTreeSet::new();
             for p in &r.dports {
