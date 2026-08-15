@@ -347,6 +347,104 @@
     .attacks { grid-template-columns: 1fr; } .posture .pt { display: none; }
   }
   @media (max-width: 400px) { .kpis { grid-template-columns: 1fr; } }
+  /* ============================================================
+     Futuristic 3D layer — depth, glass, neon, and the defense core.
+     Everything below is additive and token-driven, so it adapts to
+     light and dark and never fights the existing 2D layout.
+     ============================================================ */
+
+  /* A parallax depth field behind the whole console: a receding grid
+     plus a slow aurora, both pinned and non-interactive. */
+  body::before {
+    content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background:
+      radial-gradient(1200px 600px at 15% -10%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 60%),
+      radial-gradient(1000px 700px at 110% 20%, color-mix(in srgb, #7a3ff0 18%, transparent), transparent 55%);
+    opacity: .55; animation: auroraShift 24s ease-in-out infinite alternate;
+  }
+  body::after {
+    content: ""; position: fixed; inset: -2px; z-index: 0; pointer-events: none;
+    background-image:
+      linear-gradient(color-mix(in srgb, var(--accent) 9%, transparent) 1px, transparent 1px),
+      linear-gradient(90deg, color-mix(in srgb, var(--accent) 9%, transparent) 1px, transparent 1px);
+    background-size: 46px 46px; mask-image: linear-gradient(to bottom, transparent, #000 40%, #000 60%, transparent);
+    transform: perspective(600px) rotateX(62deg) translateY(24%) scale(2.2); transform-origin: center 40%;
+    opacity: .35; animation: gridDrift 18s linear infinite;
+  }
+  .app, header, nav.side { position: relative; z-index: 1; }
+  @keyframes auroraShift { from { transform: translate3d(0,0,0);} to { transform: translate3d(-3%,2%,0);} }
+  @keyframes gridDrift { from { background-position: 0 0; } to { background-position: 0 46px; } }
+
+  /* Glass + inner glow on the panels, and a 3D-ready transform context. */
+  .card, .kpi, .attack, .grade, .exp-stat {
+    backdrop-filter: blur(9px) saturate(1.15);
+    background: color-mix(in srgb, var(--surface) 82%, transparent);
+    transform-style: preserve-3d; will-change: transform;
+    transition: transform .25s cubic-bezier(.2,.7,.2,1), box-shadow .25s, border-color .25s;
+  }
+  .kpi::after, .card::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 18%, transparent);
+  }
+  /* Mouse-tracked tilt: JS sets --rx/--ry per card. */
+  .tilt { transform: perspective(900px) rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg)) translateZ(0); }
+  .tilt:hover { box-shadow: var(--shadow-lg), 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),
+                            0 24px 60px color-mix(in srgb, var(--accent) 22%, transparent); }
+  .kpi .big { text-shadow: 0 0 22px color-mix(in srgb, currentColor 30%, transparent); }
+
+  /* ---- the defense core: a CSS-3D reactor, colour-keyed to posture ---- */
+  .hero3d { display: grid; grid-template-columns: 300px 1fr; gap: 18px; margin-top: 16px; align-items: stretch; }
+  @media (max-width: 900px) { .hero3d { grid-template-columns: 1fr; } }
+  .core-wrap {
+    position: relative; border-radius: var(--r-lg); border: 1px solid var(--border);
+    background: radial-gradient(120% 100% at 50% 0%, color-mix(in srgb, var(--accent) 12%, var(--surface)), var(--surface));
+    min-height: 260px; display: grid; place-items: center; overflow: hidden; box-shadow: var(--shadow);
+    perspective: 800px;
+  }
+  .core-scene { position: relative; width: 170px; height: 170px; transform-style: preserve-3d; animation: coreSpin 26s linear infinite; }
+  @keyframes coreSpin { to { transform: rotateY(360deg); } }
+  .ring { position: absolute; inset: 0; border-radius: 50%; border: 2px solid transparent;
+    border-top-color: var(--core-c, var(--accent)); border-bottom-color: color-mix(in srgb, var(--core-c, var(--accent)) 45%, transparent);
+    box-shadow: 0 0 18px color-mix(in srgb, var(--core-c, var(--accent)) 40%, transparent); }
+  .ring.r1 { animation: spin1 6s linear infinite; }
+  .ring.r2 { inset: 22px; transform: rotateX(64deg); animation: spin2 9s linear infinite; border-top-color: color-mix(in srgb, var(--core-c, var(--accent)) 80%, #fff); }
+  .ring.r3 { inset: 44px; transform: rotateY(60deg); animation: spin3 7s linear infinite reverse; }
+  @keyframes spin1 { to { transform: rotateZ(360deg); } }
+  @keyframes spin2 { to { transform: rotateX(64deg) rotateZ(360deg); } }
+  @keyframes spin3 { to { transform: rotateY(60deg) rotateZ(360deg); } }
+  .core-orb { position: absolute; inset: 62px; border-radius: 50%;
+    background: radial-gradient(circle at 38% 32%, #fff, var(--core-c, var(--accent)) 55%, color-mix(in srgb, var(--core-c, var(--accent)) 30%, #000));
+    box-shadow: 0 0 34px var(--core-c, var(--accent)), 0 0 80px color-mix(in srgb, var(--core-c, var(--accent)) 50%, transparent);
+    animation: orbPulse 2.6s ease-in-out infinite; }
+  @keyframes orbPulse { 0%,100% { transform: scale(1); filter: brightness(1);} 50% { transform: scale(1.08); filter: brightness(1.25);} }
+  .core-cap { position: absolute; bottom: 12px; left: 0; right: 0; text-align: center; font-size: 12px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--text-dim); font-weight: 700; }
+  .core-cap b { display: block; font-size: 15px; letter-spacing: .02em; text-transform: none; color: var(--core-c, var(--text)); }
+
+  /* ---- defense layers: a stacked, perspective list of the protections ---- */
+  .dlayers { display: flex; flex-direction: column; gap: 8px; }
+  .dlh { display: flex; align-items: baseline; gap: 10px; margin-bottom: 2px; }
+  .dlh h2 { font-size: 15px; } .dlh .hint { font-size: 12px; color: var(--text-mute); }
+  .dlgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  @media (max-width: 560px) { .dlgrid { grid-template-columns: 1fr; } }
+  .dlayer { position: relative; display: flex; align-items: center; gap: 11px; padding: 11px 13px;
+    border: 1px solid var(--border); border-radius: var(--r); background: color-mix(in srgb, var(--surface) 78%, transparent);
+    backdrop-filter: blur(8px); transform-style: preserve-3d; transition: transform .2s, box-shadow .2s, border-color .2s; }
+  .dlayer:hover { transform: translateZ(14px) translateX(2px); box-shadow: var(--shadow); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+  .dlayer .ic { width: 34px; height: 34px; flex: none; border-radius: 9px; display: grid; place-items: center; font-size: 16px;
+    background: color-mix(in srgb, var(--lc, var(--accent)) 18%, transparent); color: var(--lc, var(--accent));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lc, var(--accent)) 35%, transparent), 0 0 14px color-mix(in srgb, var(--lc, var(--accent)) 30%, transparent); }
+  .dlayer .lt { font-weight: 650; font-size: 13px; }
+  .dlayer .ld { font-size: 11.5px; color: var(--text-mute); }
+  .dlayer .st { margin-left: auto; font-size: 10.5px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase;
+    padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+  .st.on { color: var(--ok); background: var(--ok-weak); box-shadow: 0 0 12px color-mix(in srgb, var(--ok) 30%, transparent); }
+  .st.avail { color: var(--info); background: var(--info-weak); }
+  .st.off { color: var(--text-mute); background: var(--surface-3); }
+  .dlayer .cnt { font-variant-numeric: tabular-nums; font-weight: 800; font-size: 13px; color: var(--lc, var(--accent)); margin-left: auto; margin-right: 8px; }
+  @media (prefers-reduced-motion: reduce) {
+    body::before, body::after, .core-scene, .ring, .core-orb { animation: none !important; }
+  }
 </style>
 </head>
 <body>
@@ -397,6 +495,19 @@
   <main>
     <section id="overview">
       <div class="ribbon warn" id="ribbon"><span class="rp"></span><div class="rb"><div class="rt">Connecting…</div><div class="rd">Waiting for the first snapshot from this host.</div></div></div>
+      <div class="hero3d">
+        <div class="core-wrap">
+          <div class="core-scene" id="coreScene">
+            <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div>
+            <div class="core-orb"></div>
+          </div>
+          <div class="core-cap"><b id="coreState">—</b><span id="coreSub">defense core</span></div>
+        </div>
+        <div>
+          <div class="dlh"><h2>Defense layers</h2><span class="hint">the protections this host runs, and what each is doing right now</span></div>
+          <div class="dlgrid" id="dlayers"></div>
+        </div>
+      </div>
       <div class="kpis" id="kpis" style="margin-top:16px"></div>
       <div class="trend" id="trendRow">
         <span class="tl">Denied / interval</span><span class="tv" id="trendVal">—</span>
@@ -627,6 +738,7 @@ function render(){
   $("updatedAt").textContent = "· "+tstr(s.generated_at);
   renderPosture(s);
   renderRibbon(s);
+  renderDefense(s);
   renderKPIs(s);
   scheduleSpark();
   renderThreats(s);
@@ -651,6 +763,70 @@ function renderPosture(s){
   else { cls="ok"; txt="Nominal"; }
   el.className="posture "+cls; tx.textContent=txt;
 }
+
+/* ---- 3D defense core + defense layers --------------------------------- */
+function renderDefense(s){
+  const a=s.attacks||[];
+  const high=a.filter(x=>x.severity==="high"||x.severity==="critical").length;
+  const med=a.filter(x=>x.severity==="medium").length;
+  let c,label,sub;
+  if(!s.enforced){ c="var(--bad)"; label="OFFLINE"; sub="not enforcing"; }
+  else if(high){ c="var(--bad)"; label="UNDER ATTACK"; sub=high+" active threat"+(high>1?"s":""); }
+  else if(med){ c="var(--warn)"; label="ELEVATED"; sub=med+" pattern"+(med>1?"s":"")+" to review"; }
+  else { c="var(--ok)"; label="NOMINAL"; sub="all layers holding"; }
+  const wrap=$("coreScene")&&$("coreScene").closest(".core-wrap");
+  if(wrap) wrap.style.setProperty("--core-c", c);
+  $("coreState").textContent=label; $("coreState").style.color=c; $("coreSub").textContent=sub;
+
+  // Live counts from the ruleset this console reads.
+  let rc=0, rl=0;
+  for(const ch of (s.chains||[])){ for(const r of ch.rules){ rc++; if(r.rate_limit) rl++; } }
+  const ex=s.exposure||{}; const findings=((ex.findings||[]).filter(x=>x.severity!=="good"&&x.severity!=="low")).length;
+  const graded = ex.grade && ex.grade!=="unknown";
+
+  // "active" = observed live in this L3/L4 console; "ready" = built and
+  // deployable but enforced in the daemon / ufw-waf, which this view does not read.
+  const L=[
+    ["▦","Packet filter","nftables L3/L4 admission", s.enforced?"on":"off", rc?rc+" rules":"", "var(--accent)"],
+    ["⏱","Rate limiting","SYN-flood &amp; brute-force caps", rl?"on":"avail", rl?rl+"×":"", "var(--info)"],
+    ["🛡","Attack surface", graded?("exposure grade "+ex.grade):"inbound exposure", graded?"on":"avail", findings?findings+" flag"+(findings>1?"s":""):"", "var(--warn)"],
+    ["◎","DPI / IPS","signature inspection in ring 0", "avail", "", "var(--accent)"],
+    ["⌁","Egress anomaly","novel-destination baseline", "avail", "", "var(--ok)"],
+    ["⬡","Web WAF","ufw-waf: OWASP on decrypted HTTP", "avail", "", "var(--bad)"],
+    ["⇅","Fleet rollout","signed bundles, canary + rollback", "avail", "", "var(--info)"],
+    ["⚬","Correlation","cross-host pattern detection", "avail", "", "var(--warn)"],
+  ];
+  $("dlayers").innerHTML=L.map(([ic,t,d,st,cnt,lc])=>`
+    <div class="dlayer" style="--lc:${lc}">
+      <div class="ic">${ic}</div>
+      <div><div class="lt">${t}</div><div class="ld">${d}</div></div>
+      ${cnt?`<span class="cnt">${cnt}</span>`:""}
+      <span class="st ${st==="on"?"on":st==="avail"?"avail":"off"}">${st==="on"?"active":st==="avail"?"ready":"off"}</span>
+    </div>`).join("");
+}
+
+/* Pointer-tracked 3D tilt on any `.tilt` panel. Cheap: only touches the
+   element under the cursor, and respects reduced-motion. */
+(function(){
+  if(matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  let raf=0, cur=null, mx=0, my=0;
+  addEventListener("pointermove",(e)=>{
+    const el=e.target.closest&&e.target.closest(".tilt");
+    cur=el; if(!el) return; mx=e.clientX; my=e.clientY;
+    if(!raf) raf=requestAnimationFrame(apply);
+  },{passive:true});
+  addEventListener("pointerout",(e)=>{
+    const el=e.target.closest&&e.target.closest(".tilt");
+    if(el){ el.style.setProperty("--rx","0deg"); el.style.setProperty("--ry","0deg"); }
+  },{passive:true});
+  function apply(){
+    raf=0; if(!cur) return;
+    const r=cur.getBoundingClientRect();
+    const px=(mx-r.left)/r.width-0.5, py=(my-r.top)/r.height-0.5;
+    cur.style.setProperty("--ry",(px*9).toFixed(2)+"deg");
+    cur.style.setProperty("--rx",(-py*9).toFixed(2)+"deg");
+  }
+})();
 
 /* ---- ribbon ----------------------------------------------------------- */
 function renderRibbon(s){
@@ -685,7 +861,7 @@ function renderKPIs(s){
     ["Accepted",fmtN(t.accepted_packets),"by explicit allow rules",""],
     ["Listeners",fmtN((s.listeners||[]).length),"open service ports",""],
   ];
-  $("kpis").innerHTML=cards.map(([lab,big,sub,cls])=>`<div class="kpi ${cls}"><div class="lab">${lab}</div><div class="big">${big}</div><div class="sub">${sub}</div></div>`).join("");
+  $("kpis").innerHTML=cards.map(([lab,big,sub,cls])=>`<div class="kpi tilt ${cls}"><div class="lab">${lab}</div><div class="big">${big}</div><div class="sub">${sub}</div></div>`).join("");
 }
 let sparkRaf=0;
 function scheduleSpark(){ if(sparkRaf) return; sparkRaf=requestAnimationFrame(()=>{ sparkRaf=0; drawSpark(); }); }
@@ -897,7 +1073,7 @@ function renderRules(chains){
         <td><span class="mono">${esc(r.name||"(unnamed)")}</span>${r.why?`<div class="why">${esc(r.why)}</div>`:""}</td>
         <td class="mono wrap" style="max-width:34ch">${esc(r.matchers||"every packet")}</td>
         <td class="wrap">${services}</td>
-        <td><span class="chip ${v}">${esc(r.verdict)}</span>${r.log_kind?` <span class="chip plain">logged</span>`:""}</td>
+        <td><span class="chip ${v}">${esc(r.verdict)}</span>${r.log_kind?` <span class="chip plain">logged</span>`:""}${r.rate_limit?` <span class="chip sev-good" title="connection-rate cap">⏱ ${esc(r.rate_limit)}</span>`:""}</td>
         <td class="r"><div class="hit"><span class="num">${fmtN(r.packets)}</span><span class="bar ${v}"><i style="width:${w}%"></i></span></div></td>
         <td class="r num">${fmtBytes(r.bytes)}</td></tr>`); }
   }
