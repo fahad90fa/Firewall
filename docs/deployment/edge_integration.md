@@ -51,6 +51,31 @@ edge**, and on any plaintext HTTP the host serves directly (internal APIs,
 services, HTTP-before-redirect). They complement an edge WAF; they do not
 replace one.
 
+### `ufw-waf` — terminate TLS and inspect on the origin itself
+
+When you want the inspection to happen on the origin **including for HTTPS**,
+the project ships a reverse-proxy WAF that terminates TLS and runs those same
+signatures against the decrypted request:
+
+```sh
+# Terminate TLS, inspect, forward clean requests to the app on :8080.
+ufw-waf --listen 0.0.0.0:8443 --backend 127.0.0.1:8080 \
+        --tls-cert /etc/tls/app.pem --tls-key /etc/tls/app.key   # needs the `tls` build
+
+# Or plaintext, sitting behind an edge that already terminated TLS.
+ufw-waf --listen 127.0.0.1:8080 --backend 127.0.0.1:9000
+```
+
+It **percent-decodes before matching**, so an encoded payload
+(`id=1%27%20or%201%3D1`) is caught, not evaded, and answers a match with `403`
+while forwarding clean requests untouched. It is deliberately a *minimal* proxy
+(one request per connection, bounded body, no HTTP/2) and a *signature* WAF (no
+OWASP Core Rule Set depth, no bot management) — a host-layer control to place
+beside an edge WAF, not a replacement for one. The engine is
+[`daemon/src/waf.rs`](../../daemon/src/waf.rs); it reuses the shipped signatures
+verbatim, so a rule authored once is enforced on plaintext by the kernel and on
+decrypted HTTPS here.
+
 Put a real WAF where it can see decrypted requests — at a reverse proxy in front
 of the app. A minimal Coraza/ModSecurity reverse proxy that fronts the web
 server the policy protects:

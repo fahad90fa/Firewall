@@ -19,6 +19,13 @@ path = "src/main.rs"
 name = "ufw-kmod-sim"
 path = "src/bin/ufw-kmod-sim.rs"
 
+# A TLS-terminating reverse-proxy WAF: inspects decrypted HTTP against the
+# shipped OWASP signatures and forwards clean requests to a backend. The host
+# layer's answer to application-layer web attacks on HTTPS; see src/waf.rs.
+[[bin]]
+name = "ufw-waf"
+path = "src/bin/ufw-waf.rs"
+
 [lib]
 name = "ufw_daemon"
 path = "src/lib.rs"
