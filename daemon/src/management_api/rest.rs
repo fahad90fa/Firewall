@@ -251,6 +251,7 @@ pub fn route(request: &HttpRequest) -> Result<Request, ApiError> {
         ("POST", "/v1/fleet/enroll") => parse_body(&request.body),
         ("POST", "/v1/fleet/verify") => parse_body(&request.body),
         ("POST", "/v1/fleet/push") => parse_body(&request.body),
+        ("POST", "/v1/fleet/distribute") => parse_body(&request.body),
         ("POST", "/v1/mode") => parse_body(&request.body),
         ("POST", "/v1/identity/resolve") => parse_body(&request.body),
         ("POST", "/v1/shutdown") => Ok(Request::Shutdown),

@@ -1181,6 +1181,28 @@ impl ControlPlane for Supervisor {
         self.install_signed_bundle(bundle)
     }
 
+    fn distribute_bundle(
+        &self,
+        members: &[String],
+        bundle: &ufw_daemon::fleet::Bundle,
+    ) -> Result<String, ApiError> {
+        let verifier = self.state.fleet_verifier().ok_or_else(|| {
+            ApiError::bad_request("fleet is not configured; set `api.fleet_secret`")
+        })?;
+        // Sign here, once, and reuse the same bearer token the operator gave
+        // the local API to authenticate to each member's.
+        let poster = ufw_daemon::fleet_client::HttpPoster {
+            auth_token: self.config.api.auth_token.clone(),
+            timeout: self.timeout(),
+        };
+        let results =
+            ufw_daemon::fleet_client::distribute(&verifier, bundle.clone(), members, &poster);
+        Ok(ufw_daemon::fleet_client::results_json(
+            bundle.revision,
+            &results,
+        ))
+    }
+
     fn reload_signatures(&self) -> Result<String, ApiError> {
         // Reload the whole set from disk. A malformed file is logged and
         // skipped, never fatal — the same posture as startup, because one bad

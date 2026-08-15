@@ -92,6 +92,14 @@ pub enum Request {
         canary_seconds: u64,
         mac: [u8; 32],
     },
+    /// Act as a distribution point: sign this bundle and push it to `members`.
+    FleetDistribute {
+        members: Vec<String>,
+        revision: u64,
+        source: String,
+        canary_percent: u8,
+        canary_seconds: u64,
+    },
     /// Ask the daemon to exit.
     Shutdown,
     /// Liveness probe.
@@ -123,6 +131,7 @@ impl Request {
             | Request::FleetEnroll { .. }
             | Request::FleetVerify { .. }
             | Request::FleetPush { .. }
+            | Request::FleetDistribute { .. }
             | Request::Shutdown => Authority::Admin,
         }
     }
@@ -148,6 +157,7 @@ impl Request {
             Request::FleetEnroll { .. } => "fleet-enroll",
             Request::FleetVerify { .. } => "fleet-verify",
             Request::FleetPush { .. } => "fleet-push",
+            Request::FleetDistribute { .. } => "fleet-distribute",
             Request::Shutdown => "shutdown",
             Request::Ping => "ping",
         }
@@ -227,6 +237,25 @@ impl Request {
                         canary_seconds,
                         mac,
                     }
+                }
+            }
+            "fleet-distribute" => {
+                let members: Vec<String> = value
+                    .get("members")
+                    .and_then(|m| m.as_array())
+                    .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                    .unwrap_or_default();
+                if members.is_empty() {
+                    return Err(ApiError::bad_request("`members` must be a non-empty list"));
+                }
+                Request::FleetDistribute {
+                    members,
+                    revision: num("revision")
+                        .ok_or_else(|| ApiError::bad_request("missing `revision`"))?,
+                    source: arg("source")
+                        .ok_or_else(|| ApiError::bad_request("missing `source`"))?,
+                    canary_percent: num("canary_percent").unwrap_or(100).min(255) as u8,
+                    canary_seconds: num("canary_seconds").unwrap_or(0),
                 }
             }
             "shutdown" => Request::Shutdown,
@@ -329,6 +358,12 @@ pub trait ControlPlane: Send + Sync {
     /// Authenticate a signed fleet bundle and, if this host is in the rollout,
     /// install it through the ordinary policy pipeline.
     fn install_bundle(&self, bundle: &crate::fleet::Bundle) -> Result<String, ApiError>;
+    /// Act as a distribution point: sign a bundle and push it to each member.
+    fn distribute_bundle(
+        &self,
+        members: &[String],
+        bundle: &crate::fleet::Bundle,
+    ) -> Result<String, ApiError>;
     fn validate_policy(&self) -> Result<String, ApiError>;
     fn diff_policy(&self) -> Result<String, ApiError>;
     fn rollback(&self, revision: u64) -> Result<String, ApiError>;
@@ -416,6 +451,26 @@ impl Router {
                     canary_seconds,
                     mac,
                 })
+                .map(Response::ok),
+            Request::FleetDistribute {
+                members,
+                revision,
+                source,
+                canary_percent,
+                canary_seconds,
+            } => self
+                .control
+                .distribute_bundle(
+                    &members,
+                    &crate::fleet::Bundle {
+                        revision,
+                        source,
+                        canary_percent,
+                        canary_seconds,
+                        // Signed by the distribution point, not the caller.
+                        mac: [0u8; 32],
+                    },
+                )
                 .map(Response::ok),
             Request::ResolveIdentity { pid } => Ok(Response::ok(self.identity_json(pid))),
             Request::ReloadPolicy => self.control.reload_policy().map(Response::ok),
@@ -753,6 +808,13 @@ pub(crate) mod testing {
         fn install_bundle(&self, bundle: &crate::fleet::Bundle) -> Result<String, ApiError> {
             self.record(&format!("install-bundle:{}", bundle.revision))
         }
+        fn distribute_bundle(
+            &self,
+            members: &[String],
+            bundle: &crate::fleet::Bundle,
+        ) -> Result<String, ApiError> {
+            self.record(&format!("distribute:{}:{}", bundle.revision, members.len()))
+        }
         fn validate_policy(&self) -> Result<String, ApiError> {
             self.record("validate")
         }
@@ -1042,6 +1104,33 @@ mod tests {
         // Admin routes to the control plane, which installs it.
         h.router.dispatch(bundle, Authority::Admin).unwrap();
         assert!(h.control.called("install-bundle:5"));
+    }
+
+    #[test]
+    fn fleet_distribute_is_admin_only_and_reaches_the_control_plane() {
+        let h = harness();
+        let req = Request::FleetDistribute {
+            members: vec!["10.0.0.1:8080".into(), "10.0.0.2:8080".into()],
+            revision: 9,
+            source: "version: 1\nrules: []\n".into(),
+            canary_percent: 50,
+            canary_seconds: 300,
+        };
+        assert_eq!(
+            h.router.dispatch(req.clone(), Authority::ReadOnly).unwrap_err().status,
+            403
+        );
+        h.router.dispatch(req, Authority::Admin).unwrap();
+        assert!(h.control.called("distribute:9:2"));
+    }
+
+    #[test]
+    fn fleet_distribute_needs_a_member_list() {
+        let err = Request::from_json(
+            &json::parse(r#"{"op":"fleet-distribute","revision":1,"source":"x"}"#).unwrap(),
+        )
+        .unwrap_err();
+        assert_eq!(err.status, 400);
     }
 
     #[test]

@@ -180,6 +180,17 @@ impl ControlPlane for TestSupervisor {
         // No fleet verifier in the harness; report the revision offered.
         Ok(format!("bundle revision {} received", bundle.revision))
     }
+    fn distribute_bundle(
+        &self,
+        members: &[String],
+        bundle: &ufw_daemon::fleet::Bundle,
+    ) -> Result<String, ApiError> {
+        Ok(format!(
+            "distributed revision {} to {} member(s)",
+            bundle.revision,
+            members.len()
+        ))
+    }
     fn validate_policy(&self) -> Result<String, ApiError> {
         policy_loader::load(&self.policy)
             .map(|l| format!("{} rules", l.policy.rules.len()))
