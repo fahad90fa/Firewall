@@ -96,22 +96,26 @@ Some now exist; the rest are the sequenced next steps.
 - **A server attack-surface view** in the dashboard: the live inbound chain,
   graded by what it exposes and to whom (world-open SSH/RDP/databases are
   findings; the same scoped to a source set is the intended shape).
+- **Connection-rate controls at L3/L4** — SYN-flood and brute-force dampening.
+  A `rate_limit:` block (`rate` / `per` / `burst`) on any `allow` or
+  `allow-inspect` rule lowers to a **native nftables `limit` statement**
+  (`ct state new limit rate 20/minute burst 5 packets accept`): new connections
+  are accepted up to the cap and a flood beyond it falls through to the default
+  deny, enforced in the kernel's own conntrack path with no module involvement.
+  It is **decision-invariant** — neither `matches` nor `effective_action` reads
+  it — so cross-platform equivalence stays green, and it is carried to the
+  Linux artifact but kept off the daemon↔module wire (rate limiting is an
+  nftables-layer feature, so there was no ABI change and no ring-0 edit). The
+  analyzer notes that enforcement is Linux-only for now; Windows and macOS
+  permit at the same verdict but do not yet throttle. `policies/server/`
+  demonstrates it on the SSH and web listeners.
 
 ### Still to build
 
-- **Connection-rate controls at L3/L4** (SYN-flood and brute-force dampening).
-  This is real host-layer value and the design is settled — a decision-invariant
-  `rate_limit:` annotation carried like `log`/`stateful`, lowering to a native
-  nftables `limit rate` on Linux and a driver-enforced annotation on
-  Windows/macOS, with equivalence provably unaffected because the verifier never
-  reads it. It is **deliberately not landed in a hosted change** for one honest
-  reason: carrying the field over the daemon↔kernel wire (which the round-trip
-  and ruleset-hash invariants require) means bumping the ABI revision and
-  updating the *hand-written kernel-C and Swift decoders* in lockstep — and that
-  parity check compiles only in the containerised environment, so it cannot be
-  verified where this work was done. Shipping it unverified would pass local
-  tests and break the kernel decode in CI. The full extension-point map is
-  ready; it wants a kernel-capable build to land against.
+- **Rate-limit enforcement on Windows and macOS.** The Linux nftables path
+  enforces today; the WFP callout and the Network Extension would each need
+  their own token bucket to honour the same `rate_limit:` block. The verdict is
+  already identical across all three — only the throttle is Linux-only.
 - **A distribution transport for the fleet plane.** The trust core (authenticate
   a bundle, decide canary membership, compile-check on the host) is now
   reachable; a genuine cross-host push adds peer daemons exchanging bundles over

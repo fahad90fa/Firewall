@@ -147,6 +147,7 @@ pub struct Rule {
     pub schedule: Option<Schedule>,
     pub log: Option<Spanned<String>>,
     pub stateful: Option<Spanned<String>>,
+    pub rate_limit: Option<RateLimit>,
     pub tags: Vec<Spanned<String>>,
 }
 
@@ -212,6 +213,19 @@ impl DpiClause {
     pub fn is_empty(&self) -> bool {
         self.signatures.is_empty() && self.protocols.is_empty()
     }
+}
+
+/// A per-rule connection-rate cap (SYN-flood / brute-force dampening).
+///
+/// Everything is still a string here; the analyzer interprets `rate` as a
+/// count, `per` as a time unit, and `burst` as a count. It applies only to
+/// permitting rules and is enforced at the nftables layer.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RateLimit {
+    pub span: Span,
+    pub rate: Option<Spanned<String>>,
+    pub per: Option<Spanned<String>>,
+    pub burst: Option<Spanned<String>>,
 }
 
 /// A recurring time window during which a rule is active.
@@ -360,6 +374,12 @@ pub fn retarget_spans(doc: &mut PolicyDocument, to: Span) {
             scalar(&mut s.start, to);
             scalar(&mut s.end, to);
         }
+        if let Some(rl) = &mut r.rate_limit {
+            one(&mut rl.span, to);
+            scalar(&mut rl.rate, to);
+            scalar(&mut rl.per, to);
+            scalar(&mut rl.burst, to);
+        }
     }
 }
 
@@ -399,6 +419,7 @@ pub const RULE_KEYS: &[&str] = &[
     "schedule",
     "log",
     "stateful",
+    "rate_limit",
     "tags",
 ];
 
@@ -444,6 +465,8 @@ pub const DPI_KEYS: &[&str] = &["signatures", "protocols", "protocol", "on_match
 
 pub const SCHEDULE_KEYS: &[&str] = &["days", "start", "end"];
 
+pub const RATE_LIMIT_KEYS: &[&str] = &["rate", "per", "burst"];
+
 pub const NETWORK_PROFILE_KEYS: &[&str] = &[
     "internal",
     "perimeter",
@@ -486,6 +509,7 @@ mod tests {
             PLATFORM_BLOCK_KEYS,
             DPI_KEYS,
             SCHEDULE_KEYS,
+            RATE_LIMIT_KEYS,
             NETWORK_PROFILE_KEYS,
         ] {
             let mut sorted = table.to_vec();

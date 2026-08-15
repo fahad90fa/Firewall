@@ -721,6 +721,7 @@ impl<'a> Parser<'a> {
                 "schedule" => rule.schedule = Some(self.parse_schedule(&k)),
                 "log" => rule.log = self.value_scalar(&k),
                 "stateful" => rule.stateful = self.value_scalar(&k),
+                "rate_limit" => rule.rate_limit = Some(self.parse_rate_limit(&k)),
                 "tags" => rule.tags = self.value_string_list(&k),
                 _ => self.unknown_key(&k, RULE_KEYS, "a rule"),
             }
@@ -855,6 +856,30 @@ impl<'a> Parser<'a> {
             }
         }
         s
+    }
+
+    fn parse_rate_limit(&mut self, key: &Spanned<String>) -> RateLimit {
+        let mut rl = RateLimit {
+            span: key.span,
+            ..Default::default()
+        };
+        let Some(col) = self.block_col(key.span.col) else {
+            return rl;
+        };
+        let mut seen = Vec::new();
+        while let Some(k) = self.next_key_at(col) {
+            if self.check_duplicate(&mut seen, &k) {
+                self.skip_value(col);
+                continue;
+            }
+            match k.value.as_str() {
+                "rate" => rl.rate = self.value_scalar(&k),
+                "per" => rl.per = self.value_scalar(&k),
+                "burst" => rl.burst = self.value_scalar(&k),
+                _ => self.unknown_key(&k, RATE_LIMIT_KEYS, "a `rate_limit:` block"),
+            }
+        }
+        rl
     }
 }
 
@@ -1061,6 +1086,18 @@ rules:
         let s = r.schedule.as_ref().unwrap();
         assert_eq!(s.days.len(), 5);
         assert_eq!(s.start.as_ref().unwrap().value, "08:00");
+    }
+
+    #[test]
+    fn rate_limit_block_parses_into_its_fields() {
+        let doc = parse_ok(
+            "rules:\n  - id: a\n    action: allow\n    rate_limit:\n      rate: 50\n      \
+             per: second\n      burst: 100\n",
+        );
+        let rl = doc.rules[0].rate_limit.as_ref().expect("a rate_limit block");
+        assert_eq!(rl.rate.as_ref().unwrap().value, "50");
+        assert_eq!(rl.per.as_ref().unwrap().value, "second");
+        assert_eq!(rl.burst.as_ref().unwrap().value, "100");
     }
 
     #[test]

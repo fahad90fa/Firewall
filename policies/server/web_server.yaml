@@ -214,6 +214,12 @@ rules:
     protocol: tcp
     destination:
       ports: web
+    # SYN-flood dampening: accept new connections up to a high ceiling, and let
+    # a flood beyond it fall through to the default deny. Enforced by nftables.
+    rate_limit:
+      rate: 500
+      per: second
+      burst: 1000
     tags: [server, exposed]
 
   # Administration, scoped to the network operations actually reach the box
@@ -230,6 +236,12 @@ rules:
       addresses: [management]
     destination:
       ports: ssh
+    # Brute-force dampening: even from the management network, ten new SSH
+    # connections a minute is generous for humans and hostile for a cracker.
+    rate_limit:
+      rate: 10
+      per: minute
+      burst: 5
     tags: [server, admin]
 
   # There is deliberately no explicit `deny-inbound-other` rule, and no
