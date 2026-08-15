@@ -161,6 +161,11 @@ So the host layer's telemetry already flows into the detection layer. What it
 feeds — the correlation rules, the dashboards, the on-call rotation — is the
 SOC's to build, and is Tier 3.
 
+A worked reference for the whole edge — a WAF reverse proxy in front of the
+server policy, the CDN/DDoS posture, and the exact SIEM export configuration —
+is in [`../deployment/edge_integration.md`](../deployment/edge_integration.md).
+It is integration glue for external products, not a claim to replace them.
+
 ## Tier 3 — the part that is not code
 
 At the scale the original question imagines, most of the actual work is people
@@ -176,6 +181,12 @@ and process, and no amount of engineering substitutes for it:
 These are named here not because this repository implements them, but because a
 roadmap that omitted them would imply that shipping the code is the finish line.
 It is not; it is the host layer of a much larger thing.
+
+What the repository *can* hold for this tier is the process glue: a SOC runbook
+that turns this firewall's own alerts into a triage-and-response path, and a
+compliance control mapping tracing each control to a mechanism. That is
+[`../deployment/soc_runbook.md`](../deployment/soc_runbook.md) — a starting
+point for the people layer, not a substitute for it.
 
 ## What to take away
 
