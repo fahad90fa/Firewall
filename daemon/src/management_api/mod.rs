@@ -629,6 +629,8 @@ mod tests {
             correlation: false,
             correlation_window_secs: 300,
             correlation_threshold: 3,
+            anomaly: false,
+            anomaly_learning_secs: 3600,
         };
         let logger = Logger::with_sinks(&logging, Enrichment::default(), Vec::new());
         let identity = Arc::new(IdentityService::new(

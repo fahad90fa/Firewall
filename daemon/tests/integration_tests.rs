@@ -104,6 +104,8 @@ fn logging_config() -> LoggingConfig {
         correlation: true,
         correlation_window_secs: 300,
         correlation_threshold: 3,
+        anomaly: false,
+        anomaly_learning_secs: 3600,
     }
 }
 

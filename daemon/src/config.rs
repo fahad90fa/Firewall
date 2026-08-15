@@ -466,6 +466,10 @@ pub struct LoggingConfig {
     pub correlation: bool,
     pub correlation_window_secs: u64,
     pub correlation_threshold: usize,
+    /// Enable the egress-baseline anomaly detector.
+    pub anomaly: bool,
+    /// How long an identity is observed before its baseline is trusted.
+    pub anomaly_learning_secs: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -613,6 +617,8 @@ impl Default for Config {
                 correlation: true,
                 correlation_window_secs: 300,
                 correlation_threshold: 3,
+                anomaly: true,
+                anomaly_learning_secs: 3600,
             },
             api: ApiConfig {
                 cli_socket: PathBuf::from(constants::DEFAULT_CLI_SOCKET_UNIX),
@@ -668,6 +674,8 @@ const KNOWN_KEYS: &[&str] = &[
     "logging.correlation",
     "logging.correlation_window_secs",
     "logging.correlation_threshold",
+    "logging.anomaly",
+    "logging.anomaly_learning_secs",
     "logging.file.enabled",
     "logging.file.path",
     "logging.file.max_bytes",
@@ -825,6 +833,12 @@ impl Config {
         }
         if let Some(v) = doc.u64("logging.correlation_window_secs")? {
             c.logging.correlation_window_secs = v.max(1);
+        }
+        if let Some(v) = doc.bool("logging.anomaly")? {
+            c.logging.anomaly = v;
+        }
+        if let Some(v) = doc.u64("logging.anomaly_learning_secs")? {
+            c.logging.anomaly_learning_secs = v.max(60);
         }
         if let Some(v) = doc.u64("logging.correlation_threshold")? {
             c.logging.correlation_threshold = (v as usize).max(2);

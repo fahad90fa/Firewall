@@ -437,6 +437,7 @@ impl DaemonState {
         w.u64_field("dropped_queue_full", logs.dropped_queue_full);
         w.u64_field("sink_errors", logs.sink_errors);
         w.u64_field("correlations", logs.correlations);
+        w.u64_field("anomalies", logs.anomalies);
         w.end_object();
 
         w.begin_object_field("traffic");
@@ -532,6 +533,8 @@ mod tests {
             correlation: false,
             correlation_window_secs: 300,
             correlation_threshold: 3,
+            anomaly: false,
+            anomaly_learning_secs: 3600,
         }
     }
 
