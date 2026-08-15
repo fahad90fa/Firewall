@@ -76,24 +76,46 @@ Some now exist; the rest are the sequenced next steps.
   injection, and probes for exposed `.git` and `.env`. These extend the host
   IPS from its egress/lateral-movement focus to the inbound direction a public
   server actually faces.
+- **Egress-baseline anomaly detection.** `daemon/src/logging/anomaly.rs` is the
+  twin of the denial correlator: it watches what policy *allowed* and alerts the
+  first time an established application identity reaches a never-before-seen
+  external destination — the shape of exfiltration, invisible to signatures. A
+  learning window and a minimum baseline keep it from alerting on boot; memory
+  is bounded on both axes. On by default (`logging.anomaly`).
+- **Runtime signature feeds.** Signatures reload from disk without a restart
+  (`ufwctl debug signatures reload`, `POST /v1/signatures/reload`), with a
+  content digest that recognises an unchanged set as a no-op and a fail-closed
+  install ordering so a rejected set leaves the previous one resident. A
+  threat-intel update no longer means a window with no filtering.
+- **A reachable fleet control plane.** `daemon/src/fleet.rs`'s bundle
+  authentication, canary membership, and rate-based rollback — 13 tested
+  functions that had zero callers — are now wired to the management API
+  (`ufwctl fleet`, `/v1/fleet*`): a member registry, and a `fleet-verify` that
+  authenticates a signed bundle and confirms it compiles on the host before it
+  is trusted. Enabled by `api.fleet_secret`.
+- **A server attack-surface view** in the dashboard: the live inbound chain,
+  graded by what it exposes and to whom (world-open SSH/RDP/databases are
+  findings; the same scoped to a source set is the intended shape).
 
-### Still to build, in rough order
+### Still to build
 
-- **A real management plane.** `daemon/src/fleet.rs` has the shape — signed
-  bundles, hash canaries, rate-based rollback — but has never pushed to a host
-  it did not already control. The 10,000-host story (policy distribution,
-  canary, rollback, a fleet console) is the single highest-leverage next build,
-  and it is squarely in scope.
-- **Signature feeds.** A mechanism to ingest and update signature sets on a
-  threat-intel cadence, the way Suricata/ET rules are distributed, rather than
-  shipping them in the tree.
-- **Behavioural/anomaly detection** over the flow data the daemon already sees —
-  baselining a host's normal egress and flagging deviation, above the current
-  signature-match correlation.
 - **Connection-rate controls at L3/L4** (SYN-flood and brute-force dampening).
-  This is real host-layer value, but it changes the *packet decision procedure*,
-  so it must be written into all three kernel backends and the equivalence
-  verifier in one change — a deliberate, high-care piece of work, not a quick add.
+  This is real host-layer value and the design is settled — a decision-invariant
+  `rate_limit:` annotation carried like `log`/`stateful`, lowering to a native
+  nftables `limit rate` on Linux and a driver-enforced annotation on
+  Windows/macOS, with equivalence provably unaffected because the verifier never
+  reads it. It is **deliberately not landed in a hosted change** for one honest
+  reason: carrying the field over the daemon↔kernel wire (which the round-trip
+  and ruleset-hash invariants require) means bumping the ABI revision and
+  updating the *hand-written kernel-C and Swift decoders* in lockstep — and that
+  parity check compiles only in the containerised environment, so it cannot be
+  verified where this work was done. Shipping it unverified would pass local
+  tests and break the kernel decode in CI. The full extension-point map is
+  ready; it wants a kernel-capable build to land against.
+- **A distribution transport for the fleet plane.** The trust core (authenticate
+  a bundle, decide canary membership, compile-check on the host) is now
+  reachable; a genuine cross-host push adds peer daemons exchanging bundles over
+  that surface, on top of what exists.
 
 ## Tier 2 — separate systems this firewall integrates with, and must not become
 
