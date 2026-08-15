@@ -116,10 +116,13 @@ Some now exist; the rest are the sequenced next steps.
   enforces today; the WFP callout and the Network Extension would each need
   their own token bucket to honour the same `rate_limit:` block. The verdict is
   already identical across all three — only the throttle is Linux-only.
-- **A distribution transport for the fleet plane.** The trust core (authenticate
-  a bundle, decide canary membership, compile-check on the host) is now
-  reachable; a genuine cross-host push adds peer daemons exchanging bundles over
-  that surface, on top of what exists.
+- **Sender-side fleet distribution.** The receive side is complete: a daemon
+  authenticates a pushed bundle, decides its canary membership, compiles it
+  locally, and — when in the rollout — installs it through the same fail-closed
+  pipeline as a local reload (`fleet-push`, `POST /v1/fleet/push`). What remains
+  is the orchestration that *sends*: a distribution point iterating its members
+  and posting the signed bundle to each. That is a client loop over the surface
+  that already exists, not new daemon capability.
 
 ## Tier 2 — separate systems this firewall integrates with, and must not become
 

@@ -83,6 +83,15 @@ pub enum Request {
         canary_seconds: u64,
         mac: [u8; 32],
     },
+    /// Authenticate a signed policy bundle and install it if this host is in
+    /// the rollout — the fleet push.
+    FleetPush {
+        revision: u64,
+        source: String,
+        canary_percent: u8,
+        canary_seconds: u64,
+        mac: [u8; 32],
+    },
     /// Ask the daemon to exit.
     Shutdown,
     /// Liveness probe.
@@ -113,6 +122,7 @@ impl Request {
             | Request::ResolveIdentity { .. }
             | Request::FleetEnroll { .. }
             | Request::FleetVerify { .. }
+            | Request::FleetPush { .. }
             | Request::Shutdown => Authority::Admin,
         }
     }
@@ -137,6 +147,7 @@ impl Request {
             Request::FleetStatus => "fleet-status",
             Request::FleetEnroll { .. } => "fleet-enroll",
             Request::FleetVerify { .. } => "fleet-verify",
+            Request::FleetPush { .. } => "fleet-push",
             Request::Shutdown => "shutdown",
             Request::Ping => "ping",
         }
@@ -190,18 +201,32 @@ impl Request {
                 revision: num("revision")
                     .ok_or_else(|| ApiError::bad_request("missing `revision`"))?,
             },
-            "fleet-verify" => {
+            "fleet-verify" | "fleet-push" => {
                 let mac = arg("mac").ok_or_else(|| ApiError::bad_request("missing `mac`"))?;
                 let mac = ufw_shared::hash::parse_sha256(&mac)
                     .ok_or_else(|| ApiError::bad_request("`mac` must be 64 hex characters"))?;
-                Request::FleetVerify {
-                    revision: num("revision")
-                        .ok_or_else(|| ApiError::bad_request("missing `revision`"))?,
-                    source: arg("source")
-                        .ok_or_else(|| ApiError::bad_request("missing `source`"))?,
-                    canary_percent: num("canary_percent").unwrap_or(100).min(255) as u8,
-                    canary_seconds: num("canary_seconds").unwrap_or(0),
-                    mac,
+                let revision =
+                    num("revision").ok_or_else(|| ApiError::bad_request("missing `revision`"))?;
+                let source =
+                    arg("source").ok_or_else(|| ApiError::bad_request("missing `source`"))?;
+                let canary_percent = num("canary_percent").unwrap_or(100).min(255) as u8;
+                let canary_seconds = num("canary_seconds").unwrap_or(0);
+                if op == "fleet-push" {
+                    Request::FleetPush {
+                        revision,
+                        source,
+                        canary_percent,
+                        canary_seconds,
+                        mac,
+                    }
+                } else {
+                    Request::FleetVerify {
+                        revision,
+                        source,
+                        canary_percent,
+                        canary_seconds,
+                        mac,
+                    }
                 }
             }
             "shutdown" => Request::Shutdown,
@@ -301,6 +326,9 @@ impl Response {
 pub trait ControlPlane: Send + Sync {
     fn reload_policy(&self) -> Result<String, ApiError>;
     fn reload_signatures(&self) -> Result<String, ApiError>;
+    /// Authenticate a signed fleet bundle and, if this host is in the rollout,
+    /// install it through the ordinary policy pipeline.
+    fn install_bundle(&self, bundle: &crate::fleet::Bundle) -> Result<String, ApiError>;
     fn validate_policy(&self) -> Result<String, ApiError>;
     fn diff_policy(&self) -> Result<String, ApiError>;
     fn rollback(&self, revision: u64) -> Result<String, ApiError>;
@@ -366,6 +394,22 @@ impl Router {
                 mac,
             } => self
                 .fleet_verify(crate::fleet::Bundle {
+                    revision,
+                    source,
+                    canary_percent,
+                    canary_seconds,
+                    mac,
+                })
+                .map(Response::ok),
+            Request::FleetPush {
+                revision,
+                source,
+                canary_percent,
+                canary_seconds,
+                mac,
+            } => self
+                .control
+                .install_bundle(&crate::fleet::Bundle {
                     revision,
                     source,
                     canary_percent,
@@ -706,6 +750,9 @@ pub(crate) mod testing {
         fn reload_signatures(&self) -> Result<String, ApiError> {
             self.record("reload-signatures")
         }
+        fn install_bundle(&self, bundle: &crate::fleet::Bundle) -> Result<String, ApiError> {
+            self.record(&format!("install-bundle:{}", bundle.revision))
+        }
         fn validate_policy(&self) -> Result<String, ApiError> {
             self.record("validate")
         }
@@ -975,6 +1022,26 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(err.status, 403);
+    }
+
+    #[test]
+    fn fleet_push_is_admin_only_and_reaches_the_control_plane() {
+        let h = harness();
+        let bundle = Request::FleetPush {
+            revision: 5,
+            source: "version: 1\nrules: []\n".into(),
+            canary_percent: 100,
+            canary_seconds: 0,
+            mac: [0u8; 32],
+        };
+        // Read-only cannot push a policy to the host.
+        assert_eq!(
+            h.router.dispatch(bundle.clone(), Authority::ReadOnly).unwrap_err().status,
+            403
+        );
+        // Admin routes to the control plane, which installs it.
+        h.router.dispatch(bundle, Authority::Admin).unwrap();
+        assert!(h.control.called("install-bundle:5"));
     }
 
     #[test]

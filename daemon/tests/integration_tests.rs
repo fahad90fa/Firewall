@@ -176,6 +176,10 @@ impl ControlPlane for TestSupervisor {
             Some(revision) => Ok(format!("signatures reloaded: revision {revision}")),
         }
     }
+    fn install_bundle(&self, bundle: &ufw_daemon::fleet::Bundle) -> Result<String, ApiError> {
+        // No fleet verifier in the harness; report the revision offered.
+        Ok(format!("bundle revision {} received", bundle.revision))
+    }
     fn validate_policy(&self) -> Result<String, ApiError> {
         policy_loader::load(&self.policy)
             .map(|l| format!("{} rules", l.policy.rules.len()))

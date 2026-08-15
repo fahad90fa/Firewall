@@ -1008,11 +1008,25 @@ impl Supervisor {
     fn install(&self, origin: &str) -> Result<String, ApiError> {
         let loaded = policy_loader::load(&self.config.policy)
             .map_err(|e| ApiError::bad_request(e.to_string()))?;
+        let source = loaded.source.display().to_string();
+        self.install_compiled(loaded.policy, origin, &source, loaded.warning_count)
+    }
 
+    /// Stage, install over IPC, and commit an already-compiled policy. Shared
+    /// by the disk reload path ([`install`](Self::install)) and the fleet
+    /// bundle push, so a pushed bundle installs through exactly the same
+    /// fail-closed pipeline as a local reload.
+    fn install_compiled(
+        &self,
+        policy: ufw_shared::policy_types::CompiledPolicy,
+        origin: &str,
+        source_desc: &str,
+        warning_count: usize,
+    ) -> Result<String, ApiError> {
         let now = ufw_shared::now_us();
         let staged = self
             .state
-            .with_policies(|store| store.stage(loaded.policy.clone(), origin, now));
+            .with_policies(|store| store.stage(policy.clone(), origin, now));
 
         let Some(staged) = staged else {
             return Ok(ufw_daemon::management_api::simple(
@@ -1087,20 +1101,84 @@ impl Supervisor {
         });
 
         Ok(ufw_daemon::management_api::simple(&format!(
-            "revision {revision} installed from {}: {summary}{}",
-            loaded.source.display(),
-            if loaded.warning_count > 0 {
-                format!(" ({} warning(s))", loaded.warning_count)
+            "revision {revision} installed from {source_desc}: {summary}{}",
+            if warning_count > 0 {
+                format!(" ({warning_count} warning(s))")
             } else {
                 String::new()
             }
         )))
+    }
+
+    /// Authenticate a signed fleet bundle and, if this host is in the rollout,
+    /// install it through the shared pipeline. A bundle that fails
+    /// authentication, is stale, or does not compile is refused without
+    /// touching the installed policy — fail-closed, exactly like a bad reload.
+    fn install_signed_bundle(
+        &self,
+        bundle: &ufw_daemon::fleet::Bundle,
+    ) -> Result<String, ApiError> {
+        let verifier = self.state.fleet_verifier().ok_or_else(|| {
+            ApiError::bad_request("fleet is not configured; set `api.fleet_secret`")
+        })?;
+        verifier
+            .accept(bundle, self.state.active_revision())
+            .map_err(|e| match e {
+                ufw_daemon::fleet::BundleError::NotAuthentic => ApiError::forbidden(e.to_string()),
+                _ => ApiError::conflict(e.to_string()),
+            })?;
+
+        // The host compiles the bundle's source itself, so it validates what it
+        // is about to run rather than trusting the distribution point.
+        let compiled = ufw_policy_lang::compile_str(
+            "fleet-bundle",
+            &bundle.source,
+            &ufw_policy_lang::CompileOptions::default(),
+        );
+        let Some(policy) = compiled.policy.clone() else {
+            return Err(ApiError::bad_request(format!(
+                "bundle revision {} does not compile:\n{}",
+                bundle.revision,
+                compiled.render()
+            )));
+        };
+
+        // Record the rollout target and this host's canary membership.
+        let in_canary = ufw_daemon::fleet::in_canary(
+            &self.state.host_id,
+            bundle.revision,
+            bundle.canary_percent,
+        );
+        self.state.with_fleet(|f| {
+            f.set_target(bundle.revision, bundle.canary_percent);
+            f.record(&self.state.host_id, self.state.active_revision(), ufw_shared::now_us());
+        });
+
+        // A host outside the canary group holds off until the rollout widens;
+        // it has authenticated and validated the bundle, it just does not apply
+        // it yet. This is what makes a staged rollout staged.
+        if !in_canary {
+            return Ok(ufw_daemon::management_api::simple(&format!(
+                "bundle revision {} authenticated; this host is not in the {}% canary, holding at \
+                 revision {}",
+                bundle.revision,
+                bundle.canary_percent,
+                self.state.active_revision()
+            )));
+        }
+
+        let origin = format!("fleet bundle revision {}", bundle.revision);
+        self.install_compiled(policy, &origin, &origin, compiled.diagnostics.warning_count())
     }
 }
 
 impl ControlPlane for Supervisor {
     fn reload_policy(&self) -> Result<String, ApiError> {
         self.install("policy directory")
+    }
+
+    fn install_bundle(&self, bundle: &ufw_daemon::fleet::Bundle) -> Result<String, ApiError> {
+        self.install_signed_bundle(bundle)
     }
 
     fn reload_signatures(&self) -> Result<String, ApiError> {
