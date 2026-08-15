@@ -371,18 +371,30 @@ static __inline UINT32 UfwAcTransitionOf(const UFW_AC *ac,
 
 /*
  * Follow one input byte, falling back along failure links until a transition
- * exists or the root is reached. Amortised O(1) per byte. The `state == 0`
- * exit stops the root trapping on a byte no pattern starts with.
+ * exists or the root is reached. Amortised O(1) per byte on a well-formed
+ * table. The `state == 0` exit stops the root trapping on a byte no pattern
+ * starts with.
+ *
+ * The walk is additionally capped at `stateCount` hops. Depth-decreasing is a
+ * property of the table, and the table is decoded from bytes the daemon is not
+ * trusted to be correct about; UfwAcLoad bounds-checks every index but not that
+ * a fail link points to a shallower state, so a malformed one could form a
+ * cycle that never reaches the root. A valid chain never approaches the cap; a
+ * cyclic one can no longer spin forever at DISPATCH_LEVEL — a decoded-but-wrong
+ * table must not be able to hang the machine. (Kept identical to the Linux and
+ * macOS traversals.)
  */
 static __inline UINT32 UfwAcStep(const UFW_AC *ac, const UFW_AC_TRIE *trie,
 				 UINT32 state, UINT8 byte)
 {
+	UINT32 hops = trie->stateCount;
+
 	for (;;) {
 		UINT32 next = UfwAcTransitionOf(ac, trie, state, byte);
 
 		if (next != trie->stateCount)
 			return next;
-		if (state == 0)
+		if (state == 0 || hops-- == 0)
 			return 0;
 		state = ac->states[trie->stateBase + state].fail;
 	}

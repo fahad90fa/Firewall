@@ -78,7 +78,12 @@ jobs:
                 -fno-sanitize-recover=all ${{ matrix.extra }} \
                 -o fuzzer "${{ matrix.source }}"
       - name: Smoke campaign
-        run: cd fuzz && ./fuzzer "${{ matrix.corpus }}/" -max_len=65536 -max_total_time=60 -print_final_stats=1
+        # -timeout=25: a single unit that runs longer than 25s is treated as a
+        # hang and fails the job promptly. Without it libFuzzer's default is
+        # 1200s, so one infinite loop (e.g. a decoded table with a cyclic fail
+        # link) stalls the runner for 20 minutes before reporting. No valid
+        # decoder or automaton input comes anywhere near a second.
+        run: cd fuzz && ./fuzzer "${{ matrix.corpus }}/" -max_len=65536 -max_total_time=60 -timeout=25 -print_final_stats=1
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -141,7 +146,9 @@ jobs:
                 -o fuzzer "${{ matrix.source }}"
 
       - name: Campaign
-        run: cd fuzz && ./fuzzer "${{ matrix.corpus }}/" -max_len=65536 -max_total_time=1800 -print_final_stats=1
+        # -timeout=25: fail fast on a hanging unit rather than stalling for the
+        # 1200s default. See the smoke tier for why.
+        run: cd fuzz && ./fuzzer "${{ matrix.corpus }}/" -max_len=65536 -max_total_time=1800 -timeout=25 -print_final_stats=1
 
       # A crash that is not kept is a crash that gets rediscovered next month.
       - if: failure()

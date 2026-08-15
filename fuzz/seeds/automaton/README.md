@@ -10,6 +10,11 @@ bytes almost never form a table that decodes.
 - `table-2` — one case-folded pattern `POST`, a five-state chain.
 - `table-3` — two patterns `AB`/`AC` sharing a root, so a state carries a
   multi-transition (binary-searched) slice and the output set holds two ids.
+- `hang-fail-cycle` — a regression seed: a table that decodes and loads but
+  whose failure links form a cycle that never reaches the root. Before the
+  `ufw_ac_step` hop cap it spun forever in the traversal (a ring-0 hang the
+  fuzzer found); it is kept so the smoke tier always re-checks that a cyclic
+  fail link terminates instead of looping.
 
 The layout, little-endian, is: `u32 pattern_count`; per pattern `u8 nocase`,
 `u32 len`, `len` bytes; `u8 trie_count`; per trie `u8 fold`, `u32 state_count`,

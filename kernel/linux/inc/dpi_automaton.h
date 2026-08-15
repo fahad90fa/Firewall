@@ -388,20 +388,30 @@ static inline __u32 ufw_ac_transition_of(const struct ufw_ac *ac,
  * Follow one input byte, falling back along failure links until a transition
  * exists or the root is reached.
  *
- * Amortised O(1) per byte: each fallback strictly decreases depth and depth
- * rises by at most one per byte. The `state == 0` exit is what stops the root
- * from trapping on a byte no pattern starts with.
+ * Amortised O(1) per byte on a well-formed table: each fallback strictly
+ * decreases depth and depth rises by at most one per byte, so the `state == 0`
+ * exit is reached in a few hops. But depth-decreasing is a property of the
+ * *table*, and the table is decoded from bytes the daemon is "not trusted to be
+ * correct" about (see the file header). `ufw_ac_load` bounds-checks every index
+ * but not that a fail link points to a shallower state — a malformed one can
+ * form a cycle that never reaches the root. So the walk is additionally capped
+ * at `state_count` hops: a valid chain never comes close, and a cyclic one can
+ * no longer spin forever in softirq — a decoded-but-wrong table must not be able
+ * to hang the kernel. Hitting the cap returns the root, which on an
+ * already-broken table can only cost a missed match, never a loop.
  */
 static inline __u32 ufw_ac_step(const struct ufw_ac *ac,
 				const struct ufw_ac_trie *trie, __u32 state,
 				__u8 byte)
 {
+	__u32 hops = trie->state_count;
+
 	for (;;) {
 		__u32 next = ufw_ac_transition_of(ac, trie, state, byte);
 
 		if (next != trie->state_count)
 			return next;
-		if (state == 0)
+		if (state == 0 || hops-- == 0)
 			return 0;
 		state = ac->states[trie->state_base + state].fail;
 	}
