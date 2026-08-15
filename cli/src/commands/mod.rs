@@ -6,6 +6,7 @@
 //! daemon.
 
 pub mod debug;
+pub mod fleet;
 pub mod identity;
 pub mod logs;
 pub mod policy;
@@ -29,14 +30,15 @@ pub fn dispatch(
         "identity" => identity::run(args, options, transport),
         "logs" => logs::run(args, options, transport),
         "debug" => debug::run(args, options, transport),
+        "fleet" => fleet::run(args, options, transport),
         "shutdown" => status::shutdown(options, transport),
         other => Err(CliError::Usage(format!("unknown command `{other}`"))),
     }
 }
 
 /// Every command name the CLI accepts.
-pub const COMMANDS: [&str; 7] = [
-    "status", "policy", "rules", "identity", "logs", "debug", "shutdown",
+pub const COMMANDS: [&str; 8] = [
+    "status", "policy", "rules", "identity", "logs", "debug", "fleet", "shutdown",
 ];
 
 /// Reject an unknown command before anything opens a socket.
@@ -67,6 +69,7 @@ pub fn help_for(command: &str) -> Option<&'static str> {
         "identity" => identity::HELP,
         "logs" => logs::HELP,
         "debug" => debug::HELP,
+        "fleet" => fleet::HELP,
         "shutdown" => {
             "ufwctl shutdown\n\nAsk the daemon to exit. \
                        The kernel module keeps enforcing the installed policy.\n"

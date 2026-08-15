@@ -265,6 +265,22 @@ fn run() -> Result<(), String> {
         daemon.set_signatures(signatures);
     }
 
+    // --- fleet -----------------------------------------------------------
+    //
+    // A configured secret is what turns the fleet control surface on. Without
+    // it, the daemon is a single host with no distribution point, and the
+    // fleet endpoints report themselves disabled rather than trusting an
+    // unauthenticated bundle.
+    if let Some(secret) = &config.api.fleet_secret {
+        daemon.set_fleet_verifier(ufw_daemon::fleet::Verifier::new(secret.clone()));
+        logs.note(
+            &config.daemon.host_id,
+            Severity::Notice,
+            EventKind::PolicyChange,
+            "fleet control enabled: policy bundles are authenticated before install",
+        );
+    }
+
     // --- kernel ----------------------------------------------------------
     let connection = ipc::establish(
         &config.ipc.endpoint,

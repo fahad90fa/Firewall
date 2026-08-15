@@ -19,6 +19,7 @@ use ufw_shared::json::JsonWriter;
 use ufw_shared::policy_types::CompiledPolicy;
 use ufw_shared::protocol::{Capabilities, EnforcementMode, KernelStats};
 
+use crate::fleet::{FleetRegistry, Verifier};
 use crate::identity::IdentityService;
 use crate::logging::LogHandle;
 use crate::policy_store::PolicyStore;
@@ -130,6 +131,13 @@ pub struct DaemonState {
     signature_digest: RwLock<[u8; 32]>,
     signature_loaded_at_us: AtomicU64,
 
+    /// Fleet control state. Present only when a fleet secret is configured;
+    /// the registry is the in-memory roster of members that have checked in,
+    /// and the verifier authenticates pushed bundles. Lazily initialised so
+    /// the common single-host daemon pays nothing for it.
+    fleet: Mutex<FleetRegistry>,
+    fleet_verifier: RwLock<Option<Verifier>>,
+
     shutdown: AtomicBool,
     policy_reloads: AtomicU64,
     failed_reloads: AtomicU64,
@@ -171,6 +179,8 @@ impl DaemonState {
             signature_revision: AtomicU64::new(0),
             signature_digest: RwLock::new([0u8; 32]),
             signature_loaded_at_us: AtomicU64::new(0),
+            fleet: Mutex::new(FleetRegistry::default()),
+            fleet_verifier: RwLock::new(None),
             shutdown: AtomicBool::new(false),
             policy_reloads: AtomicU64::new(0),
             failed_reloads: AtomicU64::new(0),
@@ -389,6 +399,56 @@ impl DaemonState {
     /// Hex of the loaded set's content digest, for status and diagnostics.
     pub fn signature_digest_hex(&self) -> String {
         ufw_shared::hash::hex(&*self.signature_digest.read().unwrap())
+    }
+
+    // --- fleet ----------------------------------------------------------
+
+    /// Install the bundle verifier built from the configured fleet secret.
+    /// Its presence is what enables the fleet control surface.
+    pub fn set_fleet_verifier(&self, verifier: Verifier) {
+        *self.fleet_verifier.write().unwrap() = Some(verifier);
+    }
+
+    pub fn fleet_verifier(&self) -> Option<Verifier> {
+        self.fleet_verifier.read().unwrap().clone()
+    }
+
+    pub fn fleet_enabled(&self) -> bool {
+        self.fleet_verifier.read().unwrap().is_some()
+    }
+
+    /// Operate on the fleet registry under its lock.
+    pub fn with_fleet<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut FleetRegistry) -> R,
+    {
+        f(&mut self.fleet.lock().unwrap())
+    }
+
+    /// The fleet roster as JSON, for `fleet-status`.
+    pub fn fleet_status_json(&self) -> String {
+        let mut w = ufw_shared::json::JsonWriter::with_capacity(2048);
+        w.begin_object();
+        w.bool_field("ok", true);
+        w.bool_field("enabled", self.fleet_enabled());
+        w.str_field("host", &self.host_id);
+        let fleet = self.fleet.lock().unwrap();
+        w.u64_field("target_revision", fleet.target_revision());
+        w.u64_field("target_canary_percent", fleet.target_canary_percent() as u64);
+        w.u64_field("members", fleet.len() as u64);
+        w.u64_field("converged", fleet.converged() as u64);
+        w.begin_array_field("roster");
+        for m in fleet.members() {
+            w.begin_object();
+            w.str_field("host_id", &m.host_id);
+            w.u64_field("revision", m.revision);
+            w.bool_field("in_canary", m.in_canary);
+            w.u64_field("last_seen", m.last_seen_us);
+            w.end_object();
+        }
+        w.end_array();
+        w.end_object();
+        w.finish()
     }
 
     /// Signatures the active policy names that no loaded file defines.

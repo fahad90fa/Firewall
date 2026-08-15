@@ -70,6 +70,19 @@ pub enum Request {
     ListTrust,
     /// Loaded DPI signatures, and any the policy names but nobody defines.
     ListSignatures,
+    /// The fleet roster and rollout state.
+    FleetStatus,
+    /// Record a fleet member's heartbeat (the revision it reports running).
+    FleetEnroll { host_id: String, revision: u64 },
+    /// Authenticate a signed policy bundle and decide this host's canary
+    /// membership, without installing it.
+    FleetVerify {
+        revision: u64,
+        source: String,
+        canary_percent: u8,
+        canary_seconds: u64,
+        mac: [u8; 32],
+    },
     /// Ask the daemon to exit.
     Shutdown,
     /// Liveness probe.
@@ -89,6 +102,7 @@ impl Request {
             | Request::Stats
             | Request::ListTrust
             | Request::ListSignatures
+            | Request::FleetStatus
             | Request::Ping => Authority::ReadOnly,
 
             Request::ReloadPolicy
@@ -97,6 +111,8 @@ impl Request {
             | Request::FlushPolicy
             | Request::SetMode { .. }
             | Request::ResolveIdentity { .. }
+            | Request::FleetEnroll { .. }
+            | Request::FleetVerify { .. }
             | Request::Shutdown => Authority::Admin,
         }
     }
@@ -118,6 +134,9 @@ impl Request {
             Request::ResolveIdentity { .. } => "resolve-identity",
             Request::ListTrust => "list-trust",
             Request::ListSignatures => "list-signatures",
+            Request::FleetStatus => "fleet-status",
+            Request::FleetEnroll { .. } => "fleet-enroll",
+            Request::FleetVerify { .. } => "fleet-verify",
             Request::Shutdown => "shutdown",
             Request::Ping => "ping",
         }
@@ -164,6 +183,27 @@ impl Request {
             },
             "list-trust" => Request::ListTrust,
             "list-signatures" => Request::ListSignatures,
+            "fleet-status" => Request::FleetStatus,
+            "fleet-enroll" => Request::FleetEnroll {
+                host_id: arg("host_id")
+                    .ok_or_else(|| ApiError::bad_request("missing `host_id`"))?,
+                revision: num("revision")
+                    .ok_or_else(|| ApiError::bad_request("missing `revision`"))?,
+            },
+            "fleet-verify" => {
+                let mac = arg("mac").ok_or_else(|| ApiError::bad_request("missing `mac`"))?;
+                let mac = ufw_shared::hash::parse_sha256(&mac)
+                    .ok_or_else(|| ApiError::bad_request("`mac` must be 64 hex characters"))?;
+                Request::FleetVerify {
+                    revision: num("revision")
+                        .ok_or_else(|| ApiError::bad_request("missing `revision`"))?,
+                    source: arg("source")
+                        .ok_or_else(|| ApiError::bad_request("missing `source`"))?,
+                    canary_percent: num("canary_percent").unwrap_or(100).min(255) as u8,
+                    canary_seconds: num("canary_seconds").unwrap_or(0),
+                    mac,
+                }
+            }
             "shutdown" => Request::Shutdown,
             "ping" => Request::Ping,
             other => return Err(ApiError::not_found(format!("unknown operation `{other}`"))),
@@ -310,6 +350,29 @@ impl Router {
             Request::ListRevisions => Ok(Response::ok(self.revisions_json())),
             Request::ListTrust => Ok(Response::ok(self.trust_json())),
             Request::ListSignatures => Ok(Response::ok(self.signatures_json())),
+            Request::FleetStatus => Ok(Response::ok(self.state.fleet_status_json())),
+            Request::FleetEnroll { host_id, revision } => {
+                self.state
+                    .with_fleet(|f| f.record(&host_id, revision, ufw_shared::now_us()));
+                Ok(Response::ok(simple(&format!(
+                    "host `{host_id}` enrolled, reporting revision {revision}"
+                ))))
+            }
+            Request::FleetVerify {
+                revision,
+                source,
+                canary_percent,
+                canary_seconds,
+                mac,
+            } => self
+                .fleet_verify(crate::fleet::Bundle {
+                    revision,
+                    source,
+                    canary_percent,
+                    canary_seconds,
+                    mac,
+                })
+                .map(Response::ok),
             Request::ResolveIdentity { pid } => Ok(Response::ok(self.identity_json(pid))),
             Request::ReloadPolicy => self.control.reload_policy().map(Response::ok),
             Request::ReloadSignatures => self.control.reload_signatures().map(Response::ok),
@@ -329,6 +392,55 @@ impl Router {
     /// that nothing defines. The dangling list is the part worth reading: a
     /// DPI rule naming a signature nobody shipped installs cleanly and never
     /// fires, so nothing else in the system would ever complain about it.
+    /// Authenticate a signed policy bundle, confirm it compiles here, and
+    /// decide this host's canary membership — the trust core of a fleet push.
+    /// It deliberately does not install: the host compiles the bundle itself
+    /// (a distribution point is not trusted to have shipped something that
+    /// builds), and applying the verified source reuses the ordinary
+    /// `reload-policy` path once it is staged.
+    fn fleet_verify(&self, bundle: crate::fleet::Bundle) -> Result<String, ApiError> {
+        let verifier = self.state.fleet_verifier().ok_or_else(|| {
+            ApiError::bad_request("fleet is not configured; set `api.fleet_secret`")
+        })?;
+        let installed = self.state.active_revision();
+        verifier
+            .accept(&bundle, installed)
+            .map_err(|e| match e {
+                crate::fleet::BundleError::NotAuthentic => ApiError::forbidden(e.to_string()),
+                _ => ApiError::conflict(e.to_string()),
+            })?;
+
+        // The host compiles the bundle itself, so it validates it itself.
+        let compiled = ufw_policy_lang::compile_str(
+            "fleet-bundle",
+            &bundle.source,
+            &ufw_policy_lang::CompileOptions::default(),
+        );
+        if !compiled.is_ok() {
+            return Err(ApiError::bad_request(format!(
+                "bundle revision {} does not compile:\n{}",
+                bundle.revision,
+                compiled.render()
+            )));
+        }
+        let rules = compiled.policy.as_ref().map(|p| p.rules.len()).unwrap_or(0);
+
+        let canary =
+            crate::fleet::in_canary(&self.state.host_id, bundle.revision, bundle.canary_percent);
+        self.state.with_fleet(|f| {
+            f.set_target(bundle.revision, bundle.canary_percent);
+            f.record(&self.state.host_id, installed, ufw_shared::now_us());
+        });
+
+        Ok(simple(&format!(
+            "bundle revision {} authenticated and compiles ({rules} rule(s)); this host {} \
+             the canary at {}% — apply with `reload-policy` once the source is staged",
+            bundle.revision,
+            if canary { "IS IN" } else { "IS NOT IN" },
+            bundle.canary_percent,
+        )))
+    }
+
     fn signatures_json(&self) -> String {
         let set = self.state.signatures();
         let dangling = self.state.dangling_signature_refs();
@@ -763,6 +875,126 @@ mod tests {
             .dispatch(Request::ReloadSignatures, Authority::Admin)
             .unwrap();
         assert!(h.control.called("reload-signatures"));
+    }
+
+    #[test]
+    fn fleet_status_is_read_only_and_enroll_populates_the_roster() {
+        let h = harness();
+        // Observable without admin, and disabled until a secret is configured.
+        let resp = h
+            .router
+            .dispatch(Request::FleetStatus, Authority::ReadOnly)
+            .unwrap();
+        assert_eq!(resp.status, 200);
+
+        // Enrolling a member is admin-only.
+        assert_eq!(
+            h.router
+                .dispatch(
+                    Request::FleetEnroll {
+                        host_id: "host-1".into(),
+                        revision: 3,
+                    },
+                    Authority::ReadOnly,
+                )
+                .unwrap_err()
+                .status,
+            403
+        );
+        h.router
+            .dispatch(
+                Request::FleetEnroll {
+                    host_id: "host-1".into(),
+                    revision: 3,
+                },
+                Authority::Admin,
+            )
+            .unwrap();
+
+        let resp = h
+            .router
+            .dispatch(Request::FleetStatus, Authority::ReadOnly)
+            .unwrap();
+        let v = json::parse(&resp.body).unwrap();
+        assert_eq!(v.get("members").unwrap().as_u64(), Some(1));
+    }
+
+    #[test]
+    fn fleet_verify_authenticates_a_signed_bundle_and_rejects_a_tampered_one() {
+        let h = harness();
+        let secret = b"a-32-byte-fleet-secret-key-000000".to_vec();
+        h.state
+            .set_fleet_verifier(crate::fleet::Verifier::new(secret.clone()));
+
+        let verifier = crate::fleet::Verifier::new(secret);
+        let mut bundle = crate::fleet::Bundle {
+            revision: 99,
+            source: "version: 1\ndefaults:\n  action: deny\nrules:\n  - id: a\n    action: allow\n"
+                .into(),
+            canary_percent: 100,
+            canary_seconds: 0,
+            mac: [0u8; 32],
+        };
+        verifier.sign(&mut bundle);
+
+        let ok = h
+            .router
+            .dispatch(
+                Request::FleetVerify {
+                    revision: bundle.revision,
+                    source: bundle.source.clone(),
+                    canary_percent: bundle.canary_percent,
+                    canary_seconds: bundle.canary_seconds,
+                    mac: bundle.mac,
+                },
+                Authority::Admin,
+            )
+            .unwrap();
+        let v = json::parse(&ok.body).unwrap();
+        assert!(v
+            .get("message")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("authenticated"));
+
+        // A tampered MAC is an authentication failure, not a soft error.
+        let mut tampered = bundle.mac;
+        tampered[0] ^= 0xff;
+        let err = h
+            .router
+            .dispatch(
+                Request::FleetVerify {
+                    revision: bundle.revision,
+                    source: bundle.source,
+                    canary_percent: bundle.canary_percent,
+                    canary_seconds: bundle.canary_seconds,
+                    mac: tampered,
+                },
+                Authority::Admin,
+            )
+            .unwrap_err();
+        assert_eq!(err.status, 403);
+    }
+
+    #[test]
+    fn fleet_verify_without_a_configured_secret_is_refused() {
+        let h = harness();
+        let err = h
+            .router
+            .dispatch(
+                Request::FleetVerify {
+                    revision: 1,
+                    source: "version: 1\nrules: []\n".into(),
+                    canary_percent: 100,
+                    canary_seconds: 0,
+                    mac: [0u8; 32],
+                },
+                Authority::Admin,
+            )
+            .unwrap_err();
+        assert_eq!(err.status, 400);
+        assert!(err.message.contains("fleet is not configured"));
     }
 
     #[test]
