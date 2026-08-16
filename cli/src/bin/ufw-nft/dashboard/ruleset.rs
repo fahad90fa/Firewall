@@ -44,9 +44,11 @@ pub struct Ruleset {
 }
 
 pub fn load() -> Ruleset {
-    let out = Command::new("nft")
-        .args(["list", "table", "inet", "ufw"])
-        .output();
+    // Bounded: a wedged `nft` (contending on the kernel nftables lock during a
+    // concurrent apply) must not park this request past the dashboard's poll.
+    let mut cmd = Command::new("nft");
+    cmd.args(["list", "table", "inet", "ufw"]);
+    let out = super::bounded::run_bounded(cmd, std::time::Duration::from_secs(2));
     match out {
         Ok(o) if o.status.success() => Ruleset {
             loaded: true,
@@ -69,6 +71,11 @@ pub fn load() -> Ruleset {
                 },
             }
         }
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Ruleset {
+            loaded: false,
+            chains: Vec::new(),
+            error: Some("nft timed out — the ruleset is temporarily unavailable".into()),
+        },
         Err(e) => Ruleset {
             loaded: false,
             chains: Vec::new(),

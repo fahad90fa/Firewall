@@ -148,6 +148,7 @@
   .live .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-mute); flex: none; }
   .live.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 30%, var(--border)); } .live.on .dot { background: var(--ok); animation: pulse 2s infinite; }
   .live.off { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 30%, var(--border)); } .live.off .dot { background: var(--bad); }
+  .live.wait { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 30%, var(--border)); } .live.wait .dot { background: var(--warn); animation: pulse 2s infinite; }
   @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 55%, transparent); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
   .ctl { display: inline-flex; align-items: center; gap: 6px; }
   button, select, input { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); }
@@ -687,13 +688,13 @@ let toastT = 0;
 function toast(msg){ const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastT); toastT = setTimeout(()=>t.classList.remove("show"), 1800); }
 
 /* ---- polling ---------------------------------------------------------- */
-let intervalMs = store.get("interval",3000), timer=null, lastOk=false, busy=false;
+let intervalMs = store.get("interval",3000), timer=null, lastOk=false, busy=false, failCount=0;
 $("interval").value = String(intervalMs);
 $("interval").onchange = () => { intervalMs = +$("interval").value; store.set("interval",intervalMs); arm(); if (intervalMs) refresh(); };
 $("refresh").onclick = () => refresh();
 function arm(){ if (timer) clearInterval(timer); timer=null; if (intervalMs>0) timer=setInterval(()=>{ if(!document.hidden) refresh(); }, intervalMs); }
 document.addEventListener("visibilitychange", () => { if (!document.hidden && intervalMs) refresh(); });
-function setLive(s){ const el=$("live"); el.className="live "+(s==="live"?"on":s==="off"?"off":""); $("liveText").textContent=s; }
+function setLive(s,txt){ const el=$("live"); el.className="live "+(s==="live"?"on":s==="off"?"off":s==="wait"?"wait":""); $("liveText").textContent=txt||s; }
 
 /* ---- formatting ------------------------------------------------------- */
 const fmtN = (n) => Number(n ?? 0).toLocaleString();
@@ -723,10 +724,23 @@ async function refresh(){
     /* new-event detection */
     if (prevEventCount!==null && (t.events||0) > prevEventCount) toastNew((t.events||0)-prevEventCount);
     prevEventCount = t.events||0;
-    state=s; lastOk=true; render(); setLive(intervalMs?"live":"paused");
-  } catch(e){ lastOk=false; setLive("off");
-    const rb=$("ribbon"); rb.className="ribbon bad";
-    rb.innerHTML='<span class="rp"></span><div class="rb"><div class="rt">Connection lost</div><div class="rd">The dashboard process is not answering — restart it with <span class="mono">sudo firewall</span>.</div></div>';
+    state=s; lastOk=true; failCount=0; render(); setLive(intervalMs?"live":"paused");
+  } catch(e){ lastOk=false; failCount++;
+    // Invalidate the ribbon memo so the next good poll rebuilds it — the catch
+    // writes the ribbon directly, bypassing renderRibbon's changed() guard.
+    _sig.ribbon=null;
+    if(failCount<2){
+      // One missed or slow poll: stay subtle and keep the last-good console.
+      // Do NOT tear down the posture yet — a single blip is not an outage.
+      setLive("wait","reconnecting…");
+      const rb=$("ribbon"); rb.className="ribbon warn";
+      rb.innerHTML='<span class="rp"></span><div class="rb"><div class="rt">Reconnecting…</div><div class="rd">Missed an update from this host — retrying.</div></div>';
+    } else {
+      // Confirmed loss: stop every panel from asserting a posture the console
+      // can no longer see (no more green "NOMINAL / all layers holding").
+      setLive("off","offline");
+      renderDisconnected();
+    }
   } finally { busy=false; }
 }
 let newFlash=0;
@@ -803,6 +817,29 @@ function renderDefense(s){
       ${cnt?`<span class="cnt">${cnt}</span>`:""}
       <span class="st ${st==="on"?"on":st==="avail"?"avail":"off"}">${st==="on"?"active":st==="avail"?"ready":"off"}</span>
     </div>`).join("");
+}
+
+/* ---- disconnected: an explicit "no signal" state ----------------------- */
+/* When the poll has failed for real, nothing on the page should keep
+   asserting a posture the console can no longer observe. Repaint the core,
+   the posture pill, and the layer chips as unknown. Every lookup is
+   null-guarded so a missing id can never throw and wedge rendering. The next
+   successful poll's ungated renderPosture()/renderDefense() fully repaint
+   these, and _sig.ribbon was nulled in the catch, so recovery is clean. */
+function renderDisconnected(){
+  const rb=$("ribbon"); if(rb){ rb.className="ribbon bad";
+    rb.innerHTML='<span class="rp"></span><div class="rb"><div class="rt">Connection lost</div><div class="rd">The dashboard process is not answering — restart it with <span class="mono">sudo firewall</span>.</div></div>'; }
+  const wrap=$("coreScene")&&$("coreScene").closest(".core-wrap");
+  if(wrap) wrap.style.setProperty("--core-c","var(--text-mute)");
+  const cs=$("coreState"); if(cs){ cs.textContent="NO SIGNAL"; cs.style.color="var(--text-mute)"; }
+  const cb=$("coreSub"); if(cb) cb.textContent="connection lost — status unknown";
+  const pp=$("posture"); if(pp) pp.className="posture";
+  const pt=$("postureText"); if(pt) pt.textContent="No signal";
+  const dl=$("dlayers");
+  if(dl) dl.querySelectorAll(".dlayer").forEach(d=>{
+    const st=d.querySelector(".st"); if(st){ st.className="st off"; st.textContent="unknown"; }
+    const c=d.querySelector(".cnt"); if(c) c.remove();
+  });
 }
 
 /* Pointer-tracked 3D tilt on any `.tilt` panel. Cheap: only touches the

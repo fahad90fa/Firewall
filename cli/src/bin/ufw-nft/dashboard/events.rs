@@ -109,17 +109,20 @@ pub fn collect(max: usize) -> (Vec<Event>, Vec<String>) {
 }
 
 fn journalctl_lines() -> Result<Vec<String>, String> {
-    let out = Command::new("journalctl")
-        .args([
-            "-k",
-            "-o",
-            "short-unix",
-            "--no-pager",
-            "-q",
-            "--since",
-            "48 hours ago",
-        ])
-        .output()
+    // Bounded: a large or busy journal must not stall the poll. On timeout this
+    // returns an error, which choose_source funnels into the errors banner and
+    // then falls through to dmesg.
+    let mut cmd = Command::new("journalctl");
+    cmd.args([
+        "-k",
+        "-o",
+        "short-unix",
+        "--no-pager",
+        "-q",
+        "--since",
+        "48 hours ago",
+    ]);
+    let out = super::bounded::run_bounded(cmd, std::time::Duration::from_secs(3))
         .map_err(|e| format!("journalctl: {e}"))?;
     if !out.status.success() {
         return Err(format!(
@@ -135,8 +138,7 @@ fn journalctl_lines() -> Result<Vec<String>, String> {
 }
 
 fn dmesg_lines() -> Result<Vec<String>, String> {
-    let out = Command::new("dmesg")
-        .output()
+    let out = super::bounded::run_bounded(Command::new("dmesg"), std::time::Duration::from_secs(2))
         .map_err(|e| format!("dmesg: {e}"))?;
     if !out.status.success() {
         return Err(format!(

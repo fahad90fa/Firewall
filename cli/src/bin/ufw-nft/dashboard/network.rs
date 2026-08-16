@@ -395,14 +395,14 @@ fn parallel_liveness(targets: &[Ipv4Addr], started: Instant) -> Vec<Ipv4Addr> {
         for &p in LIVENESS_PORTS {
             match probe(ip, p) {
                 Probe::Open | Probe::Refused => {
-                    hits.lock().unwrap().push(ip);
+                    hits.lock().unwrap_or_else(|p| p.into_inner()).push(ip);
                     return;
                 }
                 Probe::Down => {}
             }
         }
     });
-    hits.into_inner().unwrap()
+    hits.into_inner().unwrap_or_else(|p| p.into_inner())
 }
 
 /// Scan `SCAN_PORTS` on each up host, returning the open ones as services.
@@ -424,9 +424,11 @@ fn parallel_services(hosts: &[Ipv4Addr], started: Instant) -> Vec<(Ipv4Addr, Vec
                 });
             }
         }
-        out.lock().unwrap().push((ip, svcs));
+        out.lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push((ip, svcs));
     });
-    out.into_inner().unwrap()
+    out.into_inner().unwrap_or_else(|p| p.into_inner())
 }
 
 /// A fixed-size worker pool over indices `0..n`, each processed by `job`.
