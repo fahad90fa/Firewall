@@ -31,10 +31,7 @@ pub fn run_bounded(mut cmd: Command, budget: Duration) -> std::io::Result<Output
         // unwrap, so this stays panic-free on the request path.
         let _ = child.kill();
         let _ = child.wait();
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "could not capture child output",
-        ));
+        return Err(std::io::Error::other("could not capture child output"));
     };
     let reader_out = std::thread::spawn(move || {
         let mut v = Vec::new();
