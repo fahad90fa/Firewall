@@ -303,7 +303,7 @@
   @keyframes spin { to { transform: rotate(360deg); } }
 
   .backdrop { display: none; position: fixed; inset: 0; z-index: 25; background: rgba(0,0,0,.4); }
-  body.drawer .backdrop, body.detail .backdrop, body.help .backdrop { display: block; }
+  body.drawer .backdrop, body.detail .backdrop, body.help .backdrop, body.palette .backdrop { display: block; }
 
   /* ---- detail drawer ---------------------------------------------------- */
   /* Positioned by `right` rather than a transform: a transform on a fixed
@@ -325,6 +325,20 @@
   .help .box { background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r-lg); box-shadow: var(--shadow-lg); max-width: 440px; width: 100%; padding: 18px 20px; }
   .help h3 { margin-bottom: 12px; } .help dl { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; margin: 0; }
   .help dt { text-align: right; } .help dd { margin: 0; color: var(--text-dim); }
+  /* command palette */
+  .palette { position: fixed; z-index: 60; inset: 0; display: none; align-items: flex-start; justify-content: center; padding: 12vh 20px 20px; }
+  body.palette .palette { display: flex; }
+  .palette .box { background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r-lg); box-shadow: var(--shadow-lg); max-width: 560px; width: 100%; overflow: hidden; }
+  .palette input { width: 100%; height: 46px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 0 16px; font-size: 15px; background: var(--surface); }
+  .palette input:focus { outline: none; }
+  .palette ul { list-style: none; margin: 0; padding: 6px; max-height: 46vh; overflow-y: auto; }
+  .palette li { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: var(--r-sm); cursor: pointer; color: var(--text-dim); }
+  .palette li .pi { width: 20px; text-align: center; opacity: .8; flex: none; }
+  .palette li .pk { margin-left: auto; font-size: 11px; color: var(--text-mute); font-family: var(--mono); padding-left: 10px; }
+  .palette li.sel { background: var(--accent-weak); color: var(--accent); }
+  .palette li .pd2 { color: var(--text-mute); font-weight: 400; font-size: 12px; margin-left: 6px; }
+  .palette .empty2 { padding: 16px; color: var(--text-mute); text-align: center; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
   kbd { font-family: var(--mono); font-size: 11px; background: var(--surface-3); border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; color: var(--text); }
   .toast { position: fixed; z-index: 70; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(20px); opacity: 0; transition: transform .2s, opacity .2s;
     background: var(--text); color: var(--bg); font-size: 13px; font-weight: 600; padding: 9px 16px; border-radius: 999px; box-shadow: var(--shadow-lg); pointer-events: none; }
@@ -644,6 +658,7 @@
   <div class="box">
     <h3>Keyboard shortcuts</h3>
     <dl>
+      <dt><kbd>Ctrl</kbd>+<kbd>K</kbd></dt><dd>command palette</dd>
       <dt><kbd>/</kbd></dt><dd>focus the event filter</dd>
       <dt><kbd>r</kbd></dt><dd>refresh now</dd>
       <dt><kbd>t</kbd></dt><dd>cycle theme</dd>
@@ -654,8 +669,15 @@
     </dl>
   </div>
 </div>
+<div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+  <div class="box">
+    <input id="palInput" type="text" placeholder="Type a command or search — section, attacker, action…" aria-label="Command palette" aria-controls="palList" autocomplete="off" spellcheck="false">
+    <ul id="palList" role="listbox" aria-label="Commands"></ul>
+  </div>
+</div>
 <div id="tt" role="status"></div>
 <div class="toast" id="toast" role="status"></div>
+<div class="sr-only" id="srPosture" role="status" aria-live="polite"></div>
 
 <script>
 "use strict";
@@ -776,6 +798,14 @@ function renderPosture(s){
   else if(med){ cls="warn"; txt=med+" to review"; }
   else { cls="ok"; txt="Nominal"; }
   el.className="posture "+cls; tx.textContent=txt;
+  announcePosture(txt);
+}
+/* Announce posture changes to assistive tech without spamming: only on change. */
+let _lastPosture="";
+function announcePosture(txt){
+  if(txt===_lastPosture) return;
+  _lastPosture=txt;
+  const sr=$("srPosture"); if(sr) sr.textContent="Security posture: "+txt+".";
 }
 
 /* ---- 3D defense core + defense layers --------------------------------- */
@@ -835,6 +865,7 @@ function renderDisconnected(){
   const cb=$("coreSub"); if(cb) cb.textContent="connection lost — status unknown";
   const pp=$("posture"); if(pp) pp.className="posture";
   const pt=$("postureText"); if(pt) pt.textContent="No signal";
+  announcePosture("no signal — connection to this host lost");
   const dl=$("dlayers");
   if(dl) dl.querySelectorAll(".dlayer").forEach(d=>{
     const st=d.querySelector(".st"); if(st){ st.className="st off"; st.textContent="unknown"; }
@@ -1277,12 +1308,82 @@ if(window.IntersectionObserver){ const byId={}; navLinks.forEach(a=>byId[a.getAt
   const io=new IntersectionObserver(ents=>{ ents.forEach(en=>{ if(en.isIntersecting){ navLinks.forEach(a=>a.classList.remove("active")); const a=byId[en.target.id]; if(a)a.classList.add("active"); } }); },{rootMargin:"-45% 0px -50% 0px"});
   document.querySelectorAll("main > section").forEach(sec=>io.observe(sec)); }
 
+/* ---- command palette (Ctrl-K / Cmd-K) -------------------------------- */
+const palette = (function(){
+  const ov=$("palette"), input=$("palInput"), list=$("palList");
+  let items=[], sel=0, isOpen=false;
+  const jump=(id)=>{ const el=$(id); if(el) el.scrollIntoView({behavior:"smooth"}); };
+  function togglePause(){ const s=$("interval"); s.value = intervalMs===0 ? "3000" : "0"; s.onchange(); }
+  function base(){
+    const paused = intervalMs===0;
+    return [
+      {ic:"◉", label:"Go to Overview",         key:"1", run:()=>jump("overview")},
+      {ic:"⚠", label:"Go to Threats",          key:"2", run:()=>jump("threats")},
+      {ic:"▲", label:"Go to Top talkers",      key:"3", run:()=>jump("talkers")},
+      {ic:"☰", label:"Go to Events",           key:"4", run:()=>jump("events")},
+      {ic:"◍", label:"Go to Network manager",           run:()=>jump("network")},
+      {ic:"🛡", label:"Go to Attack surface",           run:()=>jump("exposure")},
+      {ic:"▦", label:"Go to Rules",                     run:()=>jump("rules")},
+      {ic:"▥", label:"Go to Host surface",              run:()=>jump("host")},
+      {ic:"ⓘ", label:"Go to Diagnostics",               run:()=>jump("diag")},
+      {ic:"↻", label:"Refresh now",            key:"r", run:()=>{ refresh(); toast("Refreshed"); }},
+      {ic:"◑", label:"Toggle theme",           key:"t", run:()=>$("theme").click()},
+      {ic:paused?"▶":"⏸", label:paused?"Resume live polling":"Pause live polling", run:togglePause},
+      {ic:"⭳", label:"Export events (JSON)",   key:"e", run:()=>$("exportJson").click()},
+      {ic:"⭳", label:"Export events (CSV)",             run:()=>$("exportCsv").click()},
+      {ic:"⌨", label:"Keyboard shortcuts",     key:"?", run:()=>toggleHelp(true)},
+    ];
+  }
+  function dynamic(){
+    // Live entries from the current snapshot: jump straight to an attacker.
+    return ((state&&state.attacks)||[]).slice(0,12).map(a=>(
+      {ic:"⌖", label:"Investigate "+a.src, sub:a.title||a.kind, run:()=>jump("threats")}
+    ));
+  }
+  function render(q){
+    const all=base().concat(dynamic());
+    const ql=q.trim().toLowerCase();
+    items = ql ? all.filter(it=>(it.label+" "+(it.sub||"")).toLowerCase().includes(ql)) : all;
+    if(sel>=items.length) sel=Math.max(0,items.length-1);
+    list.innerHTML = items.length
+      ? items.map((it,i)=>`<li role="option" data-i="${i}" aria-selected="${i===sel}" class="${i===sel?"sel":""}">`+
+          `<span class="pi" aria-hidden="true">${it.ic||"›"}</span>`+
+          `<span>${esc(it.label)}${it.sub?`<span class="pd2">${esc(it.sub)}</span>`:""}</span>`+
+          `${it.key?`<span class="pk">${esc(it.key)}</span>`:""}</li>`).join("")
+      : `<li class="empty2">No matching command</li>`;
+    list.querySelectorAll("li[data-i]").forEach(li=>{
+      li.addEventListener("mousemove",()=>{ if(sel!==+li.dataset.i){ sel=+li.dataset.i; paint(); } });
+      li.addEventListener("click",runSel);
+    });
+  }
+  function paint(){
+    list.querySelectorAll("li[data-i]").forEach(li=>{ const on=+li.dataset.i===sel; li.classList.toggle("sel",on); li.setAttribute("aria-selected",on); });
+    const s=list.querySelector("li.sel"); if(s) s.scrollIntoView({block:"nearest"});
+  }
+  function runSel(){ const it=items[sel]; if(it){ close(); it.run(); } }
+  function show(){ isOpen=true; document.body.classList.add("palette"); input.value=""; sel=0; render(""); input.focus(); }
+  function close(){ if(!isOpen) return; isOpen=false; document.body.classList.remove("palette"); }
+  input.addEventListener("input",()=>{ sel=0; render(input.value); });
+  input.addEventListener("keydown",(e)=>{
+    if(e.key==="ArrowDown"){ e.preventDefault(); sel=Math.min(sel+1, items.length-1); paint(); }
+    else if(e.key==="ArrowUp"){ e.preventDefault(); sel=Math.max(sel-1, 0); paint(); }
+    else if(e.key==="Enter"){ e.preventDefault(); runSel(); }
+    else if(e.key==="Escape"){ e.preventDefault(); close(); }
+  });
+  ov.addEventListener("click",(e)=>{ if(e.target===ov) close(); });
+  return { show, close, toggle:()=>isOpen?close():show(), isOpen:()=>isOpen };
+})();
+// Ctrl-K / Cmd-K opens the palette from anywhere (capture, so it beats other handlers).
+addEventListener("keydown",(e)=>{
+  if((e.ctrlKey||e.metaKey) && (e.key==="k"||e.key==="K")){ e.preventDefault(); palette.toggle(); }
+}, true);
+
 /* ---- keyboard shortcuts ---------------------------------------------- */
 const SECN=["overview","threats","talkers","events","network","exposure","rules","host"];
 addEventListener("keydown",(e)=>{
   if(e.metaKey||e.ctrlKey||e.altKey) return;
   const tag=(e.target.tagName||"").toLowerCase(), typing=tag==="input"||tag==="select"||tag==="textarea";
-  if(e.key==="Escape"){ closeDetail(); toggleHelp(false); if(typing) e.target.blur(); return; }
+  if(e.key==="Escape"){ palette.close(); closeDetail(); toggleHelp(false); if(typing) e.target.blur(); return; }
   if(typing) return;
   if(e.key==="/"){ e.preventDefault(); $("evSearch").focus(); }
   else if(e.key==="r"){ refresh(); toast("Refreshed"); }
