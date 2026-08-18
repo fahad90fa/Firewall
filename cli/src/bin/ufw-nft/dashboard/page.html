@@ -339,6 +339,25 @@
   .palette li .pd2 { color: var(--text-mute); font-weight: 400; font-size: 12px; margin-left: 6px; }
   .palette .empty2 { padding: 16px; color: var(--text-mute); text-align: center; }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+  /* attacker drill-down + geo-lite scope */
+  .geo { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-dim); background: var(--surface-2); }
+  .geo.public { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 30%, var(--border)); }
+  .geo.private, .geo.local { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 30%, var(--border)); }
+  .geo.bogon { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 30%, var(--border)); }
+  .attack .ah { display: flex; align-items: center; gap: 8px; }
+  .attack .mini { height: 24px; padding: 0 9px; font-size: 11px; margin-left: auto; }
+  .kc { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 2px; }
+  .kc .st2 { font-size: 11px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-mute); background: var(--surface-2); }
+  .kc .st2.on { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, var(--border)); background: var(--bad-weak); font-weight: 600; }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .chips .pc { font-size: 11px; font-family: var(--mono); padding: 2px 7px; border-radius: 6px; background: var(--surface-3); color: var(--text-dim); }
+  .mini-ev .row { display: flex; gap: 8px; align-items: baseline; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+  .mini-ev .row .t { color: var(--text-mute); font-family: var(--mono); font-size: 11px; min-width: 62px; }
+  .heatwrap { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px; }
+  .hcell { font-family: var(--mono); font-size: 11px; padding: 4px 8px; border-radius: 6px; background: var(--surface-3); color: var(--text-dim); cursor: default; }
+  .hcell.sev-critical, .hcell.sev-high { background: var(--bad-weak); color: var(--bad); }
+  .hcell.sev-medium { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+  .hcell.sev-low, .hcell.sev-good { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
   kbd { font-family: var(--mono); font-size: 11px; background: var(--surface-3); border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; color: var(--text); }
   .toast { position: fixed; z-index: 70; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(20px); opacity: 0; transition: transform .2s, opacity .2s;
     background: var(--text); color: var(--bg); font-size: 13px; font-weight: 600; padding: 9px 16px; border-radius: 999px; box-shadow: var(--shadow-lg); pointer-events: none; }
@@ -960,17 +979,20 @@ const SEV_ICON={critical:"⚠",high:"⚠",medium:"▲",low:"●",info:"ℹ",good
 function renderAttacks(attacks){
   const el=$("attacks");
   if(!attacks.length){ el.innerHTML=`<div class="card"><div class="empty">No attack patterns yet. Probes appear here the moment a denied packet is logged.</div></div>`; return; }
-  el.innerHTML=attacks.map((a,i)=>`
+  el.innerHTML=attacks.map((a,i)=>{ const g=ipClass(a.src); return `
     <div class="attack sev-${esc(a.severity)}" data-src="${esc(a.src)}" tabindex="0" role="button" aria-label="Filter events for ${esc(a.src)}">
-      <div class="ah"><span class="chip sev-${esc(a.severity)}">${SEV_ICON[a.severity]||""} ${esc((a.severity||"").toUpperCase())}</span><span class="at">${esc(a.title)}</span></div>
+      <div class="ah"><span class="chip sev-${esc(a.severity)}">${SEV_ICON[a.severity]||""} ${esc((a.severity||"").toUpperCase())}</span><span class="at">${esc(a.title)}</span>
+        <button class="mini" data-investigate="${esc(a.src)}" aria-label="Investigate ${esc(a.src)}">Investigate ↗</button></div>
       <div class="ad">${esc(a.detail)}</div>
-      <div class="am"><span class="k">${fmtN(a.count)} packet(s)</span>
+      <div class="am"><span class="geo ${esc(g.scope)}">${SCOPE_ICON[g.scope]||""} ${esc(g.label)}</span>
+        <span class="k">${fmtN(a.count)} packet(s)</span>
         ${a.ports&&a.ports.length?`<span class="k">ports: ${esc(a.ports.slice(0,6).join(", "))}${a.ports.length>6?"…":""}</span>`:""}
         <span class="k">${tstr(a.first_ts)} → ${tstr(a.last_ts)} · ${ago(a.last_ts)} ago</span>
         ${a.rules&&a.rules.length?`<span class="k mono">${esc(a.rules.join(", "))}</span>`:""}</div>
-    </div>`).join("");
+    </div>`;}).join("");
   el.querySelectorAll(".attack[data-src]").forEach(c=>{ const go=()=>filterTo(c.dataset.src==="this host"?"":c.dataset.src);
     c.addEventListener("click",go); c.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); go(); } }); });
+  el.querySelectorAll("[data-investigate]").forEach(b=>b.addEventListener("click",e=>{ e.stopPropagation(); openAttacker(b.dataset.investigate); }));
 }
 
 /* ---- attack surface (server exposure) --------------------------------- */
@@ -988,7 +1010,11 @@ function renderExposure(s){
     `<div class="exp-stat"><div class="n" style="color:${risky?"var(--bad)":"var(--ok)"}">${risky}</div><div class="l">sensitive service(s) exposed</div></div>`;
   const el=$("expFindings");
   if(!f.length){ el.innerHTML=`<div class="card"><div class="empty">${e.grade==="unknown"?"Load a policy to see this host's inbound attack surface.":"Nothing notable is exposed inbound — no world-open sensitive services."}</div></div>`; return; }
-  el.innerHTML=f.map(x=>`
+  const order={critical:0,high:1,medium:2,low:3,good:4};
+  const heat=f.slice().sort((x,y)=>(order[x.severity]??9)-(order[y.severity]??9))
+    .map(x=>`<span class="hcell sev-${esc(x.severity)}" title="${esc(x.title)} — from ${esc(x.scope)}">${x.port!=null?esc(String(x.port)):esc(x.service||"?")}</span>`).join("");
+  el.innerHTML=`<div class="card"><div class="ch"><h3>Exposure heatmap</h3><span class="hint">each exposed port, coloured by risk — hover for detail</span></div><div class="heatwrap">${heat}</div></div>`+
+    f.map(x=>`
     <div class="attack sev-${esc(x.severity)}">
       <div class="ah"><span class="chip sev-${esc(x.severity)}">${SEV_ICON[x.severity]||""} ${esc((x.severity||"").toUpperCase())}</span><span class="at">${esc(x.title)}</span></div>
       <div class="ad">${esc(x.detail)}</div>
@@ -1114,6 +1140,72 @@ function openDetail(e){
       <button data-copy="${esc(e.src)}">Copy source IP</button>
     </div>`;
   $("detailBody").querySelector('[data-act="src"]').onclick=()=>{ filterTo(e.src); closeDetail(); };
+  document.body.classList.add("detail");
+  $("detail").classList.add("open");
+}
+
+/* ---- geo-lite: offline network-scope classification (no GeoIP DB) ------ */
+/* Honest scope, not geolocation: whether an address is on our LAN, behind
+   carrier NAT, bogon, or out on the public internet — an accurate, database-
+   free triage signal. */
+function ipClass(ip){
+  if(ip==="this host") return {scope:"local", label:"this host"};
+  const m=/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip||"");
+  if(!m) return {scope:"other", label:(ip&&ip.indexOf(":")>=0)?"IPv6 address":"unknown"};
+  const a=+m[1], b=+m[2];
+  if(a===10 || (a===172&&b>=16&&b<=31) || (a===192&&b===168)) return {scope:"private", label:"private LAN (RFC 1918)"};
+  if(a===127) return {scope:"local", label:"loopback"};
+  if(a===169&&b===254) return {scope:"linklocal", label:"link-local"};
+  if(a===100&&b>=64&&b<=127) return {scope:"cgnat", label:"carrier NAT (CGNAT)"};
+  if(a>=224&&a<=239) return {scope:"multicast", label:"multicast"};
+  if(a===0 || a>=240) return {scope:"bogon", label:"reserved / bogon"};
+  return {scope:"public", label:"public internet"};
+}
+const SCOPE_ICON={local:"◇",private:"⌂",linklocal:"⚑",cgnat:"⇄",multicast:"⁂",bogon:"⛔",public:"🌐",other:"？"};
+const SEV_ORDER=["critical","high","medium","low","info","good"];
+
+/* ---- per-attacker drill-down ------------------------------------------ */
+function openAttacker(src){
+  if(!src||!state) return;
+  const atks=(state.attacks||[]).filter(a=>a.src===src);
+  const evs=(state.events||[]).filter(e=>e.src===src);
+  if(!atks.length && !evs.length) return;
+  const g=ipClass(src);
+  const ts=[].concat(atks.map(a=>a.first_ts), atks.map(a=>a.last_ts), evs.map(e=>e.ts)).filter(x=>x);
+  const first=ts.length?Math.min.apply(null,ts):0, last=ts.length?Math.max.apply(null,ts):0;
+  const denied=evs.filter(e=>e.action==="deny").length, alerted=evs.filter(e=>e.action==="alert").length;
+  const ports=[...new Set([].concat(...atks.map(a=>a.ports||[]), evs.map(e=>e.dpt).filter(x=>x!=null).map(String)))].slice(0,24);
+  const rules=[...new Set([].concat(...atks.map(a=>a.rules||[]), evs.map(e=>e.rule).filter(Boolean)))];
+  const sev=atks.map(a=>a.severity).sort((x,y)=>SEV_ORDER.indexOf(x)-SEV_ORDER.indexOf(y))[0]||"info";
+  const blob=atks.map(a=>(a.kind||"")+" "+(a.title||"")).join(" ").toLowerCase();
+  const stages=[
+    {k:"Reconnaissance", on: ports.length>2 || /scan|recon|probe|sweep/.test(blob)},
+    {k:"Exploitation attempt", on: /exploit|inject|traversal|overflow|log4|shell|rce|deser|xxe|ssrf/.test(blob)},
+    {k:"Blocked at perimeter", on: denied>0},
+    {k:"Flagged for review", on: alerted>0},
+  ];
+  const recent=evs.slice().sort((a,b)=>b.ts-a.ts).slice(0,8);
+  const kv=(k,v)=>v?`<div class="k">${k}</div><div class="v">${esc(v)}</div>`:"";
+  $("detailTitle").innerHTML=`<span class="chip sev-${esc(sev)}">${esc((sev||"info").toUpperCase())}</span> ${esc(src)}`;
+  $("detailBody").innerHTML=`
+    <div style="margin-bottom:10px"><span class="geo ${esc(g.scope)}">${SCOPE_ICON[g.scope]||""} ${esc(g.label)}</span></div>
+    <div class="kv">
+      ${kv("First seen", first?tfull(first):"—")}
+      ${kv("Last seen", last?tfull(last)+" ("+ago(last)+" ago)":"—")}
+      ${kv("Denied", denied?fmtN(denied)+" event(s)":"")}
+      ${kv("Alerted", alerted?fmtN(alerted)+" event(s)":"")}
+      ${kv("Patterns", atks.map(a=>a.title).join(", "))}
+    </div>
+    <div class="k" style="margin-top:12px">Kill chain</div>
+    <div class="kc">${stages.map(s=>`<span class="st2 ${s.on?"on":""}">${esc(s.k)}</span>`).join("")}</div>
+    ${ports.length?`<div class="k" style="margin-top:12px">Ports targeted</div><div class="chips">${ports.map(p=>`<span class="pc">${esc(String(p))}</span>`).join("")}</div>`:""}
+    ${rules.length?`<div class="k" style="margin-top:12px">Rules tripped</div><div class="chips">${rules.map(r=>`<span class="pc">${esc(r)}</span>`).join("")}</div>`:""}
+    ${recent.length?`<div class="k" style="margin-top:12px">Recent events</div><div class="mini-ev">${recent.map(e=>`<div class="row"><span class="t">${esc(tstr(e.ts))}</span><span class="chip ${e.action==="deny"?"deny":"alert"}">${e.action==="deny"?"DENY":"ALERT"}</span><span>${esc(e.dst||"")}${e.dpt?":"+esc(String(e.dpt)):""} ${esc(e.proto||"")}</span></div>`).join("")}</div>`:""}
+    <div class="drawer-actions">
+      <button data-act="src">Filter events from ${esc(src)}</button>
+      <button data-copy="${esc(src)}">Copy IP</button>
+    </div>`;
+  $("detailBody").querySelector('[data-act="src"]').onclick=()=>{ filterTo(src); closeDetail(); };
   document.body.classList.add("detail");
   $("detail").classList.add("open");
 }
@@ -1337,7 +1429,7 @@ const palette = (function(){
   function dynamic(){
     // Live entries from the current snapshot: jump straight to an attacker.
     return ((state&&state.attacks)||[]).slice(0,12).map(a=>(
-      {ic:"⌖", label:"Investigate "+a.src, sub:a.title||a.kind, run:()=>jump("threats")}
+      {ic:"⌖", label:"Investigate "+a.src, sub:a.title||a.kind, run:()=>{ jump("threats"); openAttacker(a.src); }}
     ));
   }
   function render(q){
