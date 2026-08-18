@@ -358,6 +358,25 @@
   .hcell.sev-critical, .hcell.sev-high { background: var(--bad-weak); color: var(--bad); }
   .hcell.sev-medium { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
   .hcell.sev-low, .hcell.sev-good { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
+  /* connection flow (Sankey-lite) */
+  .flowlist { padding: 6px 14px 12px; }
+  .flowrow { display: grid; grid-template-columns: 150px 1fr auto; gap: 10px; align-items: center; padding: 5px 0; }
+  .flowrow .fsvc { font-size: 12.5px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .flowrow .fbar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--surface-3); }
+  .flowrow .fin { background: var(--info); } .flowrow .fout { background: var(--warn); }
+  .flowrow .fnum { font-size: 11px; font-family: var(--mono); display: flex; gap: 6px; }
+  .flowrow .fnum .in { color: var(--info); } .flowrow .fnum .out { color: var(--warn); }
+  /* compliance checklist */
+  .cmpl-sum { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+  .cmpl-sum .big { font-size: 26px; font-weight: 750; }
+  .ctrl { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: start; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+  .ctrl:last-child { border-bottom: 0; }
+  .ctrl .cst { font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 999px; white-space: nowrap; height: fit-content; }
+  .ctrl .cst.pass { color: var(--ok); background: color-mix(in srgb, var(--ok) 15%, transparent); }
+  .ctrl .cst.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 15%, transparent); }
+  .ctrl .cst.fail { color: var(--bad); background: var(--bad-weak); }
+  .ctrl .cn { font-weight: 600; font-size: 13.5px; } .ctrl .cdt { color: var(--text-dim); font-size: 12.5px; margin-top: 2px; }
+  .ctrl .cid { font-family: var(--mono); font-size: 11px; color: var(--text-mute); white-space: nowrap; }
   kbd { font-family: var(--mono); font-size: 11px; background: var(--surface-3); border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; color: var(--text); }
   .toast { position: fixed; z-index: 70; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(20px); opacity: 0; transition: transform .2s, opacity .2s;
     background: var(--text); color: var(--bg); font-size: 13px; font-weight: 600; padding: 9px 16px; border-radius: 999px; box-shadow: var(--shadow-lg); pointer-events: none; }
@@ -517,6 +536,7 @@
     <a href="#exposure" data-nav="exposure"><span class="ic">&#128737;</span>Attack surface<span class="badge" id="nav-exposure">0</span></a>
     <a href="#rules" data-nav="rules"><span class="ic">&#9636;</span>Rules<span class="badge" id="nav-rules">0</span></a>
     <a href="#host" data-nav="host"><span class="ic">&#9635;</span>Host surface<span class="badge" id="nav-host">0</span></a>
+    <a href="#compliance" data-nav="compliance"><span class="ic">&#10003;</span>Compliance<span class="badge" id="nav-compliance">0</span></a>
     <a href="#diag" data-nav="diag"><span class="ic">&#9432;</span>Diagnostics</a>
     <div class="foot">
       apply <code>sudo firewall apply default_allow</code><br>
@@ -628,6 +648,14 @@
           <div class="pad0"><div class="scroll-y tbl-wrap"><table id="conns"><thead><tr><th>Dir</th><th>Local</th><th>Remote</th><th>Service</th><th>Process</th></tr></thead><tbody><tr><td colspan="5" class="empty">Loading…</td></tr></tbody></table></div></div>
         </div>
       </div>
+      <div class="card" style="margin-top:14px"><div class="ch"><h3>Connection flow</h3><span class="hint">active connections aggregated by service — inbound vs outbound</span></div>
+        <div id="flow"></div>
+      </div>
+    </section>
+
+    <section id="compliance">
+      <div class="sec-h"><h2>Compliance</h2><span class="hint">a live self-assessment against common SOC 2 / ISO 27001 controls — a posture snapshot, not a certification</span></div>
+      <div class="card"><div class="body" id="complianceBody"></div></div>
     </section>
 
     <section id="network">
@@ -802,6 +830,7 @@ function render(){
   if (changed("rules",s.chains)) renderRules(s.chains||[]);
   if (changed("host",[s.listeners,s.connections])) renderHost(s);
   if (changed("exposure",s.exposure)) renderExposure(s);
+  if (changed("compliance",[s.enforced,s.policy,s.exposure,(s.chains||[]).map(c=>c.rules.map(r=>[r.rate_limit,r.log_kind])),(s.events||[]).length>0])) renderCompliance(s);
   renderDiag(s);
   updateNav(s);
 }
@@ -1258,6 +1287,67 @@ function renderHost(s){
   qs("#conns tbody").innerHTML=cs.map(c=>`<tr>
     <td><span class="dirpill">${c.dir==="in"?"⬇ in":"⬆ out"}</span></td><td class="mono">${esc(c.local)}:${c.lport}</td>
     <td class="mono">${esc(c.remote)}:${c.rport}</td><td>${esc(c.service)}</td><td class="mono">${esc(c.process||"?")}</td></tr>`).join("")||`<tr><td colspan="5" class="empty">No established connections.</td></tr>`;
+  renderFlow(cs);
+}
+/* connection flow (Sankey-lite): aggregate established connections by service,
+   split inbound vs outbound, so egress spikes and busy listeners stand out. */
+function renderFlow(cs){
+  const el=$("flow"); if(!el) return;
+  const agg={};
+  for(const c of cs){ const k=c.service||("port "+(c.dir==="in"?c.lport:c.rport)); const v=agg[k]||(agg[k]={in:0,out:0}); if(c.dir==="in") v.in++; else v.out++; }
+  const rows=Object.keys(agg).map(k=>({svc:k, in:agg[k].in, out:agg[k].out, total:agg[k].in+agg[k].out}))
+    .sort((a,b)=>b.total-a.total).slice(0,12);
+  const max=Math.max(1,...rows.map(r=>r.total));
+  el.innerHTML = rows.length
+    ? `<div class="flowlist">`+rows.map(r=>`<div class="flowrow">`+
+        `<div class="fsvc">${esc(r.svc)}</div>`+
+        `<div class="fbar">${r.in?`<span class="fin" style="width:${(100*r.in/max).toFixed(1)}%" title="${r.in} inbound"></span>`:""}${r.out?`<span class="fout" style="width:${(100*r.out/max).toFixed(1)}%" title="${r.out} outbound"></span>`:""}</div>`+
+        `<div class="fnum">${r.in?`<span class="in">⬇${r.in}</span>`:""}${r.out?`<span class="out">⬆${r.out}</span>`:""}</div>`+
+      `</div>`).join("")+`</div>`
+    : `<div class="empty">No established connections to chart.</div>`;
+}
+
+/* ---- compliance self-assessment --------------------------------------- */
+function renderCompliance(s){
+  const pol=s.policy||{}, ex=s.exposure||{}, chains=s.chains||[];
+  const enforced=!!s.enforced;
+  const restrictive=enforced && !!pol.restrictive;
+  const hasRate=chains.some(c=>c.rules.some(r=>r.rate_limit));
+  const hasLogging=(s.events||[]).length>0 || chains.some(c=>c.rules.some(r=>r.log_kind));
+  const risky=((ex.findings||[]).filter(f=>f.severity!=="good"&&f.severity!=="low")).length;
+  const graded=ex.grade && ex.grade!=="unknown";
+  const controls=[
+    {id:"CC6.1 · A.13.1", name:"Default-deny network access",
+      state: restrictive?"pass":enforced?"warn":"fail",
+      detail: restrictive?"Ingress default-deny is in force — anything not explicitly allowed is dropped."
+        : enforced?"A policy is enforcing, but its default action is allow — only named traffic is denied."
+        : "No policy is enforcing; the host is not filtered by ufw-nft."},
+    {id:"CC6.6", name:"Boundary protection (firewall enforcing)",
+      state: enforced?"pass":"fail",
+      detail: enforced?`Policy "${pol.name||"?"}" (rev ${pol.revision??"?"}) is loaded in the kernel.`:"No inet ufw table is loaded."},
+    {id:"CC6.6 · A.13.1", name:"Rate limiting / brute-force dampening",
+      state: hasRate?"pass":enforced?"warn":"fail",
+      detail: hasRate?"One or more rules carry an nftables connection-rate cap.":"No rate-limit rules found in the loaded ruleset."},
+    {id:"CC7.2 · A.12.4", name:"Security event logging",
+      state: hasLogging?"pass":enforced?"warn":"fail",
+      detail: hasLogging?"Denied/alerted packets are logged and surfaced in this console.":"No logged security events observed yet."},
+    {id:"CC7.1", name:"Attack-surface management",
+      state: graded?(risky?"warn":"pass"):"warn",
+      detail: graded?(risky?`${risky} sensitive service(s) are exposed to any source — review the Attack surface tab.`:`Inbound surface graded ${ex.grade}; no world-open sensitive services.`):"Load a policy to assess the inbound attack surface."},
+  ];
+  const pass=controls.filter(c=>c.state==="pass").length;
+  const warn=controls.filter(c=>c.state==="warn").length;
+  const fail=controls.filter(c=>c.state==="fail").length;
+  const pct=Math.round(100*pass/controls.length);
+  const col=fail?"var(--bad)":warn?"var(--warn)":"var(--ok)";
+  const LBL={pass:"PASS",warn:"REVIEW",fail:"GAP"};
+  $("complianceBody").innerHTML =
+    `<div class="cmpl-sum"><span class="big" style="color:${col}">${pct}%</span>`+
+    `<span class="hint">${pass} passing · ${warn} to review · ${fail} gap(s) — across ${controls.length} mapped controls</span></div>`+
+    controls.map(c=>`<div class="ctrl"><span class="cst ${c.state}">${LBL[c.state]}</span>`+
+      `<div><div class="cn">${esc(c.name)}</div><div class="cdt">${esc(c.detail)}</div></div>`+
+      `<span class="cid">${esc(c.id)}</span></div>`).join("");
+  const nc=$("nav-compliance"); if(nc){ nc.textContent=(warn+fail)||""; nc.parentElement.classList.toggle("hot",fail>0); }
 }
 
 /* ---- network manager -------------------------------------------------- */
@@ -1417,6 +1507,7 @@ const palette = (function(){
       {ic:"🛡", label:"Go to Attack surface",           run:()=>jump("exposure")},
       {ic:"▦", label:"Go to Rules",                     run:()=>jump("rules")},
       {ic:"▥", label:"Go to Host surface",              run:()=>jump("host")},
+      {ic:"✓", label:"Go to Compliance",                run:()=>jump("compliance")},
       {ic:"ⓘ", label:"Go to Diagnostics",               run:()=>jump("diag")},
       {ic:"↻", label:"Refresh now",            key:"r", run:()=>{ refresh(); toast("Refreshed"); }},
       {ic:"◑", label:"Toggle theme",           key:"t", run:()=>$("theme").click()},
