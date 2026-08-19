@@ -377,6 +377,25 @@
   .ctrl .cst.fail { color: var(--bad); background: var(--bad-weak); }
   .ctrl .cn { font-weight: 600; font-size: 13.5px; } .ctrl .cdt { color: var(--text-dim); font-size: 12.5px; margin-top: 2px; }
   .ctrl .cid { font-family: var(--mono); font-size: 11px; color: var(--text-mute); white-space: nowrap; }
+  /* LAN topology map */
+  .lanmap-wrap { padding: 8px; }
+  svg#lanmap { width: 100%; height: auto; display: block; }
+  svg#lanmap .edge { stroke: var(--border-strong); stroke-width: 1; opacity: .5; }
+  svg#lanmap .node { cursor: pointer; }
+  svg#lanmap .node circle { stroke: var(--surface); stroke-width: 2; transition: r .1s; }
+  svg#lanmap .node:hover circle { stroke: var(--accent); }
+  svg#lanmap .node text { font-size: 9px; fill: var(--text-mute); text-anchor: middle; font-family: var(--mono); }
+  svg#lanmap .nself circle { fill: var(--accent); }
+  svg#lanmap .ngw circle { fill: var(--info); }
+  svg#lanmap .nrisk circle { fill: var(--bad); }
+  svg#lanmap .nsvc circle { fill: var(--warn); }
+  svg#lanmap .nplain circle { fill: var(--text-mute); }
+  /* threshold alert */
+  .alertbar { display: flex; align-items: center; gap: 10px; padding: 11px 14px; margin-bottom: 14px; border-radius: var(--r-md);
+    background: var(--bad-weak); border: 1px solid color-mix(in srgb, var(--bad) 40%, var(--border)); color: var(--bad); font-weight: 600; }
+  .alertbar .x { margin-left: auto; cursor: pointer; opacity: .8; background: none; border: 0; color: inherit; font-size: 16px; }
+  .thresh { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-mute); }
+  .thresh input { width: 68px; height: 26px; padding: 0 7px; font-size: 12px; }
   kbd { font-family: var(--mono); font-size: 11px; background: var(--surface-3); border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; color: var(--text); }
   .toast { position: fixed; z-index: 70; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(20px); opacity: 0; transition: transform .2s, opacity .2s;
     background: var(--text); color: var(--bg); font-size: 13px; font-weight: 600; padding: 9px 16px; border-radius: 999px; box-shadow: var(--shadow-lg); pointer-events: none; }
@@ -548,6 +567,7 @@
 
   <main>
     <section id="overview">
+      <div class="alertbar" id="alertBar" role="alert" style="display:none"></div>
       <div class="ribbon warn" id="ribbon"><span class="rp"></span><div class="rb"><div class="rt">Connecting…</div><div class="rd">Waiting for the first snapshot from this host.</div></div></div>
       <div class="hero3d">
         <div class="core-wrap">
@@ -567,6 +587,7 @@
         <span class="tl">Denied / interval</span><span class="tv" id="trendVal">—</span>
         <svg id="spark" role="img" aria-label="Denied packets per refresh"></svg>
         <span class="tl" style="text-align:right">peak <span class="tv" id="trendPeak">—</span></span>
+        <label class="thresh" title="Raise an alert when denied packets in one interval exceed this (0 = off)">alert&nbsp;&gt;<input id="alertThresh" type="number" min="0" step="1" inputmode="numeric" aria-label="Denials-per-interval alert threshold"></label>
       </div>
     </section>
 
@@ -668,6 +689,9 @@
         </div>
       </div>
       <div class="netkpis" id="netKpis"></div>
+      <div class="card" style="margin-top:14px"><div class="ch"><h3>LAN map</h3><span class="hint">this host at the centre, gateways and discovered devices around it — click a node for detail</span></div>
+        <div class="lanmap-wrap"><svg id="lanmap" viewBox="0 0 800 380" role="img" aria-label="Local network topology map"></svg></div>
+      </div>
       <div class="card">
         <div class="ch">
           <h3>Discovered devices</h3><span class="count" id="netCount"></span>
@@ -789,6 +813,7 @@ async function refresh(){
     const t=s.totals||{}; const last=sparkHist[sparkHist.length-1];
     const dd = last ? Math.max(0, (t.denied_packets||0)-last.denied) : 0;
     sparkHist.push({ t:s.generated_at||Date.now()/1000, denied:t.denied_packets||0, dd });
+    if(last) maybeAlert(dd);
     if (sparkHist.length>120) sparkHist.shift();
     /* new-event detection */
     if (prevEventCount!==null && (t.events||0) > prevEventCount) toastNew((t.events||0)-prevEventCount);
@@ -814,6 +839,27 @@ async function refresh(){
 }
 let newFlash=0;
 function toastNew(n){ clearTimeout(newFlash); toast(n+" new denied/alert event"+(n>1?"s":"")); }
+
+/* ---- threshold alerts ------------------------------------------------- */
+let alertThresh = +store.get("alertThresh",0)||0, lastAlertAt=0;
+$("alertThresh").value = alertThresh||"";
+$("alertThresh").addEventListener("change",()=>{
+  alertThresh = Math.max(0, +$("alertThresh").value||0); store.set("alertThresh",alertThresh);
+  if(alertThresh>0 && "Notification" in window && Notification.permission==="default"){ try{ Notification.requestPermission(); }catch(_){} }
+  if(alertThresh<=0) hideAlert();
+});
+function hideAlert(){ const b=$("alertBar"); if(b) b.style.display="none"; }
+/* Raise an alert when denials in one interval cross the operator's threshold.
+   Rate-limited to once per 20s so a sustained flood does not spam. */
+function maybeAlert(dd){
+  if(!(alertThresh>0) || !(dd>alertThresh)) return;
+  const now=Date.now(); if(now-lastAlertAt < 20000) return; lastAlertAt=now;
+  const msg=`${fmtN(dd)} denied packets in the last interval — over your threshold of ${fmtN(alertThresh)}.`;
+  const b=$("alertBar");
+  if(b){ b.style.display="flex"; b.innerHTML=`<span aria-hidden="true">⚠</span><span>${esc(msg)}</span><button class="x" aria-label="Dismiss">×</button>`; b.querySelector(".x").onclick=hideAlert; }
+  toast(msg);
+  try{ if("Notification" in window && Notification.permission==="granted") new Notification("ufw-nft: denial spike", {body:msg}); }catch(_){}
+}
 
 function render(){
   const s=state;
@@ -1382,7 +1428,7 @@ function renderNetwork(){
   $("netHint").textContent = v.scanned
     ? `active scan · ${devs.length} device(s) · swept in ${(v.scan_ms/1000).toFixed(1)}s`
     : `passive view from the neighbour table · ${devs.length} device(s) · run a deep scan to probe services`;
-  netDevices=devs; drawDevices();
+  netDevices=devs; drawDevices(); renderLanMap(devs);
   const notes=(v.notes||[]).concat((v.errors||[]).map(e=>"⚠ "+e));
   setNetStatus(notes.length?notes.map(n=>"• "+esc(n)).join("<br>"):"");
 }
@@ -1412,6 +1458,38 @@ function drawDevices(){
   const tb=qs("#devices tbody");
   tb.innerHTML=rows||`<tr><td colspan="6" class="empty">${netDevices.length?"Nothing matches this filter.":"No devices discovered yet — run a deep scan to probe the local subnet."}</td></tr>`;
   tb.querySelectorAll("tr[data-idx]").forEach(tr=>tr.addEventListener("click",()=>openDevice(netFiltered[+tr.dataset.idx])));
+}
+/* Radial LAN map: this host at the centre, gateways on an inner ring,
+   discovered devices around the outside. Deterministic (angle by index) —
+   no physics sim, so it renders identically every time and stays legible. */
+function renderLanMap(devs){
+  const svg=$("lanmap"); if(!svg) return;
+  if(!devs||!devs.length){ svg.innerHTML=`<text x="400" y="190" text-anchor="middle" fill="var(--text-mute)" font-size="13">No devices discovered — run a deep scan.</text>`; return; }
+  const W=800,H=380,cx=W/2,cy=H/2;
+  const self=devs.find(d=>d.is_self);
+  const gws=devs.filter(d=>d.is_gateway&&!d.is_self);
+  const others=devs.filter(d=>!d.is_self&&!d.is_gateway);
+  const cls=(d)=> d.is_self?"nself":d.is_gateway?"ngw":(d.services||[]).some(s=>s.risk)?"nrisk":(d.services||[]).length?"nsvc":"nplain";
+  const rad=(d)=> d.is_self?16:d.is_gateway?12:Math.min(11,5+((d.services||[]).length));
+  const center={x:cx,y:cy};
+  const pos={}; if(self) pos[self.ip]=center;
+  gws.forEach((d,i)=>{ const a=(-Math.PI/2)+2*Math.PI*i/Math.max(1,gws.length); pos[d.ip]={x:cx+90*Math.cos(a),y:cy+70*Math.sin(a)}; });
+  const R=Math.min(cx,cy)-30;
+  others.forEach((d,i)=>{ const a=(-Math.PI/2)+2*Math.PI*i/Math.max(1,others.length); pos[d.ip]={x:cx+R*Math.cos(a),y:cy+(R*0.82)*Math.sin(a)}; });
+  const gwAnchor=gws.length?pos[gws[0].ip]:center;
+  const edges=[]; gws.forEach(d=>edges.push([pos[d.ip],center])); others.forEach(d=>edges.push([pos[d.ip],gwAnchor]));
+  const short=(ip)=>{ const m=/(\d+)$/.exec(ip||""); return m?m[1]:""; };
+  const nodes=[self,...gws,...others].filter(Boolean);
+  svg.innerHTML =
+    edges.map(([a,b])=>`<line class="edge" x1="${a.x.toFixed(0)}" y1="${a.y.toFixed(0)}" x2="${b.x.toFixed(0)}" y2="${b.y.toFixed(0)}"/>`).join("")+
+    nodes.map((d,idx)=>{ const p=pos[d.ip]||center; const nm=d.hostname||d.vendor||(d.is_self?"host":d.is_gateway?"gw":short(d.ip));
+      return `<g class="node ${cls(d)}" data-idx="${idx}" tabindex="0" role="button" aria-label="${esc(d.ip)} — ${esc(d.role||"device")}"><title>${esc(d.ip)} · ${esc(d.role||"device")}${(d.services||[]).length?" · "+d.services.length+" service(s)":""}</title>`+
+        `<circle cx="${p.x.toFixed(0)}" cy="${p.y.toFixed(0)}" r="${rad(d)}"/>`+
+        `<text x="${p.x.toFixed(0)}" y="${(p.y+rad(d)+10).toFixed(0)}">${esc(String(nm).slice(0,14))}</text></g>`;
+    }).join("");
+  svg.querySelectorAll("g.node[data-idx]").forEach(g=>{ const d=nodes[+g.dataset.idx];
+    const go=()=>openDevice(d); g.addEventListener("click",go);
+    g.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); go(); } }); });
 }
 function openDevice(d){
   if(!d) return;
