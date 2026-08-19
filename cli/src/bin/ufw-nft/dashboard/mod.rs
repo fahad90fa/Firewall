@@ -11,6 +11,7 @@
 
 mod attacks;
 mod bounded;
+mod daemon;
 mod events;
 mod exposure;
 mod network;
@@ -394,6 +395,11 @@ fn state_json() -> String {
     w.end_object();
 
     w.str_array_field("errors", errors.iter().map(|s| s.as_str()));
+
+    // Live daemon / ufw-waf telemetry, best-effort — lights up the DPI, egress
+    // anomaly, WAF, fleet and correlation layers when those processes publish it.
+    w.raw_field("daemon", &daemon::read_json());
+
     w.end_object();
     w.finish()
 }
