@@ -25,6 +25,9 @@ pub struct RuleView {
     pub bytes: u64,
     /// Destination ports named in the matchers, expanded (ranges capped).
     pub dports: Vec<u16>,
+    /// The connection-rate cap, if the rule carries an nftables `limit rate`
+    /// clause (e.g. `20/minute burst 5`). SYN-flood / brute-force dampening.
+    pub rate_limit: Option<String>,
 }
 
 pub struct ChainView {
@@ -41,9 +44,11 @@ pub struct Ruleset {
 }
 
 pub fn load() -> Ruleset {
-    let out = Command::new("nft")
-        .args(["list", "table", "inet", "ufw"])
-        .output();
+    // Bounded: a wedged `nft` (contending on the kernel nftables lock during a
+    // concurrent apply) must not park this request past the dashboard's poll.
+    let mut cmd = Command::new("nft");
+    cmd.args(["list", "table", "inet", "ufw"]);
+    let out = super::bounded::run_bounded(cmd, std::time::Duration::from_secs(2));
     match out {
         Ok(o) if o.status.success() => Ruleset {
             loaded: true,
@@ -66,6 +71,11 @@ pub fn load() -> Ruleset {
                 },
             }
         }
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Ruleset {
+            loaded: false,
+            chains: Vec::new(),
+            error: Some("nft timed out — the ruleset is temporarily unavailable".into()),
+        },
         Err(e) => Ruleset {
             loaded: false,
             chains: Vec::new(),
@@ -169,6 +179,7 @@ fn parse_rule(line: &str) -> RuleView {
     }
 
     let dports = extract_dports(&head);
+    let rate_limit = extract_rate_limit(&head);
     RuleView {
         name,
         matchers: head,
@@ -177,7 +188,31 @@ fn parse_rule(line: &str) -> RuleView {
         packets,
         bytes,
         dports,
+        rate_limit,
     }
+}
+
+/// Pull the rate spec out of an nftables `limit rate 20/minute burst 5 packets`
+/// clause: the number, the unit, and an optional burst — dropping the trailing
+/// `packets` keyword that is noise to a reader.
+fn extract_rate_limit(matchers: &str) -> Option<String> {
+    let i = matchers.find("limit rate ")?;
+    let tail = &matchers[i + "limit rate ".len()..];
+    let mut spec = String::new();
+    for word in tail.split_whitespace() {
+        if word == "packets" || word == "accept" || word == "drop" {
+            break;
+        }
+        if !spec.is_empty() {
+            spec.push(' ');
+        }
+        spec.push_str(word);
+        // `20/minute` alone, or `20/minute burst 5` — stop after the burst count.
+        if spec.split_whitespace().count() >= 3 {
+            break;
+        }
+    }
+    (!spec.is_empty()).then_some(spec)
 }
 
 /// Pull destination ports out of matcher text: `tcp dport { 21, 23, 512-514 }`
@@ -273,5 +308,24 @@ mod tests {
     fn range_expansion_is_capped() {
         let ports = extract_dports("tcp dport { 1-65535 }");
         assert!(ports.len() <= 64);
+    }
+
+    #[test]
+    fn a_rate_limit_clause_is_extracted() {
+        let line = "meta l4proto 6 tcp dport { 22 } ct state new limit rate 20/minute burst 5 packets counter packets 3 bytes 180 accept comment \"ssh-in\"";
+        let r = parse_rule(line);
+        assert_eq!(r.name, "ssh-in");
+        assert_eq!(r.verdict, "accept");
+        assert_eq!(r.rate_limit.as_deref(), Some("20/minute burst 5"));
+        assert!(r.dports.contains(&22));
+    }
+
+    #[test]
+    fn a_rate_limit_without_a_burst_is_extracted() {
+        assert_eq!(
+            extract_rate_limit("ct state new limit rate 200/second accept"),
+            Some("200/second".to_string())
+        );
+        assert_eq!(extract_rate_limit("tcp dport { 80 } accept"), None);
     }
 }

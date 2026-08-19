@@ -156,6 +156,12 @@ impl RequestBuilder {
         self
     }
 
+    pub fn str_list(mut self, key: &str, values: &[String]) -> Self {
+        self.writer
+            .str_array_field(key, values.iter().map(|s| s.as_str()));
+        self
+    }
+
     pub fn finish(mut self) -> String {
         self.writer.end_object();
         self.writer.finish()

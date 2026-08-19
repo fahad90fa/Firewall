@@ -508,6 +508,12 @@ pub fn is_ebpf_expressible(rule: &CompiledRule) -> bool {
     if !rule.is_header_only() {
         return false;
     }
+    // A rate limit lowers to an nftables `limit` statement on the netfilter
+    // path; the tc fast-path table has no token-bucket state to carry it, so a
+    // rate-limited rule offloaded there would silently permit at full rate.
+    if rule.rate_limit.is_some() {
+        return false;
+    }
     // Zone classification depends on the daemon's network profile, which the
     // fast path does not carry.
     if !rule.source.zones.is_empty() || !rule.dest.zones.is_empty() {
@@ -998,6 +1004,32 @@ mod tests {
         let report = optimize(&mut p, &OptimizerOptions::default());
         assert!(p.rules[0].ebpf_eligible);
         assert_eq!(report.ebpf_eligible, 1);
+    }
+
+    #[test]
+    fn a_rate_limited_rule_is_kept_off_the_ebpf_fast_path() {
+        // Otherwise the tc fast path, which has no token-bucket state, would
+        // offload the rule and silently permit at full rate.
+        let mut r = rule(1, "throttled", 100, Action::Allow);
+        r.protocol = Protocol::Tcp;
+        r.dest = AddressMatch {
+            cidrs: vec![cidr("8.8.8.8/32")],
+            zones: vec![],
+            negate: false,
+        };
+        assert!(
+            is_ebpf_expressible(&r),
+            "header-only allow is normally eligible"
+        );
+        r.rate_limit = Some(RateLimit {
+            rate: 50,
+            per: RatePer::Second,
+            burst: 0,
+        });
+        assert!(
+            !is_ebpf_expressible(&r),
+            "a rate limit must force the rule onto the netfilter path"
+        );
     }
 
     #[test]

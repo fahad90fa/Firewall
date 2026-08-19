@@ -435,6 +435,15 @@ impl SignatureSet {
         self.signatures.is_empty()
     }
 
+    /// A content fingerprint of the whole set: the SHA-256 of its canonical
+    /// wire encoding. Because [`encode`](Self::encode) is byte-identical across
+    /// loads, this is a stable version that changes only when the signatures
+    /// themselves change — which is exactly what a runtime refresh needs to
+    /// decide whether a reload is a no-op.
+    pub fn version(&self) -> [u8; 32] {
+        ufw_shared::hash::sha256(&self.encode())
+    }
+
     pub fn get(&self, id: u32) -> Option<&Signature> {
         self.signatures.get(&id)
     }

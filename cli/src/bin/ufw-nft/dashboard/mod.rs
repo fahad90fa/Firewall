@@ -10,7 +10,10 @@
 //! when told otherwise.
 
 mod attacks;
+mod bounded;
+mod daemon;
 mod events;
+mod exposure;
 mod network;
 mod ports;
 mod ruleset;
@@ -57,7 +60,13 @@ pub fn serve(bind: &str) -> Result<(), String> {
                     let _ = handle(s);
                 });
             }
-            Err(_) => continue,
+            // Back off briefly on a transient accept error (e.g. momentary fd
+            // exhaustion) so the loop degrades gracefully instead of spinning
+            // the CPU while descriptors free up.
+            Err(_) => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                continue;
+            }
         }
     }
     Ok(())
@@ -71,12 +80,29 @@ fn is_root() -> bool {
 
 fn handle(mut stream: TcpStream) -> std::io::Result<()> {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    // A write timeout too: without one, respond()'s write_all can block forever
+    // on a client that stops reading, pinning the thread and its fd.
+    let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(10)));
     let mut buf = [0u8; 4096];
     let mut head = Vec::new();
     // Read until the end of the request head; the request has no body we care
-    // about, and 16 KiB is far beyond any GET we serve.
+    // about, and 16 KiB is far beyond any GET we serve. A read timeout or an
+    // idle client stops the read cleanly rather than dropping the connection
+    // with no response — the poll should degrade to an error, never hang.
+    let head_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
-        let n = stream.read(&mut buf)?;
+        let n = match stream.read(&mut buf) {
+            Ok(n) => n,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                break
+            }
+            Err(e) => return Err(e),
+        };
         if n == 0 {
             break;
         }
@@ -84,6 +110,14 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
         if head.windows(4).any(|w| w == b"\r\n\r\n") || head.len() > 16 * 1024 {
             break;
         }
+        if std::time::Instant::now() >= head_deadline {
+            break;
+        }
+    }
+    // A client that connected but sent nothing (a browser preconnect, a probe):
+    // close quietly rather than treating an empty head as a request for "/".
+    if head.is_empty() {
+        return Ok(());
     }
     let request = String::from_utf8_lossy(&head);
     let target = request
@@ -134,6 +168,7 @@ fn respond(stream: &mut TcpStream, code: u16, ctype: &str, body: &str) -> std::i
 /// endpoint down.
 fn state_json() -> String {
     let rs = ruleset::load();
+    let exposure = exposure::analyze(&rs);
     let (events, mut errors) = events::collect(MAX_EVENTS);
     let attacks = attacks::classify(&events);
     let (listeners, conns, svc_errors) = services::snapshot();
@@ -202,6 +237,7 @@ fn state_json() -> String {
             w.u64_field("packets", r.packets);
             w.u64_field("bytes", r.bytes);
             w.opt_str_field("why", descriptions.get(r.name.as_str()).copied());
+            w.opt_str_field("rate_limit", r.rate_limit.as_deref());
             w.begin_array_field("services");
             let mut seen = std::collections::BTreeSet::new();
             for p in &r.dports {
@@ -281,6 +317,31 @@ fn state_json() -> String {
     }
     w.end_array();
 
+    // --- exposure (inbound attack surface) --------------------------------
+    w.begin_object_field("exposure");
+    w.str_field("grade", &exposure.grade);
+    w.u64_field("score", exposure.score as u64);
+    w.u64_field("open_world", exposure.open_world as u64);
+    w.u64_field("scoped", exposure.scoped as u64);
+    w.begin_array_field("findings");
+    for f in &exposure.findings {
+        w.begin_object();
+        w.str_field("severity", &f.severity);
+        match f.port {
+            Some(p) => w.u64_field("port", p as u64),
+            None => w.null_field("port"),
+        }
+        w.str_field("service", &f.service);
+        w.str_field("scope", &f.scope);
+        w.str_field("title", &f.title);
+        w.str_field("detail", &f.detail);
+        w.str_field("rule", &f.rule);
+        w.u64_field("packets", f.packets);
+        w.end_object();
+    }
+    w.end_array();
+    w.end_object();
+
     // --- host surface -----------------------------------------------------
     w.begin_array_field("listeners");
     for l in &listeners {
@@ -334,6 +395,11 @@ fn state_json() -> String {
     w.end_object();
 
     w.str_array_field("errors", errors.iter().map(|s| s.as_str()));
+
+    // Live daemon / ufw-waf telemetry, best-effort — lights up the DPI, egress
+    // anomaly, WAF, fleet and correlation layers when those processes publish it.
+    w.raw_field("daemon", &daemon::read_json());
+
     w.end_object();
     w.finish()
 }

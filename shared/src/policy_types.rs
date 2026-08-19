@@ -1384,6 +1384,54 @@ impl TimeWindow {
     }
 }
 
+/// The time unit of a [`RateLimit`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RatePer {
+    Second,
+    Minute,
+    Hour,
+}
+
+impl RatePer {
+    /// The nftables spelling.
+    pub fn as_nft(self) -> &'static str {
+        match self {
+            RatePer::Second => "second",
+            RatePer::Minute => "minute",
+            RatePer::Hour => "hour",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "second" | "sec" | "s" => Some(RatePer::Second),
+            "minute" | "min" | "m" => Some(RatePer::Minute),
+            "hour" | "hr" | "h" => Some(RatePer::Hour),
+            _ => None,
+        }
+    }
+}
+
+/// A per-rule connection-rate cap: SYN-flood and brute-force dampening.
+///
+/// Deliberately **not** part of the kernel-module wire encoding. Rate limiting
+/// is an L3/L4 nftables feature, enforced by a `limit` statement in the
+/// generated Linux ruleset rather than by the module — so it is carried to the
+/// backend artifacts but never transmitted over the daemon↔module wire, and
+/// Windows/macOS (which enforce through the module and the extension) do not
+/// yet honour it. It is also **decision-invariant**: neither
+/// [`CompiledRule::matches`] nor [`CompiledRule::effective_action`] reads it,
+/// which is what keeps cross-platform equivalence green — a rate limit throttles
+/// an `allow`, it is never itself a verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RateLimit {
+    /// New connections permitted per `per`.
+    pub rate: u32,
+    pub per: RatePer,
+    /// Momentary excess tolerated before the cap engages. 0 means no burst.
+    pub burst: u32,
+}
+
 // ===========================================================================
 // Rules
 // ===========================================================================
@@ -1424,6 +1472,9 @@ pub struct CompiledRule {
     pub ebpf_eligible: bool,
     /// Free-form tags from the source policy, surfaced in logs.
     pub tags: Vec<String>,
+    /// A connection-rate cap, enforced at the nftables layer on Linux. Carried
+    /// to the backend artifacts but not over the module wire (see [`RateLimit`]).
+    pub rate_limit: Option<RateLimit>,
 }
 
 impl CompiledRule {
@@ -1449,6 +1500,7 @@ impl CompiledRule {
             stateful: true,
             ebpf_eligible: false,
             tags: Vec::new(),
+            rate_limit: None,
         }
     }
 
@@ -1659,6 +1711,9 @@ impl CompiledRule {
             stateful: flags & (1 << 1) != 0,
             ebpf_eligible: flags & (1 << 2) != 0,
             tags,
+            // Not on the wire: rate limiting is enforced at the nftables layer,
+            // not by the module, so a decoded rule never carries one.
+            rate_limit: None,
         })
     }
 

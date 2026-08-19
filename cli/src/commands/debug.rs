@@ -18,6 +18,7 @@ ufwctl debug <SUBCOMMAND>
 SUBCOMMANDS:
     stats               Kernel module counters
     signatures          Loaded DPI signatures, and any the policy names in vain
+    signatures reload   Reload the signature set from disk, no daemon restart
     dump                Everything the daemon knows, for a bug report
     mode <MODE>         Change enforcement: enforce | monitor | emergency-allow
 
@@ -53,6 +54,15 @@ fn signatures(
     options: &GlobalOptions,
     transport: &mut dyn Transport,
 ) -> CliResult {
+    // `signatures reload` refreshes the set from disk at runtime; a threat-intel
+    // update should not require restarting the firewall.
+    if args.first().map(String::as_str) == Some("reload") {
+        let raw = client::call(transport, RequestBuilder::new("reload-signatures").finish())?;
+        return Ok(emit(options.format, &raw, |v| {
+            format!("{}\n", text(v, "message"))
+        }));
+    }
+
     let raw = client::call(transport, RequestBuilder::new("list-signatures").finish())?;
     let validate_only = super::has_flag(args, "--validate");
 

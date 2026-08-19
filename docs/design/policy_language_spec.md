@@ -113,6 +113,7 @@ rules:
     dpi: {...}
     interfaces: [tun0, utun3]
     schedule: {...}
+    rate_limit: {...}             # connection-rate cap on an allow (Linux nft)
     log: true
     tags: [baseline]
 ```
@@ -232,6 +233,31 @@ kernel computing it.
 
 A scheduled rule whose window cannot be evaluated stands down rather than
 applying at the wrong time.
+
+## Rate limits
+
+```yaml
+rate_limit:
+  rate: 20                        # new connections permitted per unit
+  per: minute                     # second | minute | hour  (default: second)
+  burst: 5                        # momentary excess allowed (default: 0)
+```
+
+Applies only to an `allow` or `allow-inspect` rule — a rate limit throttles a
+permit, and a deny has nothing to throttle, so putting one on a deny is a build
+error. It lowers to a native nftables `limit` statement
+(`ct state new limit rate 20/minute burst 5 packets accept`): the rule accepts
+new connections up to the cap, and a flood beyond it fails the match and falls
+through to the default deny. That is SYN-flood and brute-force dampening in the
+kernel's own conntrack path.
+
+A rate limit is **decision-invariant**: it never changes the verdict, which is
+why it does not affect cross-platform equivalence — all three platforms still
+*allow* the flow. Enforcement, though, is currently **Linux-only** (the nftables
+layer); the Windows and macOS backends permit at the same verdict but do not yet
+throttle, and the analyzer says so with a note. For the same reason a rate limit
+is carried to the Linux artifact but not over the daemon↔module wire — it is an
+nftables-layer control, not something the kernel module evaluates.
 
 ## Network profile
 

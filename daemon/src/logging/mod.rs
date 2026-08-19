@@ -18,6 +18,7 @@
 //! Oldest-first because during a burst the recent events describe what is
 //! happening now.
 
+pub mod anomaly;
 pub mod correlation;
 pub mod sink;
 
@@ -30,6 +31,7 @@ use ufw_shared::log_types::{EventKind, LogEvent, Severity};
 use ufw_shared::policy_types::{Decision, NetworkProfile};
 
 use crate::config::LoggingConfig;
+use anomaly::{AnomalyConfig, EgressBaseline};
 use correlation::{CorrelationConfig, CorrelationEngine};
 use sink::Sink;
 
@@ -42,6 +44,7 @@ pub struct LogStats {
     pub dropped_queue_full: AtomicU64,
     pub sink_errors: AtomicU64,
     pub correlations: AtomicU64,
+    pub anomalies: AtomicU64,
 }
 
 impl LogStats {
@@ -53,6 +56,7 @@ impl LogStats {
             dropped_queue_full: self.dropped_queue_full.load(Ordering::Relaxed),
             sink_errors: self.sink_errors.load(Ordering::Relaxed),
             correlations: self.correlations.load(Ordering::Relaxed),
+            anomalies: self.anomalies.load(Ordering::Relaxed),
         }
     }
 }
@@ -65,6 +69,7 @@ pub struct LogStatsSnapshot {
     pub dropped_queue_full: u64,
     pub sink_errors: u64,
     pub correlations: u64,
+    pub anomalies: u64,
 }
 
 /// Host-level context the kernel module cannot supply.
@@ -278,6 +283,12 @@ impl Logger {
                     ..Default::default()
                 })
             }),
+            anomaly: config.anomaly.then(|| {
+                EgressBaseline::new(AnomalyConfig {
+                    learning_secs: config.anomaly_learning_secs,
+                    ..Default::default()
+                })
+            }),
             stats: Arc::clone(&stats),
             sequence: 0,
         };
@@ -321,6 +332,7 @@ struct WorkerState {
     min_severity: Severity,
     log_allowed: bool,
     correlation: Option<CorrelationEngine>,
+    anomaly: Option<EgressBaseline>,
     stats: Arc<LogStats>,
     sequence: u64,
 }
@@ -363,10 +375,28 @@ impl WorkerState {
             }
         }
 
+        // The egress baseline is the twin of correlation: correlation reads
+        // denials, this reads what policy *allowed*, which is where a novel
+        // outbound destination — the shape of exfiltration — shows up.
+        let mut anomalies = Vec::new();
+        if let Some(base) = &mut self.anomaly {
+            for event in &events {
+                if let Some(a) = base.observe(event) {
+                    anomalies.push(a);
+                }
+            }
+        }
+
         for c in correlations {
             self.stats.correlations.fetch_add(1, Ordering::Relaxed);
             self.sequence += 1;
             events.push(c.to_event(&self.enrichment.host_id, self.sequence));
+        }
+
+        for a in anomalies {
+            self.stats.anomalies.fetch_add(1, Ordering::Relaxed);
+            self.sequence += 1;
+            events.push(a.to_event(&self.enrichment.host_id, self.sequence));
         }
 
         for event in &events {
@@ -410,6 +440,9 @@ fn worker_loop(mut state: WorkerState, rx: Receiver<LogMessage>, running: Arc<At
                 if let Some(engine) = &mut state.correlation {
                     engine.expire(ufw_shared::now_us());
                 }
+                if let Some(base) = &mut state.anomaly {
+                    base.expire(ufw_shared::now_us());
+                }
                 if !running.load(Ordering::Relaxed) {
                     break;
                 }
@@ -451,6 +484,8 @@ mod tests {
             correlation: false,
             correlation_window_secs: 300,
             correlation_threshold: 3,
+            anomaly: false,
+            anomaly_learning_secs: 3600,
         }
     }
 
@@ -594,6 +629,39 @@ mod tests {
             .unwrap()
             .contains("correlated pattern"));
         assert!(alert.tags.contains(&"correlation".to_string()));
+    }
+
+    #[test]
+    fn a_novel_egress_destination_raises_an_anomaly_alert() {
+        let mut c = config();
+        c.anomaly = true;
+        // No time-based warm-up here: these events all carry ~the same
+        // timestamp, so the baseline is established by count, not by clock.
+        c.anomaly_learning_secs = 0;
+
+        // Five distinct external destinations build the baseline (min is 5);
+        // the sixth is outside it and should alert. Distinct /24s so the
+        // detector's CDN bucketing does not collapse them.
+        let dsts = [
+            "8.8.8.8",
+            "8.8.4.4",
+            "1.1.1.1",
+            "9.9.9.9",
+            "208.67.222.222",
+            "203.0.113.9",
+        ];
+        let events: Vec<LogEvent> = dsts.iter().map(|d| event(Decision::Allow, d)).collect();
+
+        let out = run(&c, events);
+        let alert = out
+            .iter()
+            .find(|e| e.kind == EventKind::Alert && e.tags.iter().any(|t| t == "anomaly"))
+            .expect("a novel external destination should raise an anomaly alert");
+        assert!(alert
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("new external destination"));
     }
 
     #[test]

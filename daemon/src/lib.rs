@@ -1,6 +1,7 @@
 pub mod automaton;
 pub mod config;
 pub mod fleet;
+pub mod fleet_client;
 pub mod identity;
 pub mod ipc;
 pub mod logging;
@@ -10,5 +11,7 @@ pub mod policy_loader;
 pub mod policy_store;
 pub mod signatures;
 pub mod state;
+pub mod telemetry;
 pub mod tls;
+pub mod waf;
 pub mod watchdog;
