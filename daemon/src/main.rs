@@ -510,6 +510,10 @@ fn run() -> Result<(), String> {
     let mut watchdog = Watchdog::new(config.watchdog.engine());
     let supervise = had_kernel && config.ipc.reconnect;
 
+    // Publish a compact status file for the read-only ufw-nft console. Best
+    // effort and off the enforcement path: its own thread, errors ignored.
+    let _telemetry = ufw_daemon::telemetry::spawn(Arc::clone(&daemon), Duration::from_secs(3));
+
     logs.note(
         &config.daemon.host_id,
         Severity::Notice,

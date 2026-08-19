@@ -922,17 +922,18 @@ function renderDefense(s){
   const ex=s.exposure||{}; const findings=((ex.findings||[]).filter(x=>x.severity!=="good"&&x.severity!=="low")).length;
   const graded = ex.grade && ex.grade!=="unknown";
 
-  // "active" = observed live in this L3/L4 console; "ready" = built and
-  // deployable but enforced in the daemon / ufw-waf, which this view does not read.
+  // Live daemon / ufw-waf telemetry (best-effort). Present → the layer goes
+  // "active" with a real count; absent → it stays "ready".
+  const dm=s.daemon||{}, dOn=!!dm.available, wOn=!!dm.waf_available;
   const L=[
     ["▦","Packet filter","nftables L3/L4 admission", s.enforced?"on":"off", rc?rc+" rules":"", "var(--accent)"],
     ["⏱","Rate limiting","SYN-flood &amp; brute-force caps", rl?"on":"avail", rl?rl+"×":"", "var(--info)"],
     ["🛡","Attack surface", graded?("exposure grade "+ex.grade):"inbound exposure", graded?"on":"avail", findings?findings+" flag"+(findings>1?"s":""):"", "var(--warn)"],
-    ["◎","DPI / IPS","signature inspection in ring 0", "avail", "", "var(--accent)"],
-    ["⌁","Egress anomaly","novel-destination baseline", "avail", "", "var(--ok)"],
-    ["⬡","Web WAF","ufw-waf: OWASP on decrypted HTTP", "avail", "", "var(--bad)"],
-    ["⇅","Fleet rollout","signed bundles, canary + rollback", "avail", "", "var(--info)"],
-    ["⚬","Correlation","cross-host pattern detection", "avail", "", "var(--warn)"],
+    ["◎","DPI / IPS","signature inspection in ring 0", dOn?"on":"avail", dOn?("rev "+(dm.signature_revision||0)):"", "var(--accent)"],
+    ["⌁","Egress anomaly","novel-destination baseline", dOn?"on":"avail", dOn&&dm.anomalies?dm.anomalies+" flagged":"", "var(--ok)"],
+    ["⬡","Web WAF","ufw-waf: OWASP on decrypted HTTP", wOn?"on":"avail", wOn?((dm.waf_blocked||0)+" blocked"):"", "var(--bad)"],
+    ["⇅","Fleet rollout","signed bundles, canary + rollback", dm.fleet_enabled?"on":"avail", dm.fleet_enabled?((dm.fleet_members||0)+" host"+((dm.fleet_members||0)===1?"":"s")):"", "var(--info)"],
+    ["⚬","Correlation","cross-host pattern detection", dOn?"on":"avail", dOn&&dm.correlations?dm.correlations+" linked":"", "var(--warn)"],
   ];
   $("dlayers").innerHTML=L.map(([ic,t,d,st,cnt,lc])=>`
     <div class="dlayer" style="--lc:${lc}">

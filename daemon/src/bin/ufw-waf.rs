@@ -42,6 +42,34 @@ struct Options {
     block_at: Severity,
 }
 
+/// Request/block counters, shared across connection threads and published to
+/// the telemetry file so the ufw-nft console's "Web WAF" layer can go live.
+struct WafCounters {
+    requests: std::sync::atomic::AtomicU64,
+    blocked: std::sync::atomic::AtomicU64,
+}
+
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Write the WAF's counters to its telemetry file (atomic; best-effort).
+fn write_waf_status(c: &WafCounters) {
+    use std::sync::atomic::Ordering;
+    let mut w = ufw_shared::json::JsonWriter::with_capacity(256);
+    w.begin_object();
+    w.str_field("schema", "ufw-waf-status/1");
+    w.u64_field("updated_at", now_unix());
+    w.u64_field("requests", c.requests.load(Ordering::Relaxed));
+    w.u64_field("blocked", c.blocked.load(Ordering::Relaxed));
+    w.end_object();
+    let _ =
+        ufw_daemon::telemetry::atomic_write(ufw_daemon::telemetry::WAF_STATUS_PATH, &w.finish());
+}
+
 fn main() {
     let opts = match parse_args() {
         Ok(o) => o,
@@ -87,22 +115,36 @@ fn main() {
         opts.block_at.as_str(),
     );
 
+    // Publish request/block counters for the read-only console (best-effort).
+    let counters = Arc::new(WafCounters {
+        requests: std::sync::atomic::AtomicU64::new(0),
+        blocked: std::sync::atomic::AtomicU64::new(0),
+    });
+    {
+        let counters = Arc::clone(&counters);
+        std::thread::spawn(move || loop {
+            write_waf_status(&counters);
+            std::thread::sleep(std::time::Duration::from_secs(3));
+        });
+    }
+
     for conn in listener.incoming() {
         let Ok(stream) = conn else { continue };
         let engine = Arc::clone(&engine);
         let acceptor = acceptor.clone();
         let backend = opts.backend.clone();
+        let counters = Arc::clone(&counters);
         std::thread::spawn(move || {
             let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
             let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
             match &acceptor {
                 Some(a) => match a.accept(stream) {
-                    Ok(mut tls) => handle(&mut tls, &engine, &backend),
+                    Ok(mut tls) => handle(&mut tls, &engine, &backend, &counters),
                     Err(e) => eprintln!("ufw-waf: TLS handshake: {e}"),
                 },
                 None => {
                     let mut s = stream;
-                    handle(&mut s, &engine, &backend)
+                    handle(&mut s, &engine, &backend, &counters)
                 }
             }
         });
@@ -110,13 +152,21 @@ fn main() {
 }
 
 /// Read one request, inspect it, and either forward it or block it.
-fn handle<S: Read + Write>(client: &mut S, engine: &WafEngine, backend: &str) {
+fn handle<S: Read + Write>(
+    client: &mut S,
+    engine: &WafEngine,
+    backend: &str,
+    counters: &WafCounters,
+) {
+    use std::sync::atomic::Ordering;
     let request = match read_request(client) {
         Ok(r) => r,
         Err(_) => return, // a client that cannot send a request gets no answer
     };
+    counters.requests.fetch_add(1, Ordering::Relaxed);
 
     if let Some(hit) = engine.is_blocked(&request) {
+        counters.blocked.fetch_add(1, Ordering::Relaxed);
         blocked_response(client, &hit);
         eprintln!(
             "ufw-waf: BLOCK {} ({}) — {}",
