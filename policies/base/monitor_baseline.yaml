@@ -1,0 +1,145 @@
+# Monitor-mode activation baseline — what `install.sh` loads so every defense
+# layer is exercised without blocking legitimate traffic.
+#
+# This is `default_allow` (permit by default, deny only the never-legitimate
+# protocols, alert on the categories a finished policy will name) plus a single
+# connection-rate cap, so the L3/L4 rate-limiting layer is live too. It is meant
+# to be run with the daemon in `monitor` mode: every decision is logged, nothing
+# is enforced-blocked. Read the logs, write your allow rules, then graduate to
+# `policies/base/default_deny.yaml`.
+#
+# It is a starting point, not a destination — the same guidance as default_allow.
+
+version: 1
+
+metadata:
+  name: monitor-baseline
+  description: "Installer activation baseline: default-allow, monitor-mode, with rate caps so every layer is live"
+  revision: 1
+  author: security-engineering
+
+defaults:
+  action: allow
+  log: true
+  priority: 1000
+  stateful: true
+
+address_groups:
+  rfc1918: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+  bogons:
+    - 0.0.0.0/8
+    - 192.0.2.0/24
+    - 198.51.100.0/24
+    - 203.0.113.0/24
+    - 240.0.0.0/4
+
+port_groups:
+  legacy_cleartext: [21, 23, 69, 79, 512-514]
+  smb_rpc: [135, 137-139, 445]
+  database: [1433, 1521, 3306, 5432, 6379, 9200, 27017]
+  remote_desktop: [3389, 5900-5910]
+
+network_profile:
+  internal: [rfc1918]
+  perimeter_crossing_requires_dpi: false
+
+rules:
+  - id: deny-cleartext-protocols
+    description: "Telnet, FTP, TFTP, rsh: credentials on the wire"
+    priority: 10
+    layer: packet
+    action: deny
+    protocol: tcp
+    destination:
+      ports: legacy_cleartext
+    tags: [hardening]
+
+  - id: deny-smb-egress
+    description: "SMB and RPC leaving the host: a hash-capture primitive, not a workflow"
+    priority: 20
+    layer: packet
+    direction: outbound
+    action: deny
+    protocol: tcp
+    destination:
+      zone: external
+      ports: smb_rpc
+    tags: [hardening]
+
+  - id: deny-bogon-egress
+    priority: 30
+    layer: packet
+    direction: outbound
+    action: deny
+    destination:
+      addresses: [bogons]
+    tags: [hardening]
+
+  - id: deny-inbound-remote-desktop
+    description: "Inbound RDP and VNC, the two most-scanned ports on the internet"
+    priority: 40
+    layer: packet
+    direction: inbound
+    action: deny
+    protocol: tcp
+    destination:
+      ports: remote_desktop
+    tags: [hardening]
+
+  # The one addition over default_allow: a connection-rate cap, so the L3/L4
+  # rate-limiting layer is live. Ten new inbound SSH connections a minute is
+  # generous for a human and hostile for a brute-force script; anything under
+  # the cap is permitted exactly as before, so nothing legitimate is blocked.
+  - id: rate-limit-inbound-ssh
+    description: "Brute-force dampening: cap new inbound SSH connections"
+    priority: 100
+    layer: packet
+    direction: inbound
+    action: allow
+    protocol: tcp
+    destination:
+      ports: [22]
+    rate_limit:
+      rate: 10
+      per: minute
+      burst: 5
+    tags: [hardening, rate-limit]
+
+  - id: audit-database-egress
+    description: "Direct database connections from a workstation are almost always a tool, not an app"
+    priority: 500
+    layer: packet
+    direction: outbound
+    action: alert
+    protocol: tcp
+    destination:
+      zone: external
+      ports: database
+    tags: [audit, rollout]
+
+  - id: audit-unsigned-egress
+    description: "Every unsigned binary reaching the network is a rule you still owe"
+    priority: 510
+    direction: outbound
+    action: alert
+    protocol: tcp
+    application:
+      trust: [untrusted, unknown]
+    tags: [audit, rollout]
+
+  - id: audit-external-egress
+    description: "The catch-all inventory rule: what leaves this host, and who sent it"
+    priority: 990
+    direction: outbound
+    action: alert
+    protocol: tcp
+    destination:
+      zone: external
+    tags: [audit, rollout]
+
+  - id: allow-everything-else
+    description: "Phase one permits by default; delete this when you graduate to default-deny"
+    priority: 9999
+    layer: packet
+    action: allow-inspect
+    tags: [rollout]
