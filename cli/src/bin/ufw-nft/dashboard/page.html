@@ -360,6 +360,61 @@
   .chips .pc { font-size: 11px; font-family: var(--mono); padding: 2px 7px; border-radius: 6px; background: var(--surface-3); color: var(--text-dim); }
   .mini-ev .row { display: flex; gap: 8px; align-items: baseline; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
   .mini-ev .row .t { color: var(--text-mute); font-family: var(--mono); font-size: 11px; min-width: 62px; }
+
+  /* ---- investigation page ---------------------------------------------- */
+  .inv-shell { display: grid; grid-template-columns: 280px 1fr; gap: 14px; align-items: start; }
+  .inv-rail { position: sticky; top: calc(var(--head-h) + 12px); display: flex; flex-direction: column; gap: 10px; }
+  .inv-search { display: flex; gap: 6px; }
+  .inv-search input { flex: 1; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+    background: var(--surface); color: var(--text); font: inherit; font-family: var(--mono); font-size: 12.5px; }
+  .inv-search input:focus { outline: 2px solid var(--accent-weak); border-color: var(--accent); }
+  .inv-srclist { border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); box-shadow: var(--shadow-sm); overflow: hidden; max-height: 62vh; overflow-y: auto; }
+  .inv-srclist .lbl { font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-mute); font-weight: 700; padding: 10px 12px 4px; }
+  .inv-srcrow { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-top: 1px solid var(--border); cursor: pointer; }
+  .inv-srcrow:hover { background: var(--surface-2); }
+  .inv-srcrow.on { background: var(--accent-weak); }
+  .inv-srcrow.on .ip { color: var(--accent); }
+  .inv-srcrow .ip { flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px; font-weight: 600; word-break: break-all; }
+  .inv-srcrow .dot2 { width: 8px; height: 8px; border-radius: 999px; flex: none; background: var(--text-mute); }
+  .inv-srcrow .dot2.sev-critical, .inv-srcrow .dot2.sev-high { background: var(--bad); }
+  .inv-srcrow .dot2.sev-medium { background: var(--warn); }
+  .inv-srcrow .dot2.sev-low, .inv-srcrow .dot2.sev-info { background: var(--info); }
+  .inv-srcrow .cnt { font-size: 10.5px; color: var(--text-mute); font-variant-numeric: tabular-nums; }
+  .inv-srclist .empty3 { padding: 16px 12px; color: var(--text-mute); font-size: 12.5px; }
+  .inv-main { min-width: 0; }
+  .inv-empty { border: 1px dashed var(--border-strong); border-radius: var(--r-lg); padding: 48px 24px; text-align: center; color: var(--text-mute); background: var(--surface); }
+  .inv-empty .big2 { font-size: 30px; margin-bottom: 10px; opacity: .5; }
+  .inv-empty .t2 { font-size: 15px; font-weight: 650; color: var(--text-dim); margin-bottom: 4px; }
+  .inv-dossier { display: flex; flex-direction: column; gap: 14px; }
+  .inv-hd { border: 1px solid var(--border); border-left: 4px solid var(--border-strong); border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--shadow-sm); padding: 16px 18px; }
+  .inv-hd.sev-critical, .inv-hd.sev-high { border-left-color: var(--bad); } .inv-hd.sev-medium { border-left-color: var(--warn); } .inv-hd.sev-low, .inv-hd.sev-info { border-left-color: var(--info); }
+  .inv-hd .top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .inv-hd .ipname { font-family: var(--mono); font-size: 18px; font-weight: 700; letter-spacing: -.01em; word-break: break-all; }
+  .inv-hd .sum { color: var(--text-dim); margin-top: 8px; font-size: 13px; }
+  .inv-hd .ptr { color: var(--text-mute); margin-top: 3px; font-size: 12.5px; }
+  .inv-hd .ptr b { color: var(--text-dim); font-weight: 600; }
+  .inv-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+  .inv-stat { border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); box-shadow: var(--shadow-sm); padding: 11px 13px; }
+  .inv-stat .l { font-size: 11px; color: var(--text-mute); text-transform: uppercase; letter-spacing: .04em; }
+  .inv-stat .n { font-size: 20px; font-weight: 700; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .inv-stat.bad .n { color: var(--bad); } .inv-stat.warn .n { color: var(--warn); }
+  .inv-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+  .inv-panel { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--shadow-sm); }
+  .inv-panel > h4 { margin: 0; padding: 12px 15px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-weight: 650; }
+  .inv-panel .pb { padding: 13px 15px; }
+  .inv-evtbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .inv-evtbl th { text-align: left; padding: 7px 15px; color: var(--text-mute); font-weight: 600; border-bottom: 1px solid var(--border); font-size: 11px; }
+  .inv-evtbl td { padding: 7px 15px; border-bottom: 1px solid var(--border); }
+  .inv-evtbl tr:last-child td { border-bottom: 0; }
+  .inv-evtbl .mono { font-family: var(--mono); font-size: 11.5px; }
+  .inv-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .inv-actions button { height: 34px; padding: 0 13px; font-size: 12.5px; }
+  @media (max-width: 900px) {
+    .inv-shell { grid-template-columns: 1fr; }
+    .inv-rail { position: static; }
+    .inv-srclist { max-height: none; }
+    .inv-cols { grid-template-columns: 1fr; }
+  }
   .heatwrap { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px; }
   .hcell { font-family: var(--mono); font-size: 11px; padding: 4px 8px; border-radius: 6px; background: var(--surface-3); color: var(--text-dim); cursor: default; }
   .hcell.sev-critical, .hcell.sev-high { background: var(--bad-weak); color: var(--bad); }
@@ -554,6 +609,7 @@
     <div class="grp">Monitor</div>
     <a href="#overview" data-nav="overview"><span class="ic">&#9673;</span>Overview</a>
     <a href="#threats" data-nav="threats"><span class="ic">&#9888;</span>Threats<span class="badge" id="nav-threats">0</span></a>
+    <a href="#investigate" data-nav="investigate"><span class="ic">&#9906;</span>Investigation<span class="badge" id="nav-investigate">0</span></a>
     <a href="#talkers" data-nav="talkers"><span class="ic">&#9650;</span>Top talkers</a>
     <a href="#events" data-nav="events"><span class="ic">&#9776;</span>Events<span class="badge" id="nav-events">0</span></a>
     <div class="grp">Network</div>
@@ -614,6 +670,34 @@
       </div>
       <div class="attacks" id="attacks" style="margin-top:12px"></div>
       <div id="contained" style="margin-top:12px"></div>
+    </section>
+
+    <section id="investigate">
+      <div class="sec-h"><h2>Investigation</h2><span class="hint" id="invHint">a full incident dossier for any source — built from what this host observed, and nothing it didn't</span></div>
+      <div class="ribbon" id="invEthic" style="margin-bottom:14px">
+        <span class="rp" style="background:var(--info)"></span>
+        <div class="rb">
+          <div class="rt" style="color:var(--info)">What an investigation can — and can't — tell you</div>
+          <div class="rd">This dossier is assembled entirely from <b>this host's own firewall logs</b> plus a reverse-DNS (PTR) name lookup. It shows every packet the source sent here, when, to which ports, and which rules it tripped &mdash; enough to <b>contain the source</b> and <b>file an abuse report</b> with its network. It deliberately does <b>not</b> scan or connect back to the attacker's machine, and it does <b>not</b> claim to identify the person behind an address &mdash; an IP is not a person, and probing someone else's host or de-anonymizing them would be both unreliable and unlawful. Attribution is left to the source's network operator, whom the abuse report is addressed to.</div>
+        </div>
+      </div>
+      <div class="inv-shell">
+        <aside class="inv-rail">
+          <div class="inv-search">
+            <input id="invIp" type="text" inputmode="text" placeholder="investigate any IP…" aria-label="Investigate an IP address" autocomplete="off" spellcheck="false">
+            <button id="invGo" title="Investigate this address">Go</button>
+          </div>
+          <div class="inv-srclist" id="invSources"></div>
+        </aside>
+        <div class="inv-main">
+          <div class="inv-empty" id="invEmpty">
+            <div class="big2" aria-hidden="true">&#9906;</div>
+            <div class="t2">Pick a source to investigate</div>
+            <div>Choose an attacker from the list, or type any address above. Every card's <b>Investigate&nbsp;&#8599;</b> button opens it here.</div>
+          </div>
+          <div class="inv-dossier" id="invDossier" hidden></div>
+        </div>
+      </div>
     </section>
 
     <section id="talkers">
@@ -879,6 +963,8 @@ function render(){
   renderKPIs(s);
   scheduleSpark();
   renderThreats(s);
+  if(pendingInvestigate && state){ const ip=pendingInvestigate; pendingInvestigate=null; investigate(ip); }
+  renderInvestigation();
   if (changed("talkers",[s.events,s.chains])) renderTalkers(s);
   renderEvents();
   if (changed("rules",s.chains)) renderRules(s.chains||[]);
@@ -1113,7 +1199,7 @@ function renderAttacks(attacks){
     </div>`;}).join("");
   el.querySelectorAll(".attack[data-src]").forEach(c=>{ const go=()=>filterTo(c.dataset.src==="this host"?"":c.dataset.src);
     c.addEventListener("click",go); c.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); go(); } }); });
-  el.querySelectorAll("[data-investigate]").forEach(b=>b.addEventListener("click",e=>{ e.stopPropagation(); openAttacker(b.dataset.investigate); }));
+  el.querySelectorAll("[data-investigate]").forEach(b=>b.addEventListener("click",e=>{ e.stopPropagation(); investigate(b.dataset.investigate); }));
   el.querySelectorAll("[data-contain]").forEach(b=>b.addEventListener("click",e=>{ e.stopPropagation(); containIp(b.dataset.contain); }));
   el.querySelectorAll("[data-release]").forEach(b=>b.addEventListener("click",e=>{ e.stopPropagation(); releaseIp(b.dataset.release); }));
 }
@@ -1287,17 +1373,26 @@ function ipClass(ip){
 const SCOPE_ICON={local:"◇",private:"⌂",linklocal:"⚑",cgnat:"⇄",multicast:"⁂",bogon:"⛔",public:"🌐",other:"？"};
 const SEV_ORDER=["critical","high","medium","low","info","good"];
 
-/* ---- per-attacker drill-down ------------------------------------------ */
-function openAttacker(src){
-  if(!src||!state) return;
+/* ---- investigation page: a full dossier for one source ----------------
+   Everything here is derived from what THIS host logged, plus a reverse-DNS
+   name lookup. No scan, no connect-back, no attempt to identify a person —
+   attribution is left to the source network's abuse contact. -------------- */
+let investigating=null;        // src currently shown on the page, or null
+let pendingInvestigate=null;   // deep-link target waiting for the first snapshot
+const invPtrCache={};          // src -> resolved PTR text (looked up once per src)
+
+// Derive the dossier for `src` from the current snapshot. Returns null only
+// when no snapshot exists yet; an unknown source yields an empty dossier, so a
+// hand-typed address still opens and honestly reports "nothing observed".
+function dossierData(src){
+  if(!state) return null;
   const atks=(state.attacks||[]).filter(a=>a.src===src);
   const evs=(state.events||[]).filter(e=>e.src===src);
-  if(!atks.length && !evs.length) return;
   const g=ipClass(src);
   const ts=[].concat(atks.map(a=>a.first_ts), atks.map(a=>a.last_ts), evs.map(e=>e.ts)).filter(x=>x);
   const first=ts.length?Math.min.apply(null,ts):0, last=ts.length?Math.max.apply(null,ts):0;
   const denied=evs.filter(e=>e.action==="deny").length, alerted=evs.filter(e=>e.action==="alert").length;
-  const ports=[...new Set([].concat(...atks.map(a=>a.ports||[]), evs.map(e=>e.dpt).filter(x=>x!=null).map(String)))].slice(0,24);
+  const ports=[...new Set([].concat(...atks.map(a=>a.ports||[]), evs.map(e=>e.dpt).filter(x=>x!=null).map(String)))];
   const rules=[...new Set([].concat(...atks.map(a=>a.rules||[]), evs.map(e=>e.rule).filter(Boolean)))];
   const sev=atks.map(a=>a.severity).sort((x,y)=>SEV_ORDER.indexOf(x)-SEV_ORDER.indexOf(y))[0]||"info";
   const blob=atks.map(a=>(a.kind||"")+" "+(a.title||"")).join(" ").toLowerCase();
@@ -1307,45 +1402,138 @@ function openAttacker(src){
     {k:"Blocked at perimeter", on: denied>0},
     {k:"Flagged for review", on: alerted>0},
   ];
-  const recent=evs.slice().sort((a,b)=>b.ts-a.ts).slice(0,8);
-  const held=containedSet().has(src);
-  const real=!!src && src!=="this host";
-  const kv=(k,v)=>v?`<div class="k">${k}</div><div class="v">${esc(v)}</div>`:"";
-  $("detailTitle").innerHTML=`<span class="chip sev-${esc(sev)}">${esc((sev||"info").toUpperCase())}</span> ${esc(src)}${held?' <span class="chip held">CONTAINED</span>':''}`;
-  $("detailBody").innerHTML=`
-    <div style="margin-bottom:10px"><span class="geo ${esc(g.scope)}">${SCOPE_ICON[g.scope]||""} ${esc(g.label)}</span></div>
-    <div class="kv">
-      ${kv("First seen", first?tfull(first):"—")}
-      ${kv("Last seen", last?tfull(last)+" ("+ago(last)+" ago)":"—")}
-      ${kv("Denied", denied?fmtN(denied)+" event(s)":"")}
-      ${kv("Alerted", alerted?fmtN(alerted)+" event(s)":"")}
-      ${kv("Patterns", atks.map(a=>a.title).join(", "))}
-      ${real?`<div class="k">Reverse DNS</div><div class="v" id="ptrRow">looking up…</div>`:""}
+  const recent=evs.slice().sort((a,b)=>b.ts-a.ts).slice(0,20);
+  return { src, atks, evs, g, first, last, denied, alerted, ports, rules, sev, stages, recent,
+           held:containedSet().has(src), real:!!src && src!=="this host" };
+}
+
+// Left rail: every current attack source, plus the investigated one even when
+// it is not (or no longer) an active attacker.
+function renderInvSources(){
+  const el=$("invSources"); if(!el) return;
+  const atks=(state&&state.attacks)||[];
+  const cset=containedSet();
+  const rows=atks.slice().sort((a,b)=>(SEV_ORDER.indexOf(a.severity)-SEV_ORDER.indexOf(b.severity))||((b.count||0)-(a.count||0)));
+  const known=new Set(rows.map(a=>a.src));
+  const extra=(investigating && !known.has(investigating))
+    ? `<div class="inv-srcrow on" data-inv="${esc(investigating)}"><span class="dot2"></span><span class="ip">${esc(investigating)}</span><span class="cnt">typed</span></div>`
+    : "";
+  el.innerHTML=`<div class="lbl">Attack sources (${rows.length})</div>`+extra+
+    (rows.length?rows.map(a=>{
+      const held=cset.has(a.src);
+      return `<div class="inv-srcrow ${a.src===investigating?"on":""}" data-inv="${esc(a.src)}">`+
+        `<span class="dot2 sev-${esc(a.severity)}"></span>`+
+        `<span class="ip">${esc(a.src)}${held?' <span class="chip held">HELD</span>':''}</span>`+
+        `<span class="cnt">${fmtN(a.count)}</span></div>`;
+    }).join(""):(extra?"":`<div class="empty3">No attack sources in the current window. Type any address above to investigate it.</div>`));
+  el.querySelectorAll("[data-inv]").forEach(r=>r.addEventListener("click",()=>investigate(r.dataset.inv)));
+}
+
+// Render (or re-render) the dossier for `src` into the page. Does not scroll
+// or fetch — investigate() and the live refresh drive those.
+function renderDossier(src){
+  const d=dossierData(src); if(!d) return;
+  $("invEmpty").hidden=true; const dos=$("invDossier"); dos.hidden=false;
+  const {g,first,last,denied,alerted,ports,rules,sev,stages,recent,held,real,atks,evs}=d;
+  const seen=evs.length||atks.reduce((n,a)=>n+(a.count||0),0);
+  const ptr = real ? (invPtrCache[src]||"looking up…") : "—";
+  dos.innerHTML=`
+    <div class="inv-hd sev-${esc(sev)}">
+      <div class="top">
+        <span class="chip sev-${esc(sev)}">${esc((sev||"info").toUpperCase())}</span>
+        <span class="ipname">${esc(src)}</span>
+        <span class="geo ${esc(g.scope)}">${SCOPE_ICON[g.scope]||""} ${esc(g.label)}</span>
+        ${held?'<span class="chip held">CONTAINED</span>':''}
+      </div>
+      <div class="sum">${seen?`${fmtN(seen)} logged packet(s) from this source — ${fmtN(denied)} denied, ${fmtN(alerted)} alerted${atks.length?` — ${atks.map(a=>esc(a.title)).join(", ")}`:""}.`:"No activity from this source in the current window."}</div>
+      <div class="ptr"><b>Reverse DNS:</b> <span id="invPtr">${esc(ptr)}</span></div>
     </div>
-    <div class="k" style="margin-top:12px">Kill chain</div>
-    <div class="kc">${stages.map(s=>`<span class="st2 ${s.on?"on":""}">${esc(s.k)}</span>`).join("")}</div>
-    ${ports.length?`<div class="k" style="margin-top:12px">Ports targeted</div><div class="chips">${ports.map(p=>`<span class="pc">${esc(String(p))}</span>`).join("")}</div>`:""}
-    ${rules.length?`<div class="k" style="margin-top:12px">Rules tripped</div><div class="chips">${rules.map(r=>`<span class="pc">${esc(r)}</span>`).join("")}</div>`:""}
-    ${recent.length?`<div class="k" style="margin-top:12px">Recent events</div><div class="mini-ev">${recent.map(e=>`<div class="row"><span class="t">${esc(tstr(e.ts))}</span><span class="chip ${e.action==="deny"?"deny":"alert"}">${e.action==="deny"?"DENY":"ALERT"}</span><span>${esc(e.dst||"")}${e.dpt?":"+esc(String(e.dpt)):""} ${esc(e.proto||"")}</span></div>`).join("")}</div>`:""}
-    <div class="drawer-actions">
-      <button data-act="src">Filter events</button>
+    <div class="inv-stats">
+      <div class="inv-stat"><div class="l">First seen</div><div class="n" style="font-size:13px">${first?tfull(first):"—"}</div></div>
+      <div class="inv-stat"><div class="l">Last seen</div><div class="n" style="font-size:13px">${last?ago(last)+" ago":"—"}</div></div>
+      <div class="inv-stat ${denied?"bad":""}"><div class="l">Denied</div><div class="n">${fmtN(denied)}</div></div>
+      <div class="inv-stat ${alerted?"warn":""}"><div class="l">Alerted</div><div class="n">${fmtN(alerted)}</div></div>
+      <div class="inv-stat"><div class="l">Ports hit</div><div class="n">${fmtN(ports.length)}</div></div>
+      <div class="inv-stat"><div class="l">Rules tripped</div><div class="n">${fmtN(rules.length)}</div></div>
+    </div>
+    <div class="inv-cols">
+      <div class="inv-panel">
+        <h4>Kill chain</h4>
+        <div class="pb">
+          <div class="kc">${stages.map(s=>`<span class="st2 ${s.on?"on":""}">${esc(s.k)}</span>`).join("")}</div>
+          ${ports.length?`<div class="k" style="margin-top:14px;color:var(--text-mute);font-size:11px;text-transform:uppercase;letter-spacing:.04em">Ports targeted</div><div class="chips" style="margin-top:6px">${ports.slice(0,40).map(p=>`<span class="pc">${esc(String(p))}</span>`).join("")}${ports.length>40?`<span class="pc">+${ports.length-40}</span>`:""}</div>`:""}
+          ${rules.length?`<div class="k" style="margin-top:13px;color:var(--text-mute);font-size:11px;text-transform:uppercase;letter-spacing:.04em">Rules tripped</div><div class="chips" style="margin-top:6px">${rules.map(r=>`<span class="pc">${esc(r)}</span>`).join("")}</div>`:""}
+        </div>
+      </div>
+      <div class="inv-panel">
+        <h4>Recent events (${fmtN(recent.length)})</h4>
+        ${recent.length?`<table class="inv-evtbl"><thead><tr><th>Time</th><th>Action</th><th>Destination</th><th>Proto</th></tr></thead><tbody>${recent.map(e=>`<tr><td class="mono">${esc(tstr(e.ts))}</td><td><span class="chip ${e.action==="deny"?"deny":"alert"}">${e.action==="deny"?"DENY":"ALERT"}</span></td><td class="mono">${esc(e.dst||"")}${e.dpt?":"+esc(String(e.dpt)):""}</td><td>${esc(e.proto||"")}</td></tr>`).join("")}</tbody></table>`:`<div class="pb" style="color:var(--text-mute)">No individual packets recorded from this source in the current window.</div>`}
+      </div>
+    </div>
+    <div class="inv-actions">
+      <button data-act="src">Filter event stream</button>
       <button data-copy="${esc(src)}">Copy IP</button>
       ${real?(held?`<button data-act="release" class="danger">Release block</button>`:`<button data-act="contain" class="danger">⦸ Contain (block 1h)</button>`):""}
       ${real?`<button data-act="report">Export abuse report</button>`:""}
+      ${real?`<button data-act="copydossier">Copy dossier</button>`:""}
     </div>`;
-  const bd=$("detailBody");
-  bd.querySelector('[data-act="src"]').onclick=()=>{ filterTo(src); closeDetail(); };
-  const cbtn=bd.querySelector('[data-act="contain"]'); if(cbtn) cbtn.onclick=()=>{ containIp(src); closeDetail(); };
-  const rbtn=bd.querySelector('[data-act="release"]'); if(rbtn) rbtn.onclick=()=>{ releaseIp(src); closeDetail(); };
-  const rep=bd.querySelector('[data-act="report"]'); if(rep) rep.onclick=()=>exportAbuseReport(src);
-  if(real){ const pr=$("ptrRow"); if(pr) fetch("/api/ptr?ip="+encodeURIComponent(src)).then(r=>r.json())
-    .then(j=>{ pr.textContent=j.ptr||"no PTR record"; }).catch(()=>{ pr.textContent="lookup failed"; }); }
-  document.body.classList.add("detail");
-  $("detail").classList.add("open");
+  dos.querySelector('[data-act="src"]').onclick=()=>{ filterTo(src); const ev=$("events"); if(ev) ev.scrollIntoView({behavior:"smooth"}); };
+  const cbtn=dos.querySelector('[data-act="contain"]'); if(cbtn) cbtn.onclick=()=>containIp(src);
+  const rbtn=dos.querySelector('[data-act="release"]'); if(rbtn) rbtn.onclick=()=>releaseIp(src);
+  const rep=dos.querySelector('[data-act="report"]'); if(rep) rep.onclick=()=>exportAbuseReport(src);
+  const cpd=dos.querySelector('[data-act="copydossier"]'); if(cpd) cpd.onclick=()=>copy(abuseReportText(src));
 }
 
+// PTR lookup — bounded to the system resolver on the server; cached per src.
+function ensurePtr(src){
+  if(!src || src==="this host"){ invPtrCache[src]="—"; return; }
+  if(src in invPtrCache){ paintPtr(src); return; }
+  fetch("/api/ptr?ip="+encodeURIComponent(src)).then(r=>r.json())
+    .then(j=>{ invPtrCache[src]=j.ptr||"no PTR record"; paintPtr(src); })
+    .catch(()=>{ invPtrCache[src]="lookup failed"; paintPtr(src); });
+}
+function paintPtr(src){ if(investigating!==src) return; const el=$("invPtr"); if(el && (src in invPtrCache)) el.textContent=invPtrCache[src]; }
+
+// User action: open the full investigation page for `src` and jump to it.
+function investigate(src){
+  if(!src) return;
+  src=String(src).trim(); if(!src) return;
+  investigating=src;
+  const enc="#investigate/"+encodeURIComponent(src);
+  if(location.hash!==enc) location.hash=enc;   // deep-link; handleHash no-ops (src already current)
+  renderInvSources();
+  renderDossier(src);
+  ensurePtr(src);
+  const sec=$("investigate"); if(sec) sec.scrollIntoView({behavior:"smooth",block:"start"});
+}
+
+// Keep an open dossier live as new snapshots arrive; refresh the rail too.
+function renderInvestigation(){
+  if(!state) return;
+  if(changed("invRail",[((state.attacks)||[]).map(a=>[a.src,a.severity,a.count]),(state.contained||[]).map(c=>c.ip),investigating]))
+    renderInvSources();
+  if(investigating){
+    const sig=[investigating,
+      (state.events||[]).filter(e=>e.src===investigating).map(e=>[Math.round(e.ts),e.action,e.dpt,e.rule]),
+      (state.attacks||[]).filter(a=>a.src===investigating).map(a=>[a.severity,a.count,a.title]),
+      containedSet().has(investigating)];
+    if(changed("invDossierSig",sig)){ renderDossier(investigating); ensurePtr(investigating); }
+  }
+}
+
+// #investigate/<ip> deep-links straight into a dossier (shareable URL).
+function handleHash(){
+  const p="#investigate/", h=location.hash||"";
+  if(h.indexOf(p)!==0) return;
+  const ip=decodeURIComponent(h.slice(p.length));
+  if(ip && ip!==investigating){ if(state) investigate(ip); else pendingInvestigate=ip; }
+}
+addEventListener("hashchange",handleHash);
+$("invGo").onclick=()=>{ const v=$("invIp").value.trim(); if(v){ investigate(v); $("invIp").value=""; } };
+$("invIp").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); $("invGo").click(); } });
+
 /* ---- abuse report: a plain-text dossier from what WE observed ----------- */
-function exportAbuseReport(src){
+function abuseReportText(src){
   const atks=(state.attacks||[]).filter(a=>a.src===src);
   const evs=(state.events||[]).filter(e=>e.src===src).sort((a,b)=>a.ts-b.ts);
   const g=ipClass(src);
@@ -1354,7 +1542,7 @@ function exportAbuseReport(src){
   const iso=t=>t?new Date(t*1000).toISOString():"—";
   const ports=[...new Set([].concat(...atks.map(a=>a.ports||[]), evs.map(e=>e.dpt).filter(x=>x!=null).map(String)))];
   const rules=[...new Set([].concat(...atks.map(a=>a.rules||[]), evs.map(e=>e.rule).filter(Boolean)))];
-  const ptr=($("ptrRow")&&$("ptrRow").textContent)||"—";
+  const ptr=invPtrCache[src]||"—";
   const L=[];
   L.push("ABUSE REPORT — unauthorized access attempts");
   L.push("Generated by ufw-nft on host "+((state&&state.host)||"unknown")+" at "+new Date().toISOString());
@@ -1373,7 +1561,10 @@ function exportAbuseReport(src){
   L.push("");
   L.push("All times UTC. Generated from firewall logs on the targeted host.");
   L.push("Please investigate this source and act per your network's abuse policy.");
-  download(`abuse-report-${src.replace(/[^\w.-]/g,"_")}-${stamp()}.txt`, L.join("\n"), "text/plain");
+  return L.join("\n");
+}
+function exportAbuseReport(src){
+  download(`abuse-report-${src.replace(/[^\w.-]/g,"_")}-${stamp()}.txt`, abuseReportText(src), "text/plain");
   toast("Abuse report exported");
 }
 
@@ -1648,6 +1839,8 @@ function fallbackCopy(text){ const ta=document.createElement("textarea"); ta.val
 /* ---- nav -------------------------------------------------------------- */
 function updateNav(s){
   const a=(s.attacks||[]).length; const nt=$("nav-threats"); nt.textContent=a; nt.parentElement.classList.toggle("hot",a>0);
+  const isrc=new Set((s.attacks||[]).map(x=>x.src)).size; const ni=$("nav-investigate");
+  if(ni){ ni.textContent=isrc; ni.parentElement.classList.toggle("hot",isrc>0); }
   $("nav-events").textContent=fmtN((s.totals||{}).events||0);
   let rc=0; for(const c of (s.chains||[])) rc+=c.rules.length; $("nav-rules").textContent=rc;
   $("nav-host").textContent=(s.listeners||[]).length+(s.connections||[]).length;
@@ -1671,6 +1864,7 @@ const palette = (function(){
     return [
       {ic:"◉", label:"Go to Overview",         key:"1", run:()=>jump("overview")},
       {ic:"⚠", label:"Go to Threats",          key:"2", run:()=>jump("threats")},
+      {ic:"⌖", label:"Go to Investigation",             run:()=>jump("investigate")},
       {ic:"▲", label:"Go to Top talkers",      key:"3", run:()=>jump("talkers")},
       {ic:"☰", label:"Go to Events",           key:"4", run:()=>jump("events")},
       {ic:"◍", label:"Go to Network manager",           run:()=>jump("network")},
@@ -1690,7 +1884,7 @@ const palette = (function(){
   function dynamic(){
     // Live entries from the current snapshot: jump straight to an attacker.
     return ((state&&state.attacks)||[]).slice(0,12).map(a=>(
-      {ic:"⌖", label:"Investigate "+a.src, sub:a.title||a.kind, run:()=>{ jump("threats"); openAttacker(a.src); }}
+      {ic:"⌖", label:"Investigate "+a.src, sub:a.title||a.kind, run:()=>investigate(a.src)}
     ));
   }
   function render(q){
@@ -1747,6 +1941,7 @@ addEventListener("keydown",(e)=>{
 });
 
 /* ---- go --------------------------------------------------------------- */
+handleHash();   // honour a #investigate/<ip> deep-link once the first snapshot lands
 refresh();
 arm();
 loadNetwork(false);
