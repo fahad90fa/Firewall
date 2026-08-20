@@ -109,12 +109,18 @@ pub fn collect(max: usize) -> (Vec<Event>, Vec<String>) {
 }
 
 fn journalctl_lines() -> Result<Vec<String>, String> {
-    // Bounded: a large or busy journal must not stall the poll. On timeout this
-    // returns an error, which choose_source funnels into the errors banner and
-    // then falls through to dmesg.
+    // Filtered server-side and bounded. `-g` makes journald return only the ufw
+    // lines instead of the whole 48h kernel log — the difference between a
+    // handful of matches and every kernel message on a busy desktop — so the
+    // scan stays well inside the time budget. `-n` caps the result. On timeout
+    // this still errors and choose_source falls through to dmesg.
     let mut cmd = Command::new("journalctl");
     cmd.args([
         "-k",
+        "-g",
+        "ufw#|ufw-alert ",
+        "-n",
+        "20000",
         "-o",
         "short-unix",
         "--no-pager",
@@ -122,7 +128,7 @@ fn journalctl_lines() -> Result<Vec<String>, String> {
         "--since",
         "48 hours ago",
     ]);
-    let out = super::bounded::run_bounded(cmd, std::time::Duration::from_secs(3))
+    let out = super::bounded::run_bounded(cmd, std::time::Duration::from_secs(5))
         .map_err(|e| format!("journalctl: {e}"))?;
     if !out.status.success() {
         return Err(format!(
