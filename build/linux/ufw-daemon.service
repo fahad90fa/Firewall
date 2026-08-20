@@ -1,0 +1,17 @@
+[Unit]
+Description=Unified Firewall daemon — classification, logging, egress anomaly, cross-host correlation, fleet plane (monitor mode)
+Documentation=https://github.com/fahad90fa/Firewall
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ufw-daemon --config /etc/unified-firewall/daemon.toml
+Restart=on-failure
+RestartSec=3
+# Monitor mode observes and logs; it does not block. These let it read the
+# kernel's tables where available without running fully privileged.
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target

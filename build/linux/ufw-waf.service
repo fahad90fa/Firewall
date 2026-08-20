@@ -1,0 +1,18 @@
+[Unit]
+Description=Unified Firewall WAF — OWASP signatures on decrypted HTTP (loopback, plaintext)
+Documentation=https://github.com/fahad90fa/Firewall
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Loopback + plaintext by default: safe to run without a real backend — it
+# publishes its request/block telemetry so the console's WAF layer goes live.
+# To terminate HTTPS for a real site, rebuild with `--features tls` and add
+# --tls-cert/--tls-key, then point --backend at your origin.
+ExecStart=/usr/local/bin/ufw-waf --listen 127.0.0.1:8443 --backend 127.0.0.1:80 --sig-dir /etc/unified-firewall/sig-rules
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
