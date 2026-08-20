@@ -11,6 +11,7 @@
 
 mod attacks;
 mod bounded;
+mod contain;
 mod daemon;
 mod events;
 mod exposure;
@@ -83,6 +84,11 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
     // A write timeout too: without one, respond()'s write_all can block forever
     // on a client that stops reading, pinning the thread and its fd.
     let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(10)));
+    // Who is calling — the containment action is gated to loopback.
+    let from_loopback = stream
+        .peer_addr()
+        .map(|p| p.ip().is_loopback())
+        .unwrap_or(false);
     let mut buf = [0u8; 4096];
     let mut head = Vec::new();
     // Read until the end of the request head; the request has no body we care
@@ -120,20 +126,20 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
         return Ok(());
     }
     let request = String::from_utf8_lossy(&head);
-    let target = request
-        .lines()
-        .next()
-        .and_then(|l| l.split_whitespace().nth(1))
-        .unwrap_or("/");
+    let mut line0 = request.lines().next().unwrap_or("").split_whitespace();
+    let method = line0.next().unwrap_or("GET");
+    let target = line0.next().unwrap_or("/");
     let (route, query) = target.split_once('?').unwrap_or((target, ""));
 
-    match route {
-        "/" | "/index.html" => respond(&mut stream, 200, "text/html; charset=utf-8", PAGE),
-        "/api/state" => {
+    match (method, route) {
+        (_, "/") | (_, "/index.html") => {
+            respond(&mut stream, 200, "text/html; charset=utf-8", PAGE)
+        }
+        (_, "/api/state") => {
             let body = state_json();
             respond(&mut stream, 200, "application/json", &body)
         }
-        "/api/network" => {
+        (_, "/api/network") => {
             // Discovery is passive by default; a scan is opt-in via ?scan=1.
             let active = query
                 .split('&')
@@ -141,13 +147,84 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
             let body = network_json(active);
             respond(&mut stream, 200, "application/json", &body)
         }
+        ("GET", "/api/ptr") => {
+            // Reverse-DNS for the incident dossier — a name lookup, nothing more.
+            let ip = qget(query, "ip").unwrap_or_default();
+            let name = contain::reverse_dns(&ip);
+            let mut w = JsonWriter::with_capacity(128);
+            w.begin_object();
+            w.opt_str_field("ptr", name.as_deref());
+            w.end_object();
+            respond(&mut stream, 200, "application/json", &w.finish())
+        }
+        ("POST", "/api/contain") | ("POST", "/api/release") => {
+            // The one mutating surface. Gate it to loopback callers so an
+            // exposed dashboard can never be used to inject blocks remotely.
+            if !from_loopback {
+                return respond(
+                    &mut stream,
+                    403,
+                    "application/json",
+                    "{\"ok\":false,\"error\":\"containment is only allowed from localhost\"}",
+                );
+            }
+            let ip = qget(query, "ip").unwrap_or_default();
+            let result = if route == "/api/contain" {
+                let ttl = qget(query, "ttl")
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(3600);
+                contain::contain(&ip, ttl)
+            } else {
+                contain::release(&ip)
+            };
+            let mut w = JsonWriter::with_capacity(160);
+            w.begin_object();
+            match &result {
+                Ok(()) => w.bool_field("ok", true),
+                Err(e) => {
+                    w.bool_field("ok", false);
+                    w.str_field("error", e);
+                }
+            }
+            w.end_object();
+            respond(&mut stream, 200, "application/json", &w.finish())
+        }
         _ => respond(&mut stream, 404, "text/plain", "not found\n"),
     }
+}
+
+/// Read a single query-string value, percent-decoded. IPs sent by the page are
+/// `encodeURIComponent`-escaped (v6 colons become `%3A`), so decode before use.
+fn qget(query: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key}=");
+    query
+        .split('&')
+        .find_map(|kv| kv.strip_prefix(&prefix))
+        .map(percent_decode)
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = String::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 3 <= b.len() {
+            if let Ok(byte) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(byte as char);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(if b[i] == b'+' { ' ' } else { b[i] as char });
+        i += 1;
+    }
+    out
 }
 
 fn respond(stream: &mut TcpStream, code: u16, ctype: &str, body: &str) -> std::io::Result<()> {
     let reason = match code {
         200 => "OK",
+        403 => "Forbidden",
         404 => "Not Found",
         _ => "Error",
     };
@@ -395,6 +472,19 @@ fn state_json() -> String {
     w.end_object();
 
     w.str_array_field("errors", errors.iter().map(|s| s.as_str()));
+
+    // Sources currently contained (blocked at the kernel), with time to auto-expiry.
+    w.begin_array_field("contained");
+    for c in contain::list() {
+        w.begin_object();
+        w.str_field("ip", &c.ip);
+        match c.expires_secs {
+            Some(s) => w.u64_field("expires_secs", s),
+            None => w.null_field("expires_secs"),
+        }
+        w.end_object();
+    }
+    w.end_array();
 
     // Live daemon / ufw-waf telemetry, best-effort — lights up the DPI, egress
     // anomaly, WAF, fleet and correlation layers when those processes publish it.

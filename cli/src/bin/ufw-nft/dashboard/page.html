@@ -345,7 +345,14 @@
   .geo.private, .geo.local { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 30%, var(--border)); }
   .geo.bogon { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 30%, var(--border)); }
   .attack .ah { display: flex; align-items: center; gap: 8px; }
-  .attack .mini { height: 24px; padding: 0 9px; font-size: 11px; margin-left: auto; }
+  .attack .mini { height: 24px; padding: 0 9px; font-size: 11px; }
+  .attack .ah .mini:first-of-type { margin-left: auto; }
+  .mini.danger, .drawer-actions .danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 38%, var(--border)); }
+  .mini.danger:hover, .drawer-actions .danger:hover { background: var(--bad-weak); border-color: var(--bad); }
+  .chip.held { background: var(--bad-weak); color: var(--bad); font-size: 10px; letter-spacing: .04em; }
+  .crow { display: flex; align-items: center; gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--border); }
+  .crow:last-child { border-bottom: 0; }
+  .crow .mono { flex: 1; }
   .kc { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 2px; }
   .kc .st2 { font-size: 11px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-mute); background: var(--surface-2); }
   .kc .st2.on { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, var(--border)); background: var(--bad-weak); font-weight: 600; }
@@ -606,6 +613,7 @@
         <div class="body"><svg id="timeline" role="img" aria-label="Denied and alerted packets over time"></svg></div>
       </div>
       <div class="attacks" id="attacks" style="margin-top:12px"></div>
+      <div id="contained" style="margin-top:12px"></div>
     </section>
 
     <section id="talkers">
@@ -1049,16 +1057,53 @@ function renderThreats(s){
   const attacks=s.attacks||[];
   $("threatHint").textContent = attacks.length?`${attacks.length} pattern(s) detected across ${(s.totals||{}).attackers||0} source(s)`:"no attack patterns in the current window";
   if(changed("timelineData",[(s.events||[]).map(e=>[Math.round(e.ts),e.action]),rangeMin])) scheduleChart();
-  if(changed("attacks",attacks)) renderAttacks(attacks);
+  // Re-render the cards when the contained set changes too, so a Contain/Release
+  // flips the button without waiting for the attack list itself to change.
+  if(changed("attacks",[attacks,(s.contained||[]).map(c=>c.ip)])) renderAttacks(attacks);
+  if(changed("contained",s.contained||[])) renderContained(s.contained||[]);
+}
+function renderContained(list){
+  const el=$("contained"); if(!el) return;
+  if(!list.length){ el.innerHTML=""; return; }
+  el.innerHTML=`<div class="card"><div class="ch"><h3>Contained sources</h3><span class="hint">blocked at the kernel — each auto-expires unless renewed</span></div>`+
+    `<div class="pad0">`+list.map(c=>{
+      const exp=c.expires_secs==null?"permanent":(c.expires_secs<90?c.expires_secs+"s":Math.round(c.expires_secs/60)+"m")+" left";
+      return `<div class="crow"><span class="mono">${esc(c.ip)}</span><span class="k">${esc(exp)}</span>`+
+        `<button class="mini" data-release="${esc(c.ip)}">Release</button></div>`;
+    }).join("")+`</div></div>`;
+  el.querySelectorAll("[data-release]").forEach(b=>b.addEventListener("click",()=>releaseIp(b.dataset.release)));
+}
+
+/* ---- containment actions (the console's one mutating surface) ---------- */
+async function containIp(ip, ttl){
+  ttl = ttl||3600;
+  try{
+    const r=await fetch(`/api/contain?ip=${encodeURIComponent(ip)}&ttl=${ttl}`,{method:"POST"});
+    const j=await r.json();
+    if(j.ok){ toast(`Contained ${ip} — auto-expires in ${Math.round(ttl/60)} min`); refresh(); }
+    else toast(`Contain failed: ${j.error||"unknown error"}`);
+  }catch(e){ toast("Contain failed: "+(e&&e.message||e)); }
+}
+async function releaseIp(ip){
+  try{
+    const r=await fetch(`/api/release?ip=${encodeURIComponent(ip)}`,{method:"POST"});
+    const j=await r.json();
+    if(j.ok){ toast(`Released ${ip}`); refresh(); }
+    else toast(`Release failed: ${j.error||"unknown error"}`);
+  }catch(e){ toast("Release failed: "+(e&&e.message||e)); }
 }
 const SEV_ICON={critical:"⚠",high:"⚠",medium:"▲",low:"●",info:"ℹ",good:"✓"};
+const containedSet=()=>new Set(((state&&state.contained)||[]).map(c=>c.ip));
 function renderAttacks(attacks){
   const el=$("attacks");
   if(!attacks.length){ el.innerHTML=`<div class="card"><div class="empty">No attack patterns yet. Probes appear here the moment a denied packet is logged.</div></div>`; return; }
-  el.innerHTML=attacks.map((a,i)=>{ const g=ipClass(a.src); return `
+  const cset=containedSet();
+  el.innerHTML=attacks.map((a,i)=>{ const g=ipClass(a.src); const real=a.src&&a.src!=="this host"; const held=cset.has(a.src); return `
     <div class="attack sev-${esc(a.severity)}" data-src="${esc(a.src)}" tabindex="0" role="button" aria-label="Filter events for ${esc(a.src)}">
       <div class="ah"><span class="chip sev-${esc(a.severity)}">${SEV_ICON[a.severity]||""} ${esc((a.severity||"").toUpperCase())}</span><span class="at">${esc(a.title)}</span>
-        <button class="mini" data-investigate="${esc(a.src)}" aria-label="Investigate ${esc(a.src)}">Investigate ↗</button></div>
+        ${held?`<span class="chip held" title="blocked at the kernel">CONTAINED</span>`:""}
+        <button class="mini" data-investigate="${esc(a.src)}" aria-label="Investigate ${esc(a.src)}">Investigate ↗</button>
+        ${real?(held?`<button class="mini" data-release="${esc(a.src)}">Release</button>`:`<button class="mini danger" data-contain="${esc(a.src)}" aria-label="Contain ${esc(a.src)}">⦸ Contain</button>`):""}</div>
       <div class="ad">${esc(a.detail)}</div>
       <div class="am"><span class="geo ${esc(g.scope)}">${SCOPE_ICON[g.scope]||""} ${esc(g.label)}</span>
         <span class="k">${fmtN(a.count)} packet(s)</span>
@@ -1069,6 +1114,8 @@ function renderAttacks(attacks){
   el.querySelectorAll(".attack[data-src]").forEach(c=>{ const go=()=>filterTo(c.dataset.src==="this host"?"":c.dataset.src);
     c.addEventListener("click",go); c.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); go(); } }); });
   el.querySelectorAll("[data-investigate]").forEach(b=>b.addEventListener("click",e=>{ e.stopPropagation(); openAttacker(b.dataset.investigate); }));
+  el.querySelectorAll("[data-contain]").forEach(b=>b.addEventListener("click",e=>{ e.stopPropagation(); containIp(b.dataset.contain); }));
+  el.querySelectorAll("[data-release]").forEach(b=>b.addEventListener("click",e=>{ e.stopPropagation(); releaseIp(b.dataset.release); }));
 }
 
 /* ---- attack surface (server exposure) --------------------------------- */
@@ -1261,8 +1308,10 @@ function openAttacker(src){
     {k:"Flagged for review", on: alerted>0},
   ];
   const recent=evs.slice().sort((a,b)=>b.ts-a.ts).slice(0,8);
+  const held=containedSet().has(src);
+  const real=!!src && src!=="this host";
   const kv=(k,v)=>v?`<div class="k">${k}</div><div class="v">${esc(v)}</div>`:"";
-  $("detailTitle").innerHTML=`<span class="chip sev-${esc(sev)}">${esc((sev||"info").toUpperCase())}</span> ${esc(src)}`;
+  $("detailTitle").innerHTML=`<span class="chip sev-${esc(sev)}">${esc((sev||"info").toUpperCase())}</span> ${esc(src)}${held?' <span class="chip held">CONTAINED</span>':''}`;
   $("detailBody").innerHTML=`
     <div style="margin-bottom:10px"><span class="geo ${esc(g.scope)}">${SCOPE_ICON[g.scope]||""} ${esc(g.label)}</span></div>
     <div class="kv">
@@ -1271,6 +1320,7 @@ function openAttacker(src){
       ${kv("Denied", denied?fmtN(denied)+" event(s)":"")}
       ${kv("Alerted", alerted?fmtN(alerted)+" event(s)":"")}
       ${kv("Patterns", atks.map(a=>a.title).join(", "))}
+      ${real?`<div class="k">Reverse DNS</div><div class="v" id="ptrRow">looking up…</div>`:""}
     </div>
     <div class="k" style="margin-top:12px">Kill chain</div>
     <div class="kc">${stages.map(s=>`<span class="st2 ${s.on?"on":""}">${esc(s.k)}</span>`).join("")}</div>
@@ -1278,12 +1328,53 @@ function openAttacker(src){
     ${rules.length?`<div class="k" style="margin-top:12px">Rules tripped</div><div class="chips">${rules.map(r=>`<span class="pc">${esc(r)}</span>`).join("")}</div>`:""}
     ${recent.length?`<div class="k" style="margin-top:12px">Recent events</div><div class="mini-ev">${recent.map(e=>`<div class="row"><span class="t">${esc(tstr(e.ts))}</span><span class="chip ${e.action==="deny"?"deny":"alert"}">${e.action==="deny"?"DENY":"ALERT"}</span><span>${esc(e.dst||"")}${e.dpt?":"+esc(String(e.dpt)):""} ${esc(e.proto||"")}</span></div>`).join("")}</div>`:""}
     <div class="drawer-actions">
-      <button data-act="src">Filter events from ${esc(src)}</button>
+      <button data-act="src">Filter events</button>
       <button data-copy="${esc(src)}">Copy IP</button>
+      ${real?(held?`<button data-act="release" class="danger">Release block</button>`:`<button data-act="contain" class="danger">⦸ Contain (block 1h)</button>`):""}
+      ${real?`<button data-act="report">Export abuse report</button>`:""}
     </div>`;
-  $("detailBody").querySelector('[data-act="src"]').onclick=()=>{ filterTo(src); closeDetail(); };
+  const bd=$("detailBody");
+  bd.querySelector('[data-act="src"]').onclick=()=>{ filterTo(src); closeDetail(); };
+  const cbtn=bd.querySelector('[data-act="contain"]'); if(cbtn) cbtn.onclick=()=>{ containIp(src); closeDetail(); };
+  const rbtn=bd.querySelector('[data-act="release"]'); if(rbtn) rbtn.onclick=()=>{ releaseIp(src); closeDetail(); };
+  const rep=bd.querySelector('[data-act="report"]'); if(rep) rep.onclick=()=>exportAbuseReport(src);
+  if(real){ const pr=$("ptrRow"); if(pr) fetch("/api/ptr?ip="+encodeURIComponent(src)).then(r=>r.json())
+    .then(j=>{ pr.textContent=j.ptr||"no PTR record"; }).catch(()=>{ pr.textContent="lookup failed"; }); }
   document.body.classList.add("detail");
   $("detail").classList.add("open");
+}
+
+/* ---- abuse report: a plain-text dossier from what WE observed ----------- */
+function exportAbuseReport(src){
+  const atks=(state.attacks||[]).filter(a=>a.src===src);
+  const evs=(state.events||[]).filter(e=>e.src===src).sort((a,b)=>a.ts-b.ts);
+  const g=ipClass(src);
+  const first=evs.length?evs[0].ts:(atks[0]&&atks[0].first_ts);
+  const last=evs.length?evs[evs.length-1].ts:(atks[0]&&atks[0].last_ts);
+  const iso=t=>t?new Date(t*1000).toISOString():"—";
+  const ports=[...new Set([].concat(...atks.map(a=>a.ports||[]), evs.map(e=>e.dpt).filter(x=>x!=null).map(String)))];
+  const rules=[...new Set([].concat(...atks.map(a=>a.rules||[]), evs.map(e=>e.rule).filter(Boolean)))];
+  const ptr=($("ptrRow")&&$("ptrRow").textContent)||"—";
+  const L=[];
+  L.push("ABUSE REPORT — unauthorized access attempts");
+  L.push("Generated by ufw-nft on host "+((state&&state.host)||"unknown")+" at "+new Date().toISOString());
+  L.push("");
+  L.push("Offending source : "+src+"  ("+g.label+")");
+  L.push("Reverse DNS      : "+ptr);
+  L.push("First seen       : "+iso(first));
+  L.push("Last seen        : "+iso(last));
+  L.push("Denied events    : "+evs.filter(e=>e.action==="deny").length+"    Alerted: "+evs.filter(e=>e.action==="alert").length);
+  if(atks.length) L.push("Detected patterns: "+atks.map(a=>a.title+" ["+a.severity+"]").join("; "));
+  if(ports.length) L.push("Ports targeted   : "+ports.join(", "));
+  if(rules.length) L.push("Rules tripped    : "+rules.join(", "));
+  L.push("");
+  L.push("Sample events (UTC · action · destination:port · proto):");
+  evs.slice(0,50).forEach(e=>L.push("  "+iso(e.ts)+"  "+(e.action||"").toUpperCase().padEnd(5)+"  "+(e.dst||"")+((e.dpt!=null)?":"+e.dpt:"")+"  "+(e.proto||"")));
+  L.push("");
+  L.push("All times UTC. Generated from firewall logs on the targeted host.");
+  L.push("Please investigate this source and act per your network's abuse policy.");
+  download(`abuse-report-${src.replace(/[^\w.-]/g,"_")}-${stamp()}.txt`, L.join("\n"), "text/plain");
+  toast("Abuse report exported");
 }
 
 /* ---- rules ------------------------------------------------------------ */
