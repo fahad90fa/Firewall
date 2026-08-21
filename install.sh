@@ -11,10 +11,12 @@
 #   2. installs ufw-nft, ufwctl, firewall, ufw-daemon and ufw-waf to PREFIX/bin
 #   3. installs the policies and the DPI/WAF signatures under /etc/unified-firewall
 #   4. writes a monitor-mode daemon config and installs systemd units for the
-#      daemon and the WAF, then starts them (they publish the telemetry that
-#      lights up the DPI, egress-anomaly, WAF, fleet and correlation layers)
+#      firewall policy, the daemon, the WAF and the dashboard, then enables and
+#      starts them — so everything comes back automatically on every boot
 #   5. loads a safe activation policy (default-ALLOW with a rate cap), so the
-#      packet-filter, rate-limiting and attack-surface layers are live too
+#      packet-filter, rate-limiting and attack-surface layers are live too. The
+#      policy is reloaded at boot by firewall-policy.service (nftables rules do
+#      not survive a reboot on their own), and it tracks whatever you last apply.
 #
 # Safety: the daemon starts in MONITOR mode (it observes and logs, it does not
 # block), the WAF binds LOOPBACK only, and the loaded policy permits by default
@@ -41,8 +43,9 @@ have_systemd() { [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2
 
 if [ "${1:-}" = "--uninstall" ]; then
     if have_systemd; then
-        systemctl disable --now ufw-daemon.service ufw-waf.service 2>/dev/null || true
-        rm -f "$UNIT_DIR/ufw-daemon.service" "$UNIT_DIR/ufw-waf.service"
+        systemctl disable --now ufw-daemon.service ufw-waf.service ufw-nft.service firewall-policy.service 2>/dev/null || true
+        rm -f "$UNIT_DIR/ufw-daemon.service" "$UNIT_DIR/ufw-waf.service" \
+              "$UNIT_DIR/ufw-nft.service" "$UNIT_DIR/firewall-policy.service"
         systemctl daemon-reload 2>/dev/null || true
     fi
     rm -f "$BIN/firewall" "$BIN/ufw-nft" "$BIN/ufwctl" "$BIN/ufw-daemon" "$BIN/ufw-waf"
@@ -124,40 +127,64 @@ EOF
 chmod 0600 "$CONFIG"
 
 if have_systemd; then
-    echo "==> installing and starting systemd services (daemon + WAF)"
-    install -m 0644 "$HERE/build/linux/ufw-daemon.service" "$UNIT_DIR/ufw-daemon.service"
-    install -m 0644 "$HERE/build/linux/ufw-waf.service"    "$UNIT_DIR/ufw-waf.service"
+    echo "==> installing systemd services (firewall policy, daemon, WAF, dashboard)"
+    install -m 0644 "$HERE/build/linux/firewall-policy.service" "$UNIT_DIR/firewall-policy.service"
+    install -m 0644 "$HERE/build/linux/ufw-daemon.service"      "$UNIT_DIR/ufw-daemon.service"
+    install -m 0644 "$HERE/build/linux/ufw-waf.service"         "$UNIT_DIR/ufw-waf.service"
+    install -m 0644 "$HERE/build/linux/ufw-nft.service"         "$UNIT_DIR/ufw-nft.service"
     systemctl daemon-reload || true
-    systemctl enable --now ufw-daemon.service || echo "   (ufw-daemon did not start — check: journalctl -u ufw-daemon)"
-    systemctl enable --now ufw-waf.service    || echo "   (ufw-waf did not start — check: journalctl -u ufw-waf)"
+    # Order matters: load the ruleset first (records state for the dashboard and
+    # for future boots), then the observers, then the console. `enable --now`
+    # arms each for boot AND starts it right now, so nothing needs a reboot.
+    echo "==> enabling everything on boot and starting it now"
+    systemctl enable --now firewall-policy.service || echo "   (firewall-policy did not apply — is nftables installed? journalctl -u firewall-policy)"
+    systemctl enable --now ufw-daemon.service      || echo "   (ufw-daemon did not start — check: journalctl -u ufw-daemon)"
+    systemctl enable --now ufw-waf.service         || echo "   (ufw-waf did not start — check: journalctl -u ufw-waf)"
+    systemctl enable --now ufw-nft.service         || echo "   (dashboard did not start — check: journalctl -u ufw-nft)"
+    echo "   on every boot from now on: the firewall policy reloads and the daemon, WAF and dashboard start automatically"
 else
     echo "==> no systemd detected — starting daemon + WAF in the background"
     ( "$BIN/ufw-daemon" --config "$CONFIG" >/dev/null 2>&1 & ) || true
     ( "$BIN/ufw-waf" --listen 127.0.0.1:8443 --backend 127.0.0.1:80 --sig-dir "$SIG_DST" >/dev/null 2>&1 & ) || true
-fi
-
-echo "==> loading the activation policy (default-allow + a rate cap; nothing legitimate is blocked)"
-if "$BIN/ufw-nft" apply "$POLICY_DST/base/monitor_baseline.yaml" >/dev/null 2>&1; then
-    echo "   loaded: packet-filter, rate-limiting and attack-surface layers are now live"
-else
-    echo "   (could not load rules — is nftables installed? try: sudo firewall apply base/monitor_baseline)"
+    echo "==> loading the activation policy (default-allow + a rate cap; nothing legitimate is blocked)"
+    if "$BIN/ufw-nft" apply "$POLICY_DST/base/monitor_baseline.yaml" >/dev/null 2>&1; then
+        echo "   loaded: packet-filter, rate-limiting and attack-surface layers are now live"
+    else
+        echo "   (could not load rules — is nftables installed? try: sudo firewall apply base/monitor_baseline)"
+    fi
+    echo "   note: without systemd these do NOT survive a reboot — re-run this after booting, or add your own init hook"
 fi
 
 # Give the services a moment to publish their first telemetry, then report.
 sleep 4
 echo
 echo "installed and running. Layer status:"
+if nft list table inet ufw >/dev/null 2>&1; then echo "  [live]  packet filter (nftables table inet ufw)"; else echo "  [down]  packet filter — is nftables installed?"; fi
 for f in "$STATE_DIR/ufw-daemon-status.json:daemon (DPI, egress anomaly, correlation, fleet)" \
          "$STATE_DIR/ufw-waf-status.json:WAF"; do
     path="${f%%:*}"; label="${f#*:}"
     if [ -f "$path" ]; then echo "  [live]  $label"; else echo "  [down]  $label — check its service logs"; fi
 done
+if have_systemd; then
+    if systemctl is-active --quiet ufw-nft.service; then echo "  [live]  dashboard — http://127.0.0.1:8787 (already running)"; else echo "  [down]  dashboard — check: journalctl -u ufw-nft"; fi
+fi
 echo
-echo "  sudo firewall                       open the dashboard — every layer should read ACTIVE"
+if have_systemd; then
+    echo "  it all starts automatically on every boot — nothing to launch by hand."
+    echo "  open the dashboard:  http://127.0.0.1:8787   (it's already up)"
+else
+    echo "  sudo firewall                       open the dashboard — every layer should read ACTIVE"
+fi
 echo "  sudo firewall status                the loaded rules, with live counters"
 echo
 echo "when you are ready to actually BLOCK (not just observe):"
 echo "  edit $CONFIG  → set  mode = \"enforce\"   then  sudo systemctl restart ufw-daemon"
 echo "  and graduate the policy:  sudo firewall apply base/default_deny"
+echo "  (whatever you 'apply' becomes what reloads on the next boot)"
 echo
+if have_systemd; then
+    echo "turn auto-start off for one piece:  sudo systemctl disable --now ufw-nft.service   (the dashboard)"
+    echo "                                    sudo systemctl disable --now firewall-policy.service   (the whole packet filter)"
+    echo
+fi
 echo "uninstall everything:  sudo ./install.sh --uninstall"

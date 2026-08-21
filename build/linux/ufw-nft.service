@@ -1,0 +1,22 @@
+[Unit]
+Description=Unified Firewall — live web console (ufw-nft dashboard, loopback only)
+Documentation=https://github.com/fahad90fa/Firewall
+# Comes up after the policy is restored so the console reads ACTIVE from the
+# first paint; the network need not be online (it binds loopback), but we wait
+# for it so listener/connection enumeration is meaningful.
+After=network-online.target firewall-policy.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The console is read-only apart from the one loopback-gated Contain action. It
+# needs root to read the kernel's tables and (only for a request that arrives on
+# loopback) write the contain table. It binds 127.0.0.1 — reachable only from
+# this machine. To reach it from elsewhere, put it behind an SSH tunnel:
+#   ssh -L 8787:127.0.0.1:8787 you@host   then open http://127.0.0.1:8787
+ExecStart=/usr/local/bin/ufw-nft dashboard 127.0.0.1:8787
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
