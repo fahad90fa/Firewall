@@ -21,8 +21,10 @@ RemainAfterExit=yes
 # is gone), fall back to the monitor baseline so a fresh box still comes up
 # protected. A bare name resolves under /etc/unified-firewall/policies.
 ExecStart=/usr/local/bin/ufw-nft boot-apply monitor_baseline
-# `systemctl disable --now` (or stop) then means "take the firewall down".
-ExecStop=/usr/local/bin/ufw-nft revert
+# On stop (incl. every shutdown/reboot) tear down the runtime table but KEEP the
+# recorded policy — otherwise the next boot would have nothing to restore and
+# would silently fall back to the baseline. `--keep-state` is exactly that.
+ExecStop=/usr/local/bin/ufw-nft revert --keep-state
 
 [Install]
 WantedBy=multi-user.target

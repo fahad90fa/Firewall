@@ -54,7 +54,7 @@ fn main() -> ExitCode {
         Some("boot-apply") => cmd_boot_apply(rest),
         Some("trial") => cmd_trial(rest),
         Some("status") => cmd_status(),
-        Some("revert") => cmd_revert(),
+        Some("revert") => cmd_revert(rest),
         Some("check") => cmd_check(rest),
         Some("render") => cmd_render(rest),
         Some("dashboard") => cmd_dashboard(rest),
@@ -304,16 +304,33 @@ fn cmd_status() -> Result<(), String> {
     }
 }
 
-fn cmd_revert() -> Result<(), String> {
+/// Remove the loaded ruleset. By default this also forgets the recorded policy,
+/// so a plain `revert` means "turn my firewall off". `--keep-state` removes only
+/// the runtime table and leaves the record intact — that is what the boot
+/// service's ExecStop uses, so stopping the service (or a normal shutdown, where
+/// the rules would vanish anyway) does not erase what the next boot must restore.
+fn cmd_revert(args: &[String]) -> Result<(), String> {
+    let keep_state = args.iter().any(|a| a == "--keep-state");
     let out = nft_run(&["delete", "table", "inet", "ufw"])?;
     if out.status.success() {
-        state::clear();
-        println!("reverted: removed table inet ufw; this tool's rules are no longer enforced");
+        if !keep_state {
+            state::clear();
+        }
+        println!(
+            "{}",
+            if keep_state {
+                "removed table inet ufw (kept the recorded policy so the next boot restores it)"
+            } else {
+                "reverted: removed table inet ufw; this tool's rules are no longer enforced"
+            }
+        );
         Ok(())
     } else {
         let err = String::from_utf8_lossy(&out.stderr);
         if is_missing_table(&err) {
-            state::clear();
+            if !keep_state {
+                state::clear();
+            }
             println!("nothing to revert: no `inet ufw` table is loaded");
             Ok(())
         } else {
