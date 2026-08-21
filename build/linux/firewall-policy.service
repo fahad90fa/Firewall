@@ -1,0 +1,30 @@
+[Unit]
+Description=Unified Firewall — restore the nftables policy at boot (ufw-nft)
+Documentation=https://github.com/fahad90fa/Firewall
+# nftables rules do not survive a reboot. This is the canonical firewall-setup
+# slot: order before the network comes up so the host is filtered as it goes
+# online, and pull in the passive network-pre.target that exists for exactly
+# this. DefaultDependencies=no keeps it out of the normal ordering so it can run
+# this early; the shutdown ordering below is what that opts out of, restored by
+# hand. After=local-fs.target so the recorded policy and the installed policy
+# tree (both under /var and /etc) are readable.
+DefaultDependencies=no
+After=local-fs.target
+Wants=network-pre.target
+Before=network-pre.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Restore whatever policy was last `apply`d; if none was recorded (or its file
+# is gone), fall back to the monitor baseline so a fresh box still comes up
+# protected. A bare name resolves under /etc/unified-firewall/policies.
+ExecStart=/usr/local/bin/ufw-nft boot-apply monitor_baseline
+# On stop (incl. every shutdown/reboot) tear down the runtime table but KEEP the
+# recorded policy — otherwise the next boot would have nothing to restore and
+# would silently fall back to the baseline. `--keep-state` is exactly that.
+ExecStop=/usr/local/bin/ufw-nft revert --keep-state
+
+[Install]
+WantedBy=multi-user.target

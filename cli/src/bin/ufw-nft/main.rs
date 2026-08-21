@@ -51,9 +51,10 @@ fn main() -> ExitCode {
 
     let result = match cmd {
         Some("apply") => cmd_apply(rest),
+        Some("boot-apply") => cmd_boot_apply(rest),
         Some("trial") => cmd_trial(rest),
         Some("status") => cmd_status(),
-        Some("revert") => cmd_revert(),
+        Some("revert") => cmd_revert(rest),
         Some("check") => cmd_check(rest),
         Some("render") => cmd_render(rest),
         Some("dashboard") => cmd_dashboard(rest),
@@ -84,6 +85,7 @@ ufw-nft — enforce a Unified Firewall policy on this host with nftables
 
 USAGE:
     ufw-nft apply  <policy.yaml>          Compile the policy and load it into the kernel
+    ufw-nft boot-apply [fallback.yaml]    Restore the last-applied policy at boot (for systemd)
     ufw-nft trial  <policy.yaml> <secs>   Apply it, then auto-revert after <secs> (lockout-safe)
     ufw-nft status                        Show the loaded ruleset and per-rule counters
     ufw-nft revert                        Remove the ruleset (table inet ufw)
@@ -110,17 +112,24 @@ A bare policy name is looked up under {} —
 
 // --- commands --------------------------------------------------------------
 
-fn cmd_apply(args: &[String]) -> Result<(), String> {
-    let path = policy_arg(args)?;
-    let compiled = compile_ruleset(&path)?;
-
+/// Compile `path`, let the kernel validate it, load it live, and record it for
+/// the dashboard (and for boot restore). The shared core of `apply` and
+/// `boot-apply`.
+fn enforce(path: &Path) -> Result<CompiledRuleset, String> {
+    let compiled = compile_ruleset(path)?;
     // The kernel's own parser validates it before we commit anything live.
     nft_pipe(&compiled.nft, true)
         .map_err(|e| format!("the generated ruleset failed nft's own check: {e}"))?;
     nft_pipe(&compiled.nft, false)?;
-    if let Err(e) = state::record(&path, &compiled, "apply", 0) {
+    if let Err(e) = state::record(path, &compiled, "apply", 0) {
         eprintln!("  note: could not record dashboard state: {e}");
     }
+    Ok(compiled)
+}
+
+fn cmd_apply(args: &[String]) -> Result<(), String> {
+    let path = policy_arg(args)?;
+    let compiled = enforce(&path)?;
 
     println!(
         "applied: {} is now enforced by the kernel (table inet ufw)",
@@ -135,6 +144,56 @@ fn cmd_apply(args: &[String]) -> Result<(), String> {
     println!("\n  inspect:  ufw-nft status");
     println!("  watch:    ufw-nft dashboard   (live rules, denials, attacks)");
     println!("  undo:     ufw-nft revert   (or: sudo nft delete table inet ufw)");
+    Ok(())
+}
+
+/// Re-establish the kernel ruleset at boot. nftables does not persist across a
+/// reboot, so a systemd oneshot calls this to load the firewall again. It
+/// restores whatever policy was last `apply`d (recorded in the state file); if
+/// nothing was recorded — or the recorded file is gone — it applies the
+/// fallback policy named as an argument (the installer points this at the
+/// monitor baseline, so a fresh box still comes up protected). Trials are
+/// deliberately not restored: they are meant to be ephemeral and self-revert.
+fn cmd_boot_apply(args: &[String]) -> Result<(), String> {
+    if let Some(st) = state::load() {
+        if st.mode == "apply" && !st.policy_path.is_empty() {
+            let recorded = PathBuf::from(&st.policy_path);
+            if recorded.is_file() {
+                let compiled = enforce(&recorded)?;
+                println!(
+                    "boot: restored last-applied policy {} (table inet ufw){}",
+                    recorded.display(),
+                    if compiled.restrictive {
+                        " — default-drop"
+                    } else {
+                        ""
+                    }
+                );
+                return Ok(());
+            }
+            eprintln!(
+                "  note: recorded policy {} no longer exists; using the fallback",
+                recorded.display()
+            );
+        }
+    }
+
+    let fallback = args.first().ok_or_else(|| {
+        "no recorded policy to restore and no fallback policy given \
+         (usage: ufw-nft boot-apply <fallback.yaml>)"
+            .to_string()
+    })?;
+    let path = resolve_policy(fallback)?;
+    let compiled = enforce(&path)?;
+    println!(
+        "boot: applied fallback policy {} (table inet ufw){}",
+        path.display(),
+        if compiled.restrictive {
+            " — default-drop"
+        } else {
+            ""
+        }
+    );
     Ok(())
 }
 
@@ -245,16 +304,33 @@ fn cmd_status() -> Result<(), String> {
     }
 }
 
-fn cmd_revert() -> Result<(), String> {
+/// Remove the loaded ruleset. By default this also forgets the recorded policy,
+/// so a plain `revert` means "turn my firewall off". `--keep-state` removes only
+/// the runtime table and leaves the record intact — that is what the boot
+/// service's ExecStop uses, so stopping the service (or a normal shutdown, where
+/// the rules would vanish anyway) does not erase what the next boot must restore.
+fn cmd_revert(args: &[String]) -> Result<(), String> {
+    let keep_state = args.iter().any(|a| a == "--keep-state");
     let out = nft_run(&["delete", "table", "inet", "ufw"])?;
     if out.status.success() {
-        state::clear();
-        println!("reverted: removed table inet ufw; this tool's rules are no longer enforced");
+        if !keep_state {
+            state::clear();
+        }
+        println!(
+            "{}",
+            if keep_state {
+                "removed table inet ufw (kept the recorded policy so the next boot restores it)"
+            } else {
+                "reverted: removed table inet ufw; this tool's rules are no longer enforced"
+            }
+        );
         Ok(())
     } else {
         let err = String::from_utf8_lossy(&out.stderr);
         if is_missing_table(&err) {
-            state::clear();
+            if !keep_state {
+                state::clear();
+            }
             println!("nothing to revert: no `inet ufw` table is loaded");
             Ok(())
         } else {
