@@ -10,6 +10,7 @@
 //! when told otherwise.
 
 mod attacks;
+mod beacon;
 mod bounded;
 mod contain;
 mod daemon;
@@ -664,6 +665,20 @@ fn state_json() -> String {
         w.str_field("rule", &f.rule);
         w.str_field("kind", &f.kind);
         w.str_field("detail", &f.detail);
+        w.end_object();
+    }
+    w.end_array();
+
+    // Beaconing detection: regular-interval egress callbacks (possible C2).
+    w.begin_array_field("beacons");
+    for b in beacon::detect(&events) {
+        w.begin_object();
+        w.str_field("dst", &b.dst);
+        w.u64_field("samples", b.samples as u64);
+        w.u64_field("period_secs", b.period_secs as u64);
+        w.u64_field("jitter_pct", (b.cv * 100.0) as u64);
+        w.f64_field("first_ts", b.first_ts);
+        w.f64_field("last_ts", b.last_ts);
         w.end_object();
     }
     w.end_array();

@@ -827,6 +827,7 @@
         <div class="body"><svg id="timeline" role="img" aria-label="Denied and alerted packets over time"></svg></div>
       </div>
       <div id="origins" style="margin-top:12px"></div>
+      <div id="beaconPanel" style="margin-top:12px"></div>
       <div id="idsPanel" style="margin-top:12px"></div>
       <div class="attacks" id="attacks" style="margin-top:12px"></div>
       <div id="contained" style="margin-top:12px"></div>
@@ -1254,6 +1255,7 @@ function render(){
   scanForAlerts(s);
   if(changed("origins",(s.attacks||[]).map(a=>[a.src,a.severity,a.count]))) renderOrigins(s);
   if(changed("ids",s.ids||{})) renderIds(s.ids||{});
+  if(changed("beacons",s.beacons||[])) renderBeacons(s.beacons||[]);
   applyGlobalSearch();
 }
 
@@ -2397,6 +2399,23 @@ function beep(){ try{ const AC=window.AudioContext||window.webkitAudioContext; i
 $("bell").onclick=()=>toggleNtf();
 $("ntfClear").onclick=()=>{ ntf.items=[]; ntf.unread=0; renderNtf(); };
 document.addEventListener("click",e=>{ const p=$("ntfPanel"); if(p&&!p.hidden&&!p.contains(e.target)&&e.target!==$("bell")&&!$("bell").contains(e.target)) closeNtf(); });
+
+/* ---- beaconing detection (regular-interval egress) -------------------- */
+function renderBeacons(beacons){
+  const el=$("beaconPanel"); if(!el) return;
+  if(!beacons.length){ el.innerHTML=""; return; }
+  const per=(s)=>s<90?`${s}s`:s<5400?`${Math.round(s/60)}m`:`${(s/3600).toFixed(1)}h`;
+  el.innerHTML=`<div class="card"><div class="ch"><h3>Beaconing suspects</h3>
+    <span class="count">${beacons.length} destination(s)</span>
+    <span class="hint">regular-interval egress — the rhythm of a C2 callback, from logged outbound traffic</span></div>
+    <div class="pad0">`+beacons.map(b=>`
+      <div class="lintrow sev-high" data-inv="${esc(b.dst)}" style="cursor:pointer">
+        <span class="lc">⟳</span>
+        <div><div class="lt"><span class="chip sev-high">BEACON</span> <span class="mono">${esc(b.dst)}</span></div>
+        <div class="ld">${fmtN(b.samples)} callbacks, every <b>${per(b.period_secs)}</b> (jitter ${b.jitter_pct}%) · ${ago(b.last_ts)} ago</div></div>
+      </div>`).join("")+`</div></div>`;
+  el.querySelectorAll("[data-inv]").forEach(r=>r.addEventListener("click",()=>investigate(r.dataset.inv)));
+}
 
 /* ---- IDS/IPS signature engine hits ------------------------------------ */
 function renderIds(ids){
