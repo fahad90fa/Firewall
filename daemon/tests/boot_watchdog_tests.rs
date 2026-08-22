@@ -163,3 +163,110 @@ fn the_ring0_fault_latch_behaves() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The trip *policy* is shared across all three platforms: `boot_watchdog.h`
+/// uses no kernel API, and off Linux (`__KERNEL__` undefined) it supplies its
+/// own fixed-width types, so a Windows WFP callout or a macOS system extension
+/// can `#include` it unmodified and get the identical, already-tested decision.
+/// Only the ~20 lines that call it on a fault and return the safe verdict are
+/// per-platform — see `docs/design/watchdog_parity.md`.
+///
+/// This guards that portability claim: it compiles the exact header under strict
+/// ISO C (`-pedantic`, no GNU extensions) with the same `-DUFW_ABI_CHECK` the
+/// Windows decoder build uses, and reruns the core ladder. If someone adds a
+/// Linux-ism (a `linux/`-only include, a GNU builtin, a non-portable type) to
+/// the shared policy, this fails — before it silently breaks parity on a
+/// platform whose kernel toolchain does not run in this CI.
+const HARNESS_PORTABLE: &str = r#"
+#include <stdio.h>
+/* No linux/ include and no __KERNEL__: the header must stand on its own the way
+ * it does inside a Windows or macOS driver translation unit. */
+#include "boot_watchdog.h"
+
+#define S 1000000000ULL
+
+static int fails = 0;
+#define CHECK(cond, msg) do { if (!(cond)) { printf("FAIL: %s\n", msg); fails++; } } while (0)
+
+int main(void)
+{
+    struct ufw_fault_latch l;
+
+    /* Threshold of 3 within a 10s window. */
+    ufw_latch_init(&l, 3, 10 * S);
+    CHECK(!ufw_latch_is_tripped(&l), "starts un-tripped");
+    CHECK(ufw_latch_on_fault(&l, 1 * S) == 0, "1st fault does not trip");
+    CHECK(ufw_latch_on_fault(&l, 2 * S) == 0, "2nd fault does not trip");
+    CHECK(ufw_latch_on_fault(&l, 3 * S) == 1, "3rd fault trips");
+    CHECK(ufw_latch_is_tripped(&l), "sticky after trip");
+    CHECK(ufw_latch_on_fault(&l, 4 * S) == 1, "stays tripped");
+
+    /* Reset re-arms; a forced trip is the boot-recovery path. */
+    ufw_latch_reset(&l);
+    CHECK(!ufw_latch_is_tripped(&l), "reset re-arms");
+    ufw_latch_force(&l);
+    CHECK(ufw_latch_is_tripped(&l), "force trips immediately");
+
+    /* The safe-verdict enum the wiring maps to a platform verdict is portable. */
+    CHECK(UFW_LATCH_BYPASS == 0 && UFW_LATCH_FAIL_CLOSED == 1, "verdict enum stable");
+
+    if (fails) { printf("%d portability check(s) failed\n", fails); return 1; }
+    printf("ok\n");
+    return 0;
+}
+"#;
+
+#[test]
+fn the_fault_latch_policy_is_portable_across_platforms() {
+    let Some(cc) = c_compiler() else {
+        eprintln!("no C compiler found; skipping the boot-watchdog portability test");
+        return;
+    };
+
+    let dir = std::env::temp_dir().join(format!(
+        "ufw-bootwd-port-{}-{}",
+        std::process::id(),
+        ufw_shared::now_us()
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch directory");
+    let src = dir.join("portable.c");
+    let bin = dir.join("portable");
+    std::fs::write(&src, HARNESS_PORTABLE).expect("write harness");
+
+    let include = repo_root().join("kernel/linux/inc");
+    let compile = Command::new(cc)
+        // Strict ISO C, no GNU extensions, ABI-check on: the constraints a
+        // non-Linux kernel toolchain (MSVC-style / clang for the NE) imposes.
+        .args([
+            "-std=c11",
+            "-pedantic",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-DUFW_ABI_CHECK",
+            "-O2",
+        ])
+        .arg("-I")
+        .arg(&include)
+        .arg("-o")
+        .arg(&bin)
+        .arg(&src)
+        .output()
+        .expect("run the compiler");
+    assert!(
+        compile.status.success(),
+        "the shared latch policy must compile as portable ISO C so Windows/macOS \
+         drivers can include it unmodified:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(&bin).output().expect("run the harness");
+    assert!(
+        run.status.success(),
+        "the latch policy must behave identically off Linux:\n{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

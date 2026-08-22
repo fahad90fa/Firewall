@@ -138,22 +138,37 @@ a thing a person can install, run, or recover from. Shipping means:
 
   What is **still open** here: the latch catches *soft* faults (a corrupted
   decision), not a hard kernel *oops* — a genuine panic inside the hook is the
-  kernel's to handle, and no module can self-recover from it. The equivalent
-  latch exists only on Linux so far; the Windows callout and macOS extension
-  have no counterpart yet.
+  kernel's to handle, and no module can self-recover from it. On parity: the
+  latch *policy* is now shared and proven portable — `boot_watchdog.h` uses no
+  kernel API, and a hosted test compiles it under strict ISO C so a Windows
+  callout or macOS extension can include the identical, tested decision
+  unmodified. What each of those still owes is the ~20 lines of platform wiring
+  that call it and map its verdict, specified in
+  [`watchdog_parity.md`](watchdog_parity.md) and gated on the platform kernel
+  toolchains and runtime hours — not faked here.
 - **Field update and rollback.** The fleet code (`daemon/src/fleet.rs`) is
   well-built — HMAC-signed bundles, hash-based canaries, rate-based automatic
-  rollback — but it has never pushed a bundle to a machine it did not already
-  control. "Elegant in the test" and "survives a botched rollout to a thousand
-  real hosts" are different maturities.
+  rollback — and now has a **staged-rollout controller**
+  (`daemon/src/fleet_rollout.rs`): a pure decision engine that widens a rollout
+  through gated waves (1%→10%→50%→100%), advancing only on a wave's convergence
+  *and* health and aborting within the current cohort on any regression. It is
+  proven at scale by a deterministic 1000-host simulation (converges when
+  healthy; contains a bad policy to the canary when not). What is **still open**
+  is the wall-clock proof: it has never pushed a bundle to a machine it did not
+  already control. "Converges in a thousand-host simulation" and "survives a
+  botched rollout to a thousand real hosts" are different maturities — the
+  controller closes the first; only runtime closes the second.
 - **Docs, support, and a threat-response process.** When someone finds a bypass
   in the wild, there has to be a path from their report to a signed fix on
   every deployed host. None of that process exists.
 
 **What closes it:** productionization work — a signing and notarization
-pipeline, a *kernel-side* boot watchdog (the daemon-side supervisor and safe
-mode are built), a real staged rollout against hosts outside the lab, and a
-security-response process. Mostly engineering, none of it research.
+pipeline, the Windows/macOS *kernel-side* boot-watchdog wiring (the daemon-side
+supervisor, the safe-mode policy, and now the shared portable latch policy are
+built; only the per-platform wiring in [`watchdog_parity.md`](watchdog_parity.md)
+remains), a real staged rollout against hosts outside the lab (the
+staged-rollout controller and its scale proof are built; the field run is not),
+and a security-response process. Mostly engineering, none of it research.
 
 ## 4. The macOS path is the weakest leg
 
