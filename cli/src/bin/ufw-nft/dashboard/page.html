@@ -126,7 +126,32 @@
   nav.side .foot .kbd { color: var(--text-dim); }
 
   main { grid-area: main; padding: 18px; max-width: 1360px; width: 100%; }
-  main > section { scroll-margin-top: calc(var(--head-h) + 12px); margin-bottom: 22px; }
+  /* ---- router: one page visible at a time, with an entrance transition ---
+     The entrance animations are TRANSFORM-ONLY on purpose: an opacity fade that
+     is deferred (headless capture, a janky first paint) can strand content
+     invisible, so resting content is always fully opaque and just settles into
+     place. A short whole-page opacity fade is layered on separately and is safe
+     because its keyframe never rests below full opacity. */
+  main > section { display: none; }
+  main > section.active { display: block; animation: pageIn .34s cubic-bezier(.22,.61,.36,1); }
+  @keyframes pageIn { from { transform: translateY(10px) scale(.995); } to { transform: none; } }
+  /* staggered entrance for the immediate blocks of the active page */
+  main > section.active > * { animation: blockIn .42s cubic-bezier(.22,.61,.36,1); }
+  main > section.active > *:nth-child(1) { animation-delay: .02s; }
+  main > section.active > *:nth-child(2) { animation-delay: .07s; }
+  main > section.active > *:nth-child(3) { animation-delay: .12s; }
+  main > section.active > *:nth-child(4) { animation-delay: .17s; }
+  main > section.active > *:nth-child(n+5) { animation-delay: .21s; }
+  @keyframes blockIn { from { transform: translateY(9px); } to { transform: none; } }
+  @media (prefers-reduced-motion: reduce) { main > section.active, main > section.active > * { animation: none !important; } }
+  body.reduce-motion main > section.active, body.reduce-motion main > section.active > * { animation: none !important; }
+
+  /* ---- top refresh progress bar ---------------------------------------- */
+  #progress { position: fixed; top: 0; left: 0; height: 2.5px; width: 0; z-index: 60;
+    background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #a855f7));
+    box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent); opacity: 0;
+    transition: width .2s ease, opacity .3s ease; border-radius: 0 2px 2px 0; }
+  #progress.run { opacity: 1; }
   .sec-h { display: flex; align-items: baseline; gap: 10px; margin: 0 2px 11px; flex-wrap: wrap; }
   .sec-h h2 { font-size: 15px; letter-spacing: -.01em; }
   .sec-h .hint { font-size: 12px; color: var(--text-mute); }
@@ -159,6 +184,46 @@
   .icon-btn { width: 34px; padding: 0; justify-content: center; font-size: 15px; }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+  /* ---- global search in the header ------------------------------------- */
+  .gsearch { position: relative; display: flex; align-items: center; min-width: 0; }
+  .gsearch .gs-ic { position: absolute; left: 10px; color: var(--text-mute); font-size: 13px; pointer-events: none; }
+  .gsearch input { width: 210px; max-width: 30vw; padding: 0 30px 0 30px; height: 34px; border-radius: 999px; background: var(--surface-2); transition: width .18s ease, box-shadow .18s, border-color .18s; }
+  .gsearch input:focus { width: 280px; box-shadow: 0 0 0 3px var(--accent-weak); border-color: var(--accent); }
+  .gsearch .gs-k { position: absolute; right: 9px; font-size: 10.5px; color: var(--text-mute); border: 1px solid var(--border); border-radius: 5px; padding: 0 5px; background: var(--surface); }
+  .gsearch input:focus ~ .gs-k, .gsearch input:not(:placeholder-shown) ~ .gs-k { display: none; }
+  @media (max-width: 860px) { .gsearch { display: none; } }
+  /* dim rows/cards filtered out by the global search */
+  .gs-hidden { display: none !important; }
+  mark.gs-hit { background: color-mix(in srgb, var(--warn) 45%, transparent); color: inherit; border-radius: 3px; padding: 0 1px; }
+
+  /* ---- notifications bell + panel -------------------------------------- */
+  .bell { position: relative; }
+  .bell.hot { color: var(--bad); animation: bellRing .6s ease; }
+  @keyframes bellRing { 0%,100%{transform:rotate(0)} 20%{transform:rotate(16deg)} 40%{transform:rotate(-12deg)} 60%{transform:rotate(8deg)} 80%{transform:rotate(-4deg)} }
+  .bell-badge { position: absolute; top: -3px; right: -3px; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 999px;
+    background: var(--bad); color: #fff; font-size: 9.5px; font-weight: 800; display: grid; place-items: center; box-shadow: 0 0 0 2px var(--surface); }
+  .ntf-panel { position: fixed; top: calc(var(--head-h) + 6px); right: 12px; z-index: 55; width: min(360px, 94vw);
+    background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--r); box-shadow: var(--shadow-lg);
+    overflow: hidden; animation: popIn .16s ease; }
+  @keyframes popIn { from { opacity: 0; transform: translateY(-6px) scale(.98);} to { opacity: 1; transform: none; } }
+  .ntf-h { display: flex; align-items: center; gap: 8px; padding: 11px 13px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .ntf-list { max-height: 60vh; overflow-y: auto; }
+  .ntf-empty { padding: 22px 14px; text-align: center; color: var(--text-mute); font-size: 12.5px; }
+  .ntf-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 13px; border-bottom: 1px solid var(--border); cursor: pointer; }
+  .ntf-row:hover { background: var(--surface-2); }
+  .ntf-row .nd { width: 8px; height: 8px; border-radius: 999px; margin-top: 5px; flex: none; background: var(--bad); }
+  .ntf-row.medium .nd { background: var(--warn); }
+  .ntf-row .nt { font-weight: 600; font-size: 12.5px; }
+  .ntf-row .ns { font-size: 11.5px; color: var(--text-mute); margin-top: 1px; }
+  .ntf-row .na { margin-left: auto; font-size: 10.5px; color: var(--text-mute); white-space: nowrap; }
+  /* refresh button doubles as a countdown ring toward the next poll */
+  .icon-btn.ring { position: relative; }
+  .icon-btn.ring::before { content: ""; position: absolute; inset: -3px; border-radius: 50%; padding: 2px;
+    background: conic-gradient(var(--accent) calc(var(--cd, 0) * 1%), transparent 0);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
+    opacity: .8; pointer-events: none; }
+  .icon-btn.ring.busy .ring-ic { animation: spin .7s linear infinite; display: inline-block; }
+
   /* ---- ribbon ----------------------------------------------------------- */
   .ribbon { display: flex; gap: 12px; align-items: flex-start; padding: 13px 16px; border-radius: var(--r);
     border: 1px solid var(--border); background: var(--surface); box-shadow: var(--shadow-sm); font-size: 13.5px; }
@@ -182,6 +247,18 @@
   .kpi .big { font-size: clamp(20px, 2.4vw, 27px); font-weight: 760; margin-top: 3px; letter-spacing: -.02em; line-height: 1.05; font-variant-numeric: tabular-nums; }
   .kpi .sub { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; }
   .kpi.bad .big { color: var(--bad); } .kpi.warn .big { color: var(--warn); } .kpi.ok .big { color: var(--ok); }
+  .kpi .sub .dlt { font-weight: 700; margin-left: 4px; }
+  .kpi .sub .dlt.up { color: var(--bad); } .kpi .sub .dlt.dn { color: var(--ok); }
+  .kpi .sub .dz { color: var(--text-mute); margin-left: 4px; }
+
+  /* ---- threat origins bars --------------------------------------------- */
+  .obh { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-mute); font-weight: 700; margin-bottom: 8px; }
+  .ob { display: grid; grid-template-columns: 130px 1fr auto; gap: 10px; align-items: center; margin-bottom: 7px; }
+  .ob .obl { font-size: 12px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ob .obbar { height: 8px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+  .ob .obbar > i { display: block; height: 100%; border-radius: 999px; background: var(--accent); transition: width .5s cubic-bezier(.22,.61,.36,1); }
+  .ob .obbar > i.warnbar { background: var(--warn); }
+  .ob .obv { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text-dim); min-width: 40px; text-align: right; }
   .trend { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); box-shadow: var(--shadow-sm); padding: 10px 14px; margin-top: 12px;
     display: flex; align-items: center; gap: 14px; }
   .trend .tl { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-mute); font-weight: 700; white-space: nowrap; }
@@ -286,6 +363,31 @@
   .seg button + button { border-left: 1px solid var(--border); }
   .seg button.on { background: var(--accent-weak); color: var(--accent); font-weight: 650; }
   .search { min-width: 190px; }
+
+  /* ---- settings page ---------------------------------------------------- */
+  .set-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 820px) { .set-grid { grid-template-columns: 1fr; } }
+  .set-row { display: flex; align-items: center; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .set-row:last-child { border-bottom: 0; }
+  .set-l { display: flex; flex-direction: column; gap: 2px; min-width: 0; margin-right: auto; }
+  .set-l b { font-size: 13.5px; font-weight: 650; }
+  .set-l span { font-size: 12px; color: var(--text-mute); }
+  .swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+  .swatches .sw2 { width: 24px; height: 24px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; box-shadow: inset 0 0 0 2px var(--surface); transition: transform .1s; }
+  .swatches .sw2:hover { transform: scale(1.12); }
+  .swatches .sw2.on { border-color: var(--text); }
+  .switch { position: relative; display: inline-block; width: 42px; height: 24px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .sl { position: absolute; inset: 0; border-radius: 999px; background: var(--surface-3); border: 1px solid var(--border-strong); transition: background .15s; cursor: pointer; }
+  .switch .sl::before { content: ""; position: absolute; width: 18px; height: 18px; left: 2px; top: 2px; border-radius: 50%; background: var(--surface); box-shadow: var(--shadow-sm); transition: transform .16s; }
+  .switch input:checked + .sl { background: var(--accent); border-color: var(--accent); }
+  .switch input:checked + .sl::before { transform: translateX(18px); }
+  .switch input:focus-visible + .sl { outline: 2px solid var(--accent); outline-offset: 2px; }
+  body.compact { --r: 10px; --r-lg: 14px; }
+  body.compact main { padding: 12px; }
+  body.compact th, body.compact td { padding: 6px 10px; }
+  body.compact .card > .ch { padding: 9px 13px; }
+  body.compact .kpi { padding: 10px 12px; }
 
   /* ---- network manager -------------------------------------------------- */
   .netkpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
@@ -582,6 +684,7 @@
 </style>
 </head>
 <body>
+<div id="progress" aria-hidden="true"></div>
 <div class="app">
   <div class="brandbox">
     <div class="logo" aria-hidden="true">&#x1F6E1;</div>
@@ -592,17 +695,28 @@
     <button class="icon-btn burger" id="burger" aria-label="Open navigation" title="Menu">&#9776;</button>
     <div class="hostchip"><b id="hostName">connecting…</b><span class="u mono" id="updatedAt"></span></div>
     <div class="spacer"></div>
+    <div class="gsearch" id="gsearchWrap">
+      <span class="gs-ic" aria-hidden="true">&#9906;</span>
+      <input id="gsearch" type="search" placeholder="Search this page…  ( / )" aria-label="Search the current page" autocomplete="off" spellcheck="false">
+      <kbd class="gs-k" aria-hidden="true">/</kbd>
+    </div>
     <span class="posture" id="posture" title="Security posture"><span class="pd"></span><span class="pt" id="postureText">—</span></span>
     <span class="live" id="live"><span class="dot"></span><span id="liveText">connecting</span></span>
     <div class="ctl">
       <select id="interval" title="Refresh interval" aria-label="Refresh interval">
         <option value="2000">2s</option><option value="3000" selected>3s</option><option value="5000">5s</option><option value="10000">10s</option><option value="0">paused</option>
       </select>
-      <button class="icon-btn" id="refresh" title="Refresh now (r)" aria-label="Refresh now">&#x21bb;</button>
+      <button class="icon-btn ring" id="refresh" title="Refresh now (r)" aria-label="Refresh now"><span class="ring-ic">&#x21bb;</span></button>
+      <button class="icon-btn bell" id="bell" title="Notifications (n)" aria-label="Notifications"><span aria-hidden="true">&#128276;</span><span class="bell-badge" id="bellBadge" hidden>0</span></button>
       <button class="icon-btn" id="help" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
       <button class="icon-btn" id="theme" title="Theme (t)" aria-label="Toggle theme">&#x25D1;</button>
     </div>
   </header>
+
+  <div class="ntf-panel" id="ntfPanel" role="dialog" aria-label="Notifications" hidden>
+    <div class="ntf-h"><b>Notifications</b><div class="spacer"></div><button class="mini" id="ntfClear">Clear all</button></div>
+    <div class="ntf-list" id="ntfList"><div class="ntf-empty">No alerts yet. High-severity attacks show up here.</div></div>
+  </div>
 
   <nav class="side" id="side" aria-label="Sections">
     <div class="brandmini"><div class="logo" aria-hidden="true" style="width:30px;height:30px;font-size:16px">&#x1F6E1;</div><div class="name">ufw-nft<small>Enforcement Console</small></div></div>
@@ -619,6 +733,8 @@
     <a href="#rules" data-nav="rules"><span class="ic">&#9636;</span>Rules<span class="badge" id="nav-rules">0</span></a>
     <a href="#host" data-nav="host"><span class="ic">&#9635;</span>Host surface<span class="badge" id="nav-host">0</span></a>
     <a href="#compliance" data-nav="compliance"><span class="ic">&#10003;</span>Compliance<span class="badge" id="nav-compliance">0</span></a>
+    <div class="grp">System</div>
+    <a href="#settings" data-nav="settings"><span class="ic">&#9881;</span>Settings</a>
     <a href="#diag" data-nav="diag"><span class="ic">&#9432;</span>Diagnostics</a>
     <div class="foot">
       apply <code>sudo firewall apply default_allow</code><br>
@@ -668,6 +784,7 @@
         </div>
         <div class="body"><svg id="timeline" role="img" aria-label="Denied and alerted packets over time"></svg></div>
       </div>
+      <div id="origins" style="margin-top:12px"></div>
       <div class="attacks" id="attacks" style="margin-top:12px"></div>
       <div id="contained" style="margin-top:12px"></div>
     </section>
@@ -801,6 +918,53 @@
       <div id="netNotes" class="netnote" style="margin-top:10px;display:none"></div>
     </section>
 
+    <section id="settings">
+      <div class="sec-h"><h2>Settings</h2><span class="hint">everything here is stored in your browser only — it never leaves this machine</span></div>
+      <div class="set-grid">
+        <div class="card"><div class="ch"><h3>Appearance</h3></div><div class="body">
+          <div class="set-row"><div class="set-l"><b>Theme</b><span>match the OS, or force one</span></div>
+            <div class="seg" id="setTheme" role="group" aria-label="Theme">
+              <button data-v="auto">Auto</button><button data-v="light">Light</button><button data-v="dark">Dark</button></div></div>
+          <div class="set-row"><div class="set-l"><b>Accent</b><span>the console's highlight colour</span></div>
+            <div class="swatches" id="setAccent"></div></div>
+          <div class="set-row"><div class="set-l"><b>Density</b><span>row and padding scale</span></div>
+            <div class="seg" id="setDensity" role="group" aria-label="Density">
+              <button data-v="cozy">Cozy</button><button data-v="compact">Compact</button></div></div>
+          <div class="set-row"><div class="set-l"><b>Reduce motion</b><span>fewer animations and transitions</span></div>
+            <label class="switch"><input type="checkbox" id="setReduceMotion"><span class="sl"></span></label></div>
+        </div></div>
+
+        <div class="card"><div class="ch"><h3>Live data</h3></div><div class="body">
+          <div class="set-row"><div class="set-l"><b>Refresh interval</b><span>how often the console polls this host</span></div>
+            <select id="setInterval"><option value="2000">2s</option><option value="3000">3s</option><option value="5000">5s</option><option value="10000">10s</option><option value="0">paused</option></select></div>
+          <div class="set-row"><div class="set-l"><b>Denial alert threshold</b><span>flag when denials in one interval exceed this (0 = off)</span></div>
+            <input id="setThresh" type="number" min="0" step="1" inputmode="numeric" style="width:90px"></div>
+        </div></div>
+
+        <div class="card"><div class="ch"><h3>Notifications</h3></div><div class="body">
+          <div class="set-row"><div class="set-l"><b>In-app alerts</b><span>collect high-severity attacks in the bell menu</span></div>
+            <label class="switch"><input type="checkbox" id="setNtfInApp" checked><span class="sl"></span></label></div>
+          <div class="set-row"><div class="set-l"><b>Desktop notifications</b><span>a system pop-up on a new critical attack</span></div>
+            <label class="switch"><input type="checkbox" id="setNtfDesktop"><span class="sl"></span></label></div>
+          <div class="set-row"><div class="set-l"><b>Sound</b><span>a short chime on a new high-severity attack</span></div>
+            <label class="switch"><input type="checkbox" id="setNtfSound"><span class="sl"></span></label></div>
+          <div class="set-row"><div class="set-l"><b>Minimum severity</b><span>which attacks raise a notification</span></div>
+            <div class="seg" id="setNtfSev" role="group" aria-label="Minimum severity">
+              <button data-v="critical">Critical</button><button data-v="high">High+</button><button data-v="medium">Medium+</button></div></div>
+        </div></div>
+
+        <div class="card"><div class="ch"><h3>Data &amp; reset</h3></div><div class="body">
+          <div class="set-row"><div class="set-l"><b>Snapshot</b><span>download everything the console currently shows</span></div>
+            <button id="setExport">&#x2913; Download JSON</button></div>
+          <div class="set-row"><div class="set-l"><b>Shareable link</b><span>a URL that opens this same page &amp; filters</span></div>
+            <button id="setCopyLink">&#128279; Copy link</button></div>
+          <div class="set-row"><div class="set-l"><b>Preferences</b><span>restore every setting on this page to default</span></div>
+            <button id="setReset" class="danger">Reset UI preferences</button></div>
+          <div class="set-row"><div class="set-l"><b>About</b><span id="setAbout">ufw-nft console</span></div><span class="mono muted" id="setVer"></span></div>
+        </div></div>
+      </div>
+    </section>
+
     <section id="diag">
       <div class="sec-h"><h2>Diagnostics</h2><span class="hint">where the data comes from, and any collection problems</span></div>
       <div class="card"><div class="body"><div class="diag" id="diagGrid"></div>
@@ -822,11 +986,12 @@
     <h3>Keyboard shortcuts</h3>
     <dl>
       <dt><kbd>Ctrl</kbd>+<kbd>K</kbd></dt><dd>command palette</dd>
-      <dt><kbd>/</kbd></dt><dd>focus the event filter</dd>
+      <dt><kbd>/</kbd></dt><dd>search the current page</dd>
       <dt><kbd>r</kbd></dt><dd>refresh now</dd>
       <dt><kbd>t</kbd></dt><dd>cycle theme</dd>
+      <dt><kbd>n</kbd></dt><dd>notifications</dd>
       <dt><kbd>e</kbd></dt><dd>export filtered events as JSON</dd>
-      <dt><kbd>1</kbd>…<kbd>7</kbd></dt><dd>jump to a section</dd>
+      <dt><kbd>1</kbd>…<kbd>9</kbd></dt><dd>open a page</dd>
       <dt><kbd>Esc</kbd></dt><dd>close drawer / overlay</dd>
       <dt><kbd>?</kbd></dt><dd>toggle this help</dd>
     </dl>
@@ -875,7 +1040,7 @@ function toast(msg){ const t = $("toast"); t.textContent = msg; t.classList.add(
 /* ---- polling ---------------------------------------------------------- */
 let intervalMs = store.get("interval",3000), timer=null, lastOk=false, busy=false, failCount=0;
 $("interval").value = String(intervalMs);
-$("interval").onchange = () => { intervalMs = +$("interval").value; store.set("interval",intervalMs); arm(); if (intervalMs) refresh(); };
+$("interval").onchange = () => applyIntervalMs($("interval").value);
 $("refresh").onclick = () => refresh();
 function arm(){ if (timer) clearInterval(timer); timer=null; if (intervalMs>0) timer=setInterval(()=>{ if(!document.hidden) refresh(); }, intervalMs); }
 document.addEventListener("visibilitychange", () => { if (!document.hidden && intervalMs) refresh(); });
@@ -896,7 +1061,7 @@ function changed(k,v){ const s=JSON.stringify(v); if(_sig[k]===s) return false; 
 let state=null, rangeMin=store.get("range",2880), sparkHist=[], prevEventCount=null;
 
 async function refresh(){
-  if (busy) return; busy=true;
+  if (busy) return; busy=true; progressStart();
   try {
     const ctl=new AbortController(); const to=setTimeout(()=>ctl.abort(),8000);
     const r=await fetch("/api/state",{cache:"no-store",signal:ctl.signal}); clearTimeout(to);
@@ -927,7 +1092,7 @@ async function refresh(){
       setLive("off","offline");
       renderDisconnected();
     }
-  } finally { busy=false; }
+  } finally { busy=false; progressDone(); cdReset(); }
 }
 let newFlash=0;
 function toastNew(n){ clearTimeout(newFlash); toast(n+" new denied/alert event"+(n>1?"s":"")); }
@@ -935,11 +1100,24 @@ function toastNew(n){ clearTimeout(newFlash); toast(n+" new denied/alert event"+
 /* ---- threshold alerts ------------------------------------------------- */
 let alertThresh = +store.get("alertThresh",0)||0, lastAlertAt=0;
 $("alertThresh").value = alertThresh||"";
-$("alertThresh").addEventListener("change",()=>{
-  alertThresh = Math.max(0, +$("alertThresh").value||0); store.set("alertThresh",alertThresh);
+$("alertThresh").addEventListener("change",()=>applyThresh($("alertThresh").value));
+// Single source of truth for the denial-alert threshold; keeps the Overview
+// input and the Settings input in step.
+function applyThresh(v){
+  alertThresh = Math.max(0, +v||0); store.set("alertThresh",alertThresh);
+  const a=$("alertThresh"); if(a) a.value=alertThresh||"";
+  const b=$("setThresh"); if(b) b.value=alertThresh||"";
   if(alertThresh>0 && "Notification" in window && Notification.permission==="default"){ try{ Notification.requestPermission(); }catch(_){} }
   if(alertThresh<=0) hideAlert();
-});
+}
+// Single source of truth for the poll interval; keeps the header select and the
+// Settings select in step.
+function applyIntervalMs(v){
+  intervalMs = +v||0; store.set("interval",intervalMs);
+  const h=$("interval"); if(h) h.value=String(intervalMs);
+  const g=$("setInterval"); if(g) g.value=String(intervalMs);
+  arm(); if(intervalMs) refresh();
+}
 function hideAlert(){ const b=$("alertBar"); if(b) b.style.display="none"; }
 /* Raise an alert when denials in one interval cross the operator's threshold.
    Rate-limited to once per 20s so a sustained flood does not spam. */
@@ -973,6 +1151,9 @@ function render(){
   if (changed("compliance",[s.enforced,s.policy,s.exposure,(s.chains||[]).map(c=>c.rules.map(r=>[r.rate_limit,r.log_kind])),(s.events||[]).length>0])) renderCompliance(s);
   renderDiag(s);
   updateNav(s);
+  scanForAlerts(s);
+  if(changed("origins",(s.attacks||[]).map(a=>[a.src,a.severity,a.count]))) renderOrigins(s);
+  applyGlobalSearch();
 }
 
 /* ---- posture ---------------------------------------------------------- */
@@ -1107,18 +1288,25 @@ function renderRibbon(s){
 document.addEventListener("click",(e)=>{ const b=e.target.closest("[data-copy]"); if(b){ copy(b.dataset.copy); } });
 
 /* ---- KPIs + sparkline ------------------------------------------------- */
+let prevKpiTotals=null;
 function renderKPIs(s){
   const t=s.totals||{};
   if(!changed("kpis",t)) return;
+  const p=prevKpiTotals;
+  // Delta vs the previous distinct snapshot. For a security console, "more" is
+  // worse, so a rise is red and a fall green.
+  const dl=(k,cur)=>{ if(!p||!(k in p)) return ""; const d=(cur||0)-(p[k]||0); if(!d) return `<span class="dz" title="no change">·</span>`;
+    return `<span class="dlt ${d>0?"up":"dn"}" title="change since last update">${d>0?"▲":"▼"} ${fmtN(Math.abs(d))}</span>`; };
   const cards=[
-    ["Denied packets",fmtN(t.denied_packets),fmtBytes(t.denied_bytes)+" stopped",t.denied_packets>0?"bad":"ok"],
-    ["Alerts",fmtN(t.alert_packets),"flagged for audit",t.alert_packets>0?"warn":""],
-    ["Attack sources",fmtN(t.attackers),"distinct remote IPs",t.attackers>0?"bad":"ok"],
-    ["Logged events",fmtN(t.events),"last 48 h","info"],
-    ["Accepted",fmtN(t.accepted_packets),"by explicit allow rules",""],
-    ["Listeners",fmtN((s.listeners||[]).length),"open service ports",""],
+    ["Denied packets",fmtN(t.denied_packets),fmtBytes(t.denied_bytes)+" stopped",t.denied_packets>0?"bad":"ok",dl("denied_packets",t.denied_packets)],
+    ["Alerts",fmtN(t.alert_packets),"flagged for audit",t.alert_packets>0?"warn":"",dl("alert_packets",t.alert_packets)],
+    ["Attack sources",fmtN(t.attackers),"distinct remote IPs",t.attackers>0?"bad":"ok",dl("attackers",t.attackers)],
+    ["Logged events",fmtN(t.events),"last 48 h","info",dl("events",t.events)],
+    ["Accepted",fmtN(t.accepted_packets),"by explicit allow rules","",dl("accepted_packets",t.accepted_packets)],
+    ["Listeners",fmtN((s.listeners||[]).length),"open service ports","",""],
   ];
-  $("kpis").innerHTML=cards.map(([lab,big,sub,cls])=>`<div class="kpi tilt ${cls}"><div class="lab">${lab}</div><div class="big">${big}</div><div class="sub">${sub}</div></div>`).join("");
+  $("kpis").innerHTML=cards.map(([lab,big,sub,cls,delta])=>`<div class="kpi tilt ${cls}"><div class="lab">${lab}</div><div class="big">${big}</div><div class="sub">${sub} ${delta||""}</div></div>`).join("");
+  prevKpiTotals={...t};
 }
 let sparkRaf=0;
 function scheduleSpark(){ if(sparkRaf) return; sparkRaf=requestAnimationFrame(()=>{ sparkRaf=0; drawSpark(); }); }
@@ -1291,7 +1479,7 @@ function fillTalk(id,rows,emptyMsg){ const tb=qs("#"+id+" tbody");
 
 function filterTo(q){ evSearch=q||""; $("evSearch").value=evSearch; evAction=""; evDir="";
   [...$("evAction").children].forEach((x,i)=>x.classList.toggle("on",i===0)); [...$("evDir").children].forEach((x,i)=>x.classList.toggle("on",i===0));
-  renderEvents(); document.getElementById("events").scrollIntoView({behavior:"smooth"}); if(q) toast("Filtered to "+q); }
+  renderEvents(); go("events"); if(q) toast("Filtered to "+q); }
 
 /* ---- events ----------------------------------------------------------- */
 let evAction="", evDir="", evSearch="", evSortDesc=true;
@@ -1477,7 +1665,7 @@ function renderDossier(src){
       ${real?`<button data-act="report">Export abuse report</button>`:""}
       ${real?`<button data-act="copydossier">Copy dossier</button>`:""}
     </div>`;
-  dos.querySelector('[data-act="src"]').onclick=()=>{ filterTo(src); const ev=$("events"); if(ev) ev.scrollIntoView({behavior:"smooth"}); };
+  dos.querySelector('[data-act="src"]').onclick=()=>{ filterTo(src); };
   const cbtn=dos.querySelector('[data-act="contain"]'); if(cbtn) cbtn.onclick=()=>containIp(src);
   const rbtn=dos.querySelector('[data-act="release"]'); if(rbtn) rbtn.onclick=()=>releaseIp(src);
   const rep=dos.querySelector('[data-act="report"]'); if(rep) rep.onclick=()=>exportAbuseReport(src);
@@ -1500,11 +1688,11 @@ function investigate(src){
   src=String(src).trim(); if(!src) return;
   investigating=src;
   const enc="#investigate/"+encodeURIComponent(src);
-  if(location.hash!==enc) location.hash=enc;   // deep-link; handleHash no-ops (src already current)
+  if(location.hash!==enc) location.hash=enc;   // deep-link; onRoute shows the page, handleHash no-ops (src already current)
+  applyRoute("investigate");
   renderInvSources();
   renderDossier(src);
   ensurePtr(src);
-  const sec=$("investigate"); if(sec) sec.scrollIntoView({behavior:"smooth",block:"start"});
 }
 
 // Keep an open dossier live as new snapshots arrive; refresh the rail too.
@@ -1847,17 +2035,45 @@ function updateNav(s){
   const ex=((s.exposure||{}).findings||[]).filter(x=>x.severity!=="good"&&x.severity!=="low").length;
   const ne=$("nav-exposure"); ne.textContent=ex; ne.parentElement.classList.toggle("hot",ex>0);
 }
+/* ---- router: one page visible at a time; the hash is the single source
+   of truth. Nav links are plain #anchors, so clicking one sets the hash and
+   `onRoute` does the rest. `#investigate/<ip>` is a deep-link into a dossier. */
 const navLinks=[...document.querySelectorAll("nav.side a[data-nav]")];
-navLinks.forEach(a=>a.addEventListener("click",()=>{ if(innerWidth<=960) drawer(false); }));
-if(window.IntersectionObserver){ const byId={}; navLinks.forEach(a=>byId[a.getAttribute("href").slice(1)]=a);
-  const io=new IntersectionObserver(ents=>{ ents.forEach(en=>{ if(en.isIntersecting){ navLinks.forEach(a=>a.classList.remove("active")); const a=byId[en.target.id]; if(a)a.classList.add("active"); } }); },{rootMargin:"-45% 0px -50% 0px"});
-  document.querySelectorAll("main > section").forEach(sec=>io.observe(sec)); }
+const PAGES=navLinks.map(a=>a.getAttribute("data-nav"));
+const PAGE_TITLE={overview:"Overview",threats:"Threats",investigate:"Investigation",talkers:"Top talkers",
+  events:"Events",network:"Network",exposure:"Attack surface",rules:"Rules",host:"Host surface",
+  compliance:"Compliance",settings:"Settings",diag:"Diagnostics"};
+let currentPage=null;
+function go(id){ location.hash="#"+id; }
+function applyRoute(id){
+  if(!PAGES.includes(id)) id="overview";
+  currentPage=id;
+  document.querySelectorAll("main > section").forEach(s=>s.classList.toggle("active", s.id===id));
+  navLinks.forEach(a=>a.classList.toggle("active", a.getAttribute("data-nav")===id));
+  document.title = id==="overview" ? "ufw-nft — Enforcement Console" : (PAGE_TITLE[id]||id)+" · ufw-nft";
+  window.scrollTo(0,0);
+  if(innerWidth<=960) drawer(false);
+  // SVG charts size themselves from clientWidth, which is 0 while their page is
+  // hidden — redraw the active page's charts now that it can be measured.
+  if(id==="threats") scheduleChart();
+  if(id==="overview") scheduleSpark();
+  if(id==="settings" && typeof refreshSettingsMeta==="function") refreshSettingsMeta();
+  const g=$("gsearch"); if(g) g.value="";   // search is per-page
+  applyGlobalSearch();
+}
+function onRoute(){
+  const h=(location.hash||"").replace(/^#/,"");
+  if(h.indexOf("investigate/")===0){ applyRoute("investigate"); handleHash(); return; }
+  const id=h.split("?")[0];
+  applyRoute(PAGES.includes(id)?id:"overview");
+}
+addEventListener("hashchange",onRoute);
 
 /* ---- command palette (Ctrl-K / Cmd-K) -------------------------------- */
 const palette = (function(){
   const ov=$("palette"), input=$("palInput"), list=$("palList");
   let items=[], sel=0, isOpen=false;
-  const jump=(id)=>{ const el=$(id); if(el) el.scrollIntoView({behavior:"smooth"}); };
+  const jump=(id)=>go(id);
   function togglePause(){ const s=$("interval"); s.value = intervalMs===0 ? "3000" : "0"; s.onchange(); }
   function base(){
     const paused = intervalMs===0;
@@ -1872,7 +2088,10 @@ const palette = (function(){
       {ic:"▦", label:"Go to Rules",                     run:()=>jump("rules")},
       {ic:"▥", label:"Go to Host surface",              run:()=>jump("host")},
       {ic:"✓", label:"Go to Compliance",                run:()=>jump("compliance")},
+      {ic:"⚙", label:"Go to Settings",                  run:()=>jump("settings")},
       {ic:"ⓘ", label:"Go to Diagnostics",               run:()=>jump("diag")},
+      {ic:"🔔", label:"Open notifications",     key:"n", run:()=>toggleNtf()},
+      {ic:"⭳", label:"Export snapshot (JSON)",          run:()=>{ const b=$("setExport"); if(b) b.click(); }},
       {ic:"↻", label:"Refresh now",            key:"r", run:()=>{ refresh(); toast("Refreshed"); }},
       {ic:"◑", label:"Toggle theme",           key:"t", run:()=>$("theme").click()},
       {ic:paused?"▶":"⏸", label:paused?"Resume live polling":"Pause live polling", run:togglePause},
@@ -1926,22 +2145,165 @@ addEventListener("keydown",(e)=>{
 }, true);
 
 /* ---- keyboard shortcuts ---------------------------------------------- */
-const SECN=["overview","threats","talkers","events","network","exposure","rules","host"];
 addEventListener("keydown",(e)=>{
   if(e.metaKey||e.ctrlKey||e.altKey) return;
   const tag=(e.target.tagName||"").toLowerCase(), typing=tag==="input"||tag==="select"||tag==="textarea";
-  if(e.key==="Escape"){ palette.close(); closeDetail(); toggleHelp(false); if(typing) e.target.blur(); return; }
+  if(e.key==="Escape"){ palette.close(); closeDetail(); toggleHelp(false); closeNtf(); if(typing) e.target.blur(); return; }
   if(typing) return;
-  if(e.key==="/"){ e.preventDefault(); $("evSearch").focus(); }
+  if(e.key==="/"){ e.preventDefault(); const g=$("gsearch"); (g && g.offsetParent!==null ? g : $("evSearch")).focus(); }
   else if(e.key==="r"){ refresh(); toast("Refreshed"); }
   else if(e.key==="t"){ $("theme").click(); }
   else if(e.key==="e"){ $("exportJson").click(); }
+  else if(e.key==="n"){ toggleNtf(); }
   else if(e.key==="?"){ toggleHelp(); }
-  else if(/[1-7]/.test(e.key)){ const id=SECN[+e.key-1]; const el=$(id); if(el){ el.scrollIntoView({behavior:"smooth"}); } }
+  else if(/[1-9]/.test(e.key)){ const id=PAGES[+e.key-1]; if(id) go(id); }
 });
 
+/* ====================================================================== *
+ *  Upgrade features: progress bar, global search, notifications, origins,
+ *  and the Settings page. All client-side, all off the existing /api/state.
+ * ====================================================================== */
+
+/* ---- top progress bar + refresh countdown ring ----------------------- */
+let progT=0;
+function progressStart(){ const p=$("progress"); const b=$("refresh"); if(b) b.classList.add("busy");
+  if(!p) return; clearTimeout(progT); p.classList.add("run"); p.style.width="16%"; requestAnimationFrame(()=>{ p.style.width="70%"; }); }
+function progressDone(){ const p=$("progress"); const b=$("refresh"); if(b) b.classList.remove("busy");
+  if(!p) return; p.style.width="100%"; progT=setTimeout(()=>{ p.classList.remove("run"); p.style.width="0"; }, 280); }
+let cdStart=0;
+function cdReset(){ try{ cdStart=performance.now(); }catch(_){ cdStart=0; } }
+(function cdTick(){
+  const b=$("refresh");
+  if(b){ let pct=0; if(intervalMs>0 && cdStart){ try{ pct=Math.max(0,Math.min(100,(performance.now()-cdStart)/intervalMs*100)); }catch(_){ pct=0; } }
+    b.style.setProperty("--cd", pct.toFixed(0)); }
+  requestAnimationFrame(cdTick);
+})();
+
+/* ---- global header search: filter the active page's rows/cards -------- */
+function applyGlobalSearch(){
+  const g=$("gsearch"); const q=(g&&g.value||"").trim().toLowerCase();
+  const sec=currentPage&&$(currentPage); if(!sec) return;
+  const items=sec.querySelectorAll("tbody tr, .attack, .inv-srcrow, .crow");
+  if(!q){ items.forEach(el=>el.classList.remove("gs-hidden")); return; }
+  items.forEach(el=>{ if(el.querySelector("td[colspan]")){ return; } el.classList.toggle("gs-hidden", !(el.textContent||"").toLowerCase().includes(q)); });
+}
+{ const g=$("gsearch"); if(g){ g.addEventListener("input", applyGlobalSearch);
+  g.addEventListener("keydown", e=>{ if(e.key==="Escape"){ g.value=""; applyGlobalSearch(); g.blur(); } }); } }
+
+/* ---- notifications center + desktop/sound alerts --------------------- */
+const SEV_RANK={critical:0,high:1,medium:2,low:3,info:4,good:5};
+const ntf={ items:[], seen:new Set(), unread:0, lastSound:0 };
+let firstScan=true;
+function scanForAlerts(s){
+  const minRank = SEV_RANK[settings.ntfSev] ?? 1;
+  for(const a of (s.attacks||[])){
+    if((SEV_RANK[a.severity] ?? 9) > minRank) continue;
+    const key=a.src+"|"+a.severity;
+    if(ntf.seen.has(key)) continue;
+    ntf.seen.add(key);
+    if(!firstScan) addNtf(a);   // seed silently on the first snapshot; only fire on genuinely new ones
+  }
+  firstScan=false;
+}
+function addNtf(a){
+  const it={ src:a.src, sev:a.severity, title:a.title||a.kind||"attack", ts:Date.now()/1000 };
+  if(settings.ntfInApp){
+    ntf.items.unshift(it); if(ntf.items.length>50) ntf.items.pop(); ntf.unread++;
+    renderNtf();
+    const bell=$("bell"); if(bell){ bell.classList.remove("hot"); void bell.offsetWidth; bell.classList.add("hot"); }
+  }
+  if(settings.ntfSound){ const now=Date.now(); if(now-ntf.lastSound>1500){ ntf.lastSound=now; beep(); } }
+  if(settings.ntfDesktop && "Notification" in window && Notification.permission==="granted"){
+    try{ new Notification("ufw-nft — "+(it.sev||"").toUpperCase()+" attack", { body:it.title+" from "+it.src }); }catch(_){}
+  }
+  toast((it.sev||"").toUpperCase()+" — "+it.title+" from "+it.src);
+}
+function renderNtf(){
+  const badge=$("bellBadge"); if(badge){ if(ntf.unread>0){ badge.hidden=false; badge.textContent=ntf.unread>99?"99+":String(ntf.unread); } else badge.hidden=true; }
+  const list=$("ntfList"); if(!list) return;
+  list.innerHTML = ntf.items.length
+    ? ntf.items.map(it=>`<div class="ntf-row ${it.sev==="medium"?"medium":""}" data-ntf="${esc(it.src)}"><span class="nd"></span><div><div class="nt">${esc((it.sev||"").toUpperCase())} · ${esc(it.title)}</div><div class="ns">${esc(it.src)}</div></div><span class="na">${ago(it.ts)} ago</span></div>`).join("")
+    : `<div class="ntf-empty">No alerts yet. High-severity attacks show up here.</div>`;
+  list.querySelectorAll("[data-ntf]").forEach(r=>r.addEventListener("click",()=>{ closeNtf(); investigate(r.dataset.ntf); }));
+}
+function openNtf(){ const p=$("ntfPanel"); if(!p) return; p.hidden=false; ntf.unread=0; renderNtf(); }
+function closeNtf(){ const p=$("ntfPanel"); if(p) p.hidden=true; }
+function toggleNtf(){ const p=$("ntfPanel"); if(!p) return; p.hidden?openNtf():closeNtf(); }
+function beep(){ try{ const AC=window.AudioContext||window.webkitAudioContext; if(!AC) return; const ctx=new AC();
+  const o=ctx.createOscillator(), g=ctx.createGain(); o.type="sine"; o.frequency.value=880;
+  o.connect(g); g.connect(ctx.destination); g.gain.setValueAtTime(0.0001, ctx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.16, ctx.currentTime+0.02); g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime+0.34);
+  o.start(); o.stop(ctx.currentTime+0.36); o.onended=()=>{ try{ctx.close();}catch(_){} }; }catch(_){} }
+$("bell").onclick=()=>toggleNtf();
+$("ntfClear").onclick=()=>{ ntf.items=[]; ntf.unread=0; renderNtf(); };
+document.addEventListener("click",e=>{ const p=$("ntfPanel"); if(p&&!p.hidden&&!p.contains(e.target)&&e.target!==$("bell")&&!$("bell").contains(e.target)) closeNtf(); });
+
+/* ---- threat origins: where the traffic comes from, from our data only - */
+function renderOrigins(s){
+  const el=$("origins"); if(!el) return;
+  const atks=s.attacks||[];
+  if(!atks.length){ el.innerHTML=""; return; }
+  const byScope={}; for(const a of atks){ const g=ipClass(a.src); byScope[g.label]=(byScope[g.label]||0)+(a.count||1); }
+  const scopes=Object.entries(byScope).sort((x,y)=>y[1]-x[1]);
+  const smax=Math.max(1,...scopes.map(x=>x[1]));
+  const bySub={}; for(const a of atks){ const m=/^(\d+)\.(\d+)\.(\d+)\./.exec(a.src||""); if(!m) continue; const sub=m[1]+"."+m[2]+"."+m[3]+".0/24"; bySub[sub]=(bySub[sub]||0)+(a.count||1); }
+  const subs=Object.entries(bySub).sort((x,y)=>y[1]-x[1]).slice(0,6);
+  const bmax=Math.max(1,...subs.map(x=>x[1]));
+  const bar=(l,v,mx,cls)=>`<div class="ob"><span class="obl" title="${esc(l)}">${esc(l)}</span><span class="obbar"><i class="${cls||''}" style="width:${Math.round(v/mx*100)}%"></i></span><span class="obv">${fmtN(v)}</span></div>`;
+  el.innerHTML=`<div class="card"><div class="ch"><h3>Threat origins</h3><span class="hint">grouped from what this host logged — no external lookups</span></div>
+    <div class="body grid2">
+      <div><div class="obh">By network scope</div>${scopes.map(([l,v])=>bar(l,v,smax)).join("")}</div>
+      <div><div class="obh">Top source /24 subnets</div>${subs.length?subs.map(([l,v])=>bar(l,v,bmax,"warnbar")).join(""):`<div class="muted" style="font-size:12.5px">No IPv4 sources to group.</div>`}</div>
+    </div></div>`;
+}
+
+/* ---- settings page --------------------------------------------------- */
+const DEF_SETTINGS={ accent:null, density:"cozy", reduceMotion:false, ntfInApp:true, ntfDesktop:false, ntfSound:false, ntfSev:"high" };
+let settings=Object.assign({}, DEF_SETTINGS, store.get("settings",{}));
+function saveSettings(){ store.set("settings", settings); }
+const ACCENTS=[ ["Auto",null], ["Indigo","#4f6bed"], ["Violet","#7c5cff"], ["Sky","#2f7fe6"], ["Teal","#0d9488"], ["Green","#12855a"], ["Amber","#c2751a"], ["Rose","#e04b6a"] ];
+function applyAccent(){ const r=document.documentElement;
+  if(!settings.accent){ r.style.removeProperty("--accent"); r.style.removeProperty("--accent-weak"); }
+  else{ r.style.setProperty("--accent", settings.accent); r.style.setProperty("--accent-weak", "color-mix(in srgb, "+settings.accent+" 15%, transparent)"); }
+  const box=$("setAccent"); if(box) box.querySelectorAll(".sw2").forEach(sw=>sw.classList.toggle("on",(sw.dataset.c||"")===(settings.accent||"")));
+  scheduleChart(); scheduleSpark();
+}
+function applyDensity(){ document.body.classList.toggle("compact", settings.density==="compact"); syncSeg("setDensity", settings.density); }
+function applyReduceMotion(){ document.body.classList.toggle("reduce-motion", !!settings.reduceMotion); const c=$("setReduceMotion"); if(c) c.checked=!!settings.reduceMotion; }
+function syncSeg(id,val){ const box=$(id); if(box) [...box.children].forEach(b=>b.classList.toggle("on", b.dataset.v===String(val))); }
+function initSettings(){
+  // accent swatches
+  const box=$("setAccent");
+  if(box){ box.innerHTML=ACCENTS.map(([name,c])=>`<div class="sw2" role="button" tabindex="0" data-c="${c||''}" title="${name}" style="background:${c||'linear-gradient(135deg,#4f6bed,#7c5cff)'}"></div>`).join("");
+    box.querySelectorAll(".sw2").forEach(sw=>sw.addEventListener("click",()=>{ settings.accent=sw.dataset.c||null; saveSettings(); applyAccent(); })); }
+  // theme seg reflects/controls the existing theme var
+  const th=$("setTheme"); if(th){ [...th.children].forEach(b=>b.addEventListener("click",()=>{ theme=b.dataset.v; store.set("theme",theme); applyTheme(); syncSeg("setTheme",theme); scheduleChart(); scheduleSpark(); })); syncSeg("setTheme",theme); }
+  // density
+  const de=$("setDensity"); if(de) [...de.children].forEach(b=>b.addEventListener("click",()=>{ settings.density=b.dataset.v; saveSettings(); applyDensity(); }));
+  // reduce motion
+  const rm=$("setReduceMotion"); if(rm) rm.addEventListener("change",()=>{ settings.reduceMotion=rm.checked; saveSettings(); applyReduceMotion(); });
+  // live data
+  const si=$("setInterval"); if(si){ si.value=String(intervalMs); si.addEventListener("change",()=>applyIntervalMs(si.value)); }
+  const st=$("setThresh"); if(st){ st.value=alertThresh||""; st.addEventListener("change",()=>applyThresh(st.value)); }
+  // notifications
+  const bindChk=(id,key,extra)=>{ const c=$(id); if(!c) return; c.checked=!!settings[key]; c.addEventListener("change",()=>{ settings[key]=c.checked; saveSettings(); if(extra) extra(c.checked); }); };
+  bindChk("setNtfInApp","ntfInApp");
+  bindChk("setNtfDesktop","ntfDesktop",on=>{ if(on && "Notification" in window && Notification.permission==="default"){ try{ Notification.requestPermission(); }catch(_){} } });
+  bindChk("setNtfSound","ntfSound",on=>{ if(on) beep(); });
+  const ns=$("setNtfSev"); if(ns){ [...ns.children].forEach(b=>b.addEventListener("click",()=>{ settings.ntfSev=b.dataset.v; saveSettings(); syncSeg("setNtfSev",settings.ntfSev); })); syncSeg("setNtfSev",settings.ntfSev); }
+  // data + reset
+  const ex=$("setExport"); if(ex) ex.onclick=()=>{ if(!state){ toast("Nothing to export yet"); return; } download(`ufw-snapshot-${stamp()}.json`, JSON.stringify(state,null,2), "application/json"); toast("Snapshot exported"); };
+  const cl=$("setCopyLink"); if(cl) cl.onclick=()=>{ copy(location.href); };
+  const rs=$("setReset"); if(rs) rs.onclick=()=>{ settings=Object.assign({},DEF_SETTINGS); saveSettings(); applyAccent(); applyDensity(); applyReduceMotion();
+    ["ntfInApp","ntfDesktop","ntfSound"].forEach(k=>{ const c=$("set"+k[0].toUpperCase()+k.slice(1)); if(c) c.checked=!!settings[k]; }); syncSeg("setNtfSev",settings.ntfSev); toast("UI preferences reset"); };
+  applyAccent(); applyDensity(); applyReduceMotion();
+}
+// keep the About line and version fresh once state arrives
+function refreshSettingsMeta(){ if(!state) return; const v=$("setVer"); if(v) v.textContent=(state.host?("host "+state.host):""); const a=$("setAbout"); if(a) a.textContent="ufw-nft enforcement console"; }
+initSettings();
+
 /* ---- go --------------------------------------------------------------- */
-handleHash();   // honour a #investigate/<ip> deep-link once the first snapshot lands
+onRoute();      // show the page named in the URL hash (or Overview); honours #investigate/<ip>
 refresh();
 arm();
 loadNetwork(false);
