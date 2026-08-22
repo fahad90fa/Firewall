@@ -104,16 +104,31 @@ three Supabase Edge Functions that act with the service role.
   **Resume/Unblock**, **+1 mo** (extend), **Release** (clear the machine binding
   so the key can move).
 
-## Part 2 — the firewall side
+## Part 2 — the firewall side (implemented)
 
-The Rust agent consumes this backend:
+The Rust agent (`cli/src/bin/ufw-nft/license.rs`) consumes this backend:
 
 - `firewall license activate <KEY>` → `POST /functions/v1/activate` with the key
-  and a stable machine id (`/etc/machine-id`), stores the returned signed token.
-- A periodic re-check → `POST /functions/v1/validate`; on `expired` / `suspended`
-  / `blocked` (or a token past its grace window with no reachable server), the
-  agent **reverts the nftables table and warns**, per the product's
-  "revert to unprotected + warn" behaviour.
-- `apply` / boot-apply are gated on a currently-valid license.
+  and a **salted SHA-256 of `/etc/machine-id`** (the raw id never leaves the
+  box), stores the returned signed verdict at `/var/lib/unified-firewall/license.json`
+  (root-only, 0600).
+- `firewall license status [--refresh]` shows the cached state; `--refresh`
+  re-checks online first.
+- `firewall license check` → `POST /functions/v1/validate`. A systemd timer
+  (`ufw-license-check.timer`, ~every 6h + at boot) runs it; on `expired` /
+  `suspended` / `blocked` it **reverts `table inet ufw` and warns**, per the
+  product's "revert to unprotected + warn" behaviour. A 72h offline grace window
+  means a transient network blip never drops protection on its own.
+- `apply`, `boot-apply` and `trial` are gated: with a valid license they proceed;
+  otherwise enforcement is refused (at boot the machine comes up unprotected and
+  says so, rather than restoring stale rules).
 
-That agent-side wiring is tracked separately from this website change.
+**Opt-in by construction.** Gating turns on only when
+`/etc/unified-firewall/license.conf` exists — the `.deb` ships it, so packaged
+installs are gated; a source/CI build has no such file and stays ungated, so the
+project's tests and `scripts/live-run.sh` are unaffected.
+
+The `.deb` phones home with `curl` (a declared dependency) and installs the
+config template + the re-check timer. Configure `endpoint`/`apikey` in
+`license.conf`; deploy the edge functions and set `LICENSE_SIGNING_SECRET` as
+above.

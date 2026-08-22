@@ -10,8 +10,10 @@
 # What it installs on the target (mirrors install.sh, adapted to /usr):
 #   /usr/bin/{ufw-nft,ufwctl,ufw-daemon,ufw-waf,firewall}
 #   /lib/systemd/system/{firewall-policy,ufw-daemon,ufw-waf,ufw-nft}.service
+#   /lib/systemd/system/ufw-license-check.{service,timer}  (periodic re-check)
 #   /usr/share/unified-firewall/{policies,sig-rules}      (package-managed refs)
 #   /etc/unified-firewall/daemon.toml                     (monitor-mode conffile)
+#   /etc/unified-firewall/license.conf                    (turns licensing on)
 # postinst seeds /etc, enables the services (monitor mode — observes, does not
 # block) and starts them. Nothing here can lock you out of your own machine.
 set -eu
@@ -25,10 +27,17 @@ STAGE="$ROOT/build/deb/pkgroot"
 OUT_DIR="${OUT_DIR:-$ROOT/dist}"
 DEB="$OUT_DIR/unified-firewall_${VERSION}_${ARCH}.deb"
 
-# 1. Binaries (build if missing) --------------------------------------------
-if [ ! -x "$BIN/ufw-nft" ] || [ ! -x "$BIN/ufwd" ]; then
+# 1. Binaries ---------------------------------------------------------------
+# Always let cargo decide: it is incremental (a no-op when nothing changed) and
+# this avoids silently packaging a stale binary that predates a source change.
+# Set UFW_DEB_SKIP_BUILD=1 to reuse whatever is already in target/release.
+if [ "${UFW_DEB_SKIP_BUILD:-0}" != "1" ]; then
     echo "==> building release binaries"
     ( cd "$ROOT" && cargo build --release -p ufw-cli -p ufw-daemon )
+fi
+if [ ! -x "$BIN/ufw-nft" ] || [ ! -x "$BIN/ufwd" ]; then
+    echo "error: release binaries missing under $BIN (build failed or was skipped)" >&2
+    exit 1
 fi
 
 # 2. Stage the file tree -----------------------------------------------------
@@ -50,11 +59,14 @@ sed 's#/usr/local/bin/ufw-nft#/usr/bin/ufw-nft#g' "$ROOT/build/linux/firewall.sh
 chmod 0755 "$STAGE/usr/bin/firewall"
 
 # systemd units, with ExecStart paths moved to /usr/bin.
-for u in firewall-policy ufw-daemon ufw-waf ufw-nft; do
+for u in firewall-policy ufw-daemon ufw-waf ufw-nft ufw-license-check; do
     sed 's#/usr/local/bin/#/usr/bin/#g' "$ROOT/build/linux/$u.service" \
         > "$STAGE/lib/systemd/system/$u.service"
     chmod 0644 "$STAGE/lib/systemd/system/$u.service"
 done
+# The license re-check timer (no ExecStart to rewrite).
+cp "$ROOT/build/linux/ufw-license-check.timer" "$STAGE/lib/systemd/system/ufw-license-check.timer"
+chmod 0644 "$STAGE/lib/systemd/system/ufw-license-check.timer"
 
 # Reference policies + signatures (package-managed, read-only).
 cp -R "$ROOT/policies" "$STAGE/usr/share/unified-firewall/policies"
@@ -90,6 +102,12 @@ rest_bind = "127.0.0.1:9600"
 fleet_secret = "CHANGE-ME-before-fleet-use-0000000000000000"
 CONF
 chmod 0644 "$STAGE/etc/unified-firewall/daemon.toml"
+
+# Licensing config as a conffile. Installing it turns licensing ON: `ufw-nft
+# apply` (enforcement) then requires an activated key on this machine. Monitor
+# mode still runs unlicensed — it observes, it does not block.
+cp "$ROOT/build/linux/license.conf" "$STAGE/etc/unified-firewall/license.conf"
+chmod 0644 "$STAGE/etc/unified-firewall/license.conf"
 
 # AppStream metadata, so a software centre (GNOME Software, KDE Discover) shows
 # a proper name, the Apache-2.0 license, and release notes instead of "Unknown
@@ -203,6 +221,15 @@ Unified Firewall (Linux packet-layer stack)
 Installed and started in MONITOR mode (observes, does not block). Open the live
 console at http://127.0.0.1:8787 .
 
+Activation (required before enforcing):
+    This build is licensed. Monitor mode runs unlicensed, but ENFORCEMENT
+    (`firewall apply`) needs an activated key, node-locked to this machine:
+        sudo firewall license activate <YOUR-KEY>
+        firewall license status
+    A timer re-checks periodically; if the key expires or is suspended/blocked
+    by the vendor, enforcement is reverted automatically (you drop back to
+    monitor-only). To run ungated, remove /etc/unified-firewall/license.conf .
+
 Enforce the packet policy (safe: denies only never-legitimate protocols):
     sudo firewall apply default_allow
 
@@ -224,7 +251,7 @@ Version: $VERSION
 Architecture: $ARCH
 Maintainer: Unified Firewall <support@unifiedfirewall.dev>
 Installed-Size: $INSTALLED_KB
-Depends: nftables
+Depends: nftables, curl
 Recommends: sudo
 Section: admin
 Priority: optional
@@ -241,6 +268,7 @@ CONTROL
 
 cat > "$STAGE/DEBIAN/conffiles" <<'CONFF'
 /etc/unified-firewall/daemon.toml
+/etc/unified-firewall/license.conf
 CONFF
 
 # postinst: seed /etc, enable + start services (monitor-safe).
@@ -264,11 +292,15 @@ if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
         systemctl enable --now "$s.service" >/dev/null 2>&1 || \
             echo "note: $s.service did not start — check: journalctl -u $s"
     done
+    # Periodic license re-check (reverts enforcement if the key lapses).
+    systemctl enable --now ufw-license-check.timer >/dev/null 2>&1 || \
+        echo "note: ufw-license-check.timer did not start — check: journalctl -u ufw-license-check"
     echo "Unified Firewall is running in MONITOR mode. Console: http://127.0.0.1:8787"
 else
     echo "Unified Firewall installed (no systemd detected — start services manually)."
 fi
-echo "Enforce the packet policy when ready:  sudo firewall apply default_allow"
+echo "Activate this machine (required before enforcing):  sudo firewall license activate <KEY>"
+echo "Then enforce the packet policy:                     sudo firewall apply default_allow"
 exit 0
 POST
 chmod 0755 "$STAGE/DEBIAN/postinst"
@@ -278,6 +310,7 @@ cat > "$STAGE/DEBIAN/prerm" <<'PRE'
 #!/bin/sh
 set -e
 if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+    systemctl disable --now ufw-license-check.timer >/dev/null 2>&1 || true
     for s in ufw-nft ufw-waf ufw-daemon firewall-policy; do
         systemctl disable --now "$s.service" >/dev/null 2>&1 || true
     done

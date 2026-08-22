@@ -104,14 +104,19 @@ Deno.serve(async (req) => {
 
   await audit("activate", lic.id, lic.machine_id ? "reactivate" : "first_activation");
 
-  const recheckBy = new Date(now + GRACE_HOURS * 3600 * 1000).toISOString();
+  const recheckByMs = now + GRACE_HOURS * 3600 * 1000;
+  const recheckBy = new Date(recheckByMs).toISOString();
+  const expiresUnix = Math.floor(new Date(lic.expires_at).getTime() / 1000);
+  const recheckUnix = Math.floor(recheckByMs / 1000);
   const token = await signToken({
     key,
     machine_id: machineId,
     plan: lic.plan,
     status: "active",
     expires_at: lic.expires_at,
+    expires_at_unix: expiresUnix,
     recheck_by: recheckBy,
+    recheck_by_unix: recheckUnix,
     issued_at: new Date(now).toISOString(),
   });
 
@@ -120,7 +125,9 @@ Deno.serve(async (req) => {
     status: "active",
     plan: lic.plan,
     expires_at: lic.expires_at,
+    expires_at_unix: expiresUnix,
     recheck_by: recheckBy,
+    recheck_by_unix: recheckUnix,
     grace_hours: GRACE_HOURS,
     token,
   });
