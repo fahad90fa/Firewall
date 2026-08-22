@@ -11,6 +11,8 @@
 #   firewall status                 the loaded ruleset with live counters
 #   firewall revert                 remove everything this tool loaded
 #   firewall check <policy>         validate without loading anything
+#   firewall license activate KEY   activate this machine (node-locked, monthly)
+#   firewall license status         show license state (--refresh to re-check)
 #
 # Every subcommand talks to nftables or reads the kernel log, both of which
 # need root, so this wrapper re-execs itself under sudo — you get one

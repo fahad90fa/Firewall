@@ -1,0 +1,17 @@
+[Unit]
+Description=Unified Firewall — license re-check (reverts enforcement if the key has lapsed)
+Documentation=https://github.com/fahad90fa/Firewall
+# Needs the network to reach the license server; binds nothing itself.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Re-validates the activated key online and caches the verdict. If the vendor
+# has expired, suspended or blocked the key, this reverts `table inet ufw` so the
+# machine stops enforcing — the "revert to unprotected + warn" behaviour. A
+# non-zero exit is the expected signal of a lapse (or a transient network error,
+# which the offline grace window absorbs), so it is not treated as a unit
+# failure by the timer.
+ExecStart=/usr/local/bin/ufw-nft license check
+SuccessExitStatus=0 1

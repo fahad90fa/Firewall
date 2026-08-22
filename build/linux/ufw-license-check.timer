@@ -1,0 +1,14 @@
+[Unit]
+Description=Unified Firewall — periodic license re-check
+Documentation=https://github.com/fahad90fa/Firewall
+
+[Timer]
+# Shortly after boot, then every 6 hours. The daemon caches a signed verdict
+# with a 72h offline grace window, so a missed run or a network blip never drops
+# protection on its own — only a definitive lapse verdict from the server does.
+OnBootSec=3min
+OnUnitActiveSec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

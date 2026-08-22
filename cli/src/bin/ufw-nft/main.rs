@@ -33,6 +33,7 @@
 
 mod dashboard;
 mod knock;
+mod license;
 mod state;
 
 use std::io::Write;
@@ -60,6 +61,7 @@ fn main() -> ExitCode {
         Some("render") => cmd_render(rest),
         Some("dashboard") => cmd_dashboard(rest),
         Some("knock") => cmd_knock(rest),
+        Some("license") => license::cmd_license(rest),
         Some("-h") | Some("--help") | None => {
             print_usage();
             return ExitCode::SUCCESS;
@@ -99,6 +101,9 @@ USAGE:
                                           --tls-client-ca is mapped to an RBAC role by its SHA-256
                                           fingerprint (console-auth.json). Needs a --features tls build.
     ufw-nft knock  <port> <k1> <k2>…      Hide a port behind a knock sequence (off | status)
+    ufw-nft license activate <KEY>        Activate this machine (node-locked, one key one machine)
+    ufw-nft license status [--refresh]    Show the license state (and re-check online with --refresh)
+    ufw-nft license check                 Re-validate online; revert enforcement if the key has lapsed
     ufw-nft --version | --help
 
 This is real enforcement: after `apply`, the kernel filters this machine's
@@ -136,6 +141,9 @@ fn enforce(path: &Path) -> Result<CompiledRuleset, String> {
 
 fn cmd_apply(args: &[String]) -> Result<(), String> {
     let path = policy_arg(args)?;
+    if let license::Gate::Deny(why) = license::gate_enforcement() {
+        return Err(why);
+    }
     let compiled = enforce(&path)?;
 
     println!(
@@ -162,6 +170,14 @@ fn cmd_apply(args: &[String]) -> Result<(), String> {
 /// monitor baseline, so a fresh box still comes up protected). Trials are
 /// deliberately not restored: they are meant to be ephemeral and self-revert.
 fn cmd_boot_apply(args: &[String]) -> Result<(), String> {
+    // At boot a lapsed license means: come up unprotected and say so, rather
+    // than fail the unit or silently restore stale rules. (An unlicensed source
+    // build is ungated and falls straight through.)
+    if let license::Gate::Deny(why) = license::gate_enforcement() {
+        eprintln!("boot: not restoring the firewall — {why}");
+        eprintln!("  this machine is running UNPROTECTED until the license is renewed.");
+        return Ok(());
+    }
     if let Some(st) = state::load() {
         if st.mode == "apply" && !st.policy_path.is_empty() {
             let recorded = PathBuf::from(&st.policy_path);
@@ -214,6 +230,9 @@ fn cmd_trial(args: &[String]) -> Result<(), String> {
         .map_err(|_| format!("`{}` is not a number of seconds", args[1]))?;
     if secs == 0 {
         return Err("the trial duration must be at least 1 second".into());
+    }
+    if let license::Gate::Deny(why) = license::gate_enforcement() {
+        return Err(why);
     }
 
     let compiled = compile_ruleset(&path)?;

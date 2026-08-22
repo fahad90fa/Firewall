@@ -138,9 +138,9 @@ export default function DownloadPage() {
           />
           <Step
             n="02"
-            title="(Optional) verify the download"
-            body="Confirm the file matches the checksum shown above before you install."
-            cmd={`sha256sum ${LINUX_DEB.file}`}
+            title="Activate your license"
+            body="Your key is node-locked to this one machine and runs monthly. Monitor mode works without it, but enforcing a policy needs an active key. (Optional first: verify the download with sha256sum against the checksum above.)"
+            cmd={`sudo firewall license activate YOUR-KEY`}
           />
           <Step
             n="03"
@@ -151,7 +151,7 @@ export default function DownloadPage() {
           <Step
             n="04"
             title="Enforce when you're ready"
-            body="Start with default-allow (denies only never-legitimate protocols). Once you've catalogued egress, graduate to deny-by-default."
+            body="Start with default-allow (denies only never-legitimate protocols). Once you've catalogued egress, graduate to deny-by-default. If the license lapses, enforcement reverts automatically and you drop back to monitor-only."
             cmd={`sudo firewall apply default_allow`}
           />
         </ol>
