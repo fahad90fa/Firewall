@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import PacketCanvas from "./PacketCanvas";
 import { Button, Label } from "./ui";
-import { LINUX_DOWNLOAD_URL } from "../lib/content";
 
 function useCountUp(target: number, ms = 1600) {
   const [n, setN] = useState(0);
@@ -52,7 +51,7 @@ export default function Hero() {
           </p>
 
           <div className="mt-8 flex flex-wrap items-center gap-3">
-            <Button href={LINUX_DOWNLOAD_URL} download>
+            <Button href="#download">
               <LinuxGlyph /> Download for Linux
             </Button>
             <Button href="#how" variant="ghost">

@@ -2,7 +2,7 @@ import { type ReactNode } from "react";
 import { Button, Label, Reveal } from "./ui";
 import SignupForm from "./SignupForm";
 import { joinWaitlist, type Platform } from "../lib/supabase";
-import { LINUX_DOWNLOAD_URL, LINUX_DEB, LINUX_INSTALL_CMD } from "../lib/content";
+import { LINUX_DEB, LINUX_INSTALL_CMD } from "../lib/content";
 
 export default function Platforms() {
   return (
@@ -46,8 +46,7 @@ export default function Platforms() {
           </div>
           <div className="mt-auto pt-5">
             <Button
-              href={LINUX_DOWNLOAD_URL}
-              download
+              href="#download"
               className="w-full bg-safe text-void hover:shadow-[0_0_0_1px_rgba(52,211,153,0.3),0_8px_40px_-12px_rgba(52,211,153,0.4)]"
             >
               <DownloadGlyph /> Download .deb
