@@ -1,0 +1,21 @@
+# Supabase project config for the Unified Firewall licensing backend.
+#
+# project ref: bpcylnfjdsjouqoezbpa
+project_id = "bpcylnfjdsjouqoezbpa"
+
+# --- Edge Functions ---------------------------------------------------------
+# activate / validate are machine-facing: the firewall on a customer's box calls
+# them with only a license key + machine id. They authenticate the *key*, not a
+# user, so they must be reachable without a Supabase Auth JWT. (They still write
+# an audit row for every call and refuse unknown/blocked/expired keys.)
+[functions.activate]
+verify_jwt = false
+
+[functions.validate]
+verify_jwt = false
+
+# admin is people-facing and privileged: it REQUIRES a signed-in admin. Keep JWT
+# verification on, and the function additionally re-checks the caller's email
+# against admin_users on every request.
+[functions.admin]
+verify_jwt = true
