@@ -17,6 +17,7 @@
 set -eu
 
 VERSION="${VERSION:-0.1.0}"
+RELEASE_DATE="${RELEASE_DATE:-2026-08-22}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
 BIN="$ROOT/target/release"
@@ -35,7 +36,8 @@ echo "==> staging under $STAGE"
 rm -rf "$ROOT/build/deb"
 install -d "$STAGE/usr/bin" "$STAGE/lib/systemd/system" \
     "$STAGE/usr/share/unified-firewall" "$STAGE/etc/unified-firewall" \
-    "$STAGE/usr/share/doc/unified-firewall" "$STAGE/DEBIAN"
+    "$STAGE/usr/share/doc/unified-firewall" "$STAGE/usr/share/metainfo" \
+    "$STAGE/DEBIAN"
 
 install -m 0755 "$BIN/ufw-nft" "$STAGE/usr/bin/ufw-nft"
 install -m 0755 "$BIN/ufwctl"  "$STAGE/usr/bin/ufwctl"
@@ -89,7 +91,111 @@ fleet_secret = "CHANGE-ME-before-fleet-use-0000000000000000"
 CONF
 chmod 0644 "$STAGE/etc/unified-firewall/daemon.toml"
 
-cp "$ROOT/LICENSE" "$STAGE/usr/share/doc/unified-firewall/copyright" 2>/dev/null || true
+# AppStream metadata, so a software centre (GNOME Software, KDE Discover) shows
+# a proper name, the Apache-2.0 license, and release notes instead of "Unknown
+# License / No details for this release".
+cat > "$STAGE/usr/share/metainfo/dev.unifiedfirewall.UnifiedFirewall.metainfo.xml" <<XML
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="console-application">
+  <id>dev.unifiedfirewall.UnifiedFirewall</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+  <name>Unified Firewall</name>
+  <summary>Kernel-level host firewall that filters by signed application identity</summary>
+  <description>
+    <p>
+      Unified Firewall compiles one policy file into kernel-level packet
+      filtering and enforces it on Linux through a single nftables table
+      (inet ufw) — no kernel module is required for the packet layer.
+    </p>
+    <p>It includes:</p>
+    <ul>
+      <li>Identity-aware policy that filters by signed application, not just port</li>
+      <li>An intrusion-prevention signature set (IDS/IPS)</li>
+      <li>Egress-anomaly and beaconing (command-and-control) detection</li>
+      <li>An adaptive, opt-in auto-response engine</li>
+      <li>A live, loopback-only web console</li>
+    </ul>
+    <p>
+      Installs in monitor mode (it observes and logs, it does not block);
+      graduate to enforcement with a single command.
+    </p>
+  </description>
+  <categories>
+    <category>System</category>
+    <category>Security</category>
+  </categories>
+  <url type="homepage">https://github.com/fahad90fa/Firewall</url>
+  <url type="bugtracker">https://github.com/fahad90fa/Firewall/issues</url>
+  <developer_name>Unified Firewall</developer_name>
+  <provides>
+    <binary>ufw-nft</binary>
+    <binary>ufwctl</binary>
+    <binary>firewall</binary>
+  </provides>
+  <keywords>
+    <keyword>firewall</keyword>
+    <keyword>nftables</keyword>
+    <keyword>security</keyword>
+    <keyword>network</keyword>
+    <keyword>ids</keyword>
+  </keywords>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="$VERSION" date="$RELEASE_DATE">
+      <description>
+        <p>
+          First public Linux release: nftables packet enforcement, identity-aware
+          policy, IDS/IPS signatures, egress-anomaly and beaconing detection, an
+          adaptive auto-response engine, and the live console. Installs in monitor
+          mode.
+        </p>
+      </description>
+    </release>
+  </releases>
+</component>
+XML
+
+# Machine-readable DEP-5 copyright declaring Apache-2.0.
+cat > "$STAGE/usr/share/doc/unified-firewall/copyright" <<'COPY'
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: unified-firewall
+Upstream-Contact: Unified Firewall <support@unifiedfirewall.dev>
+Source: https://github.com/fahad90fa/Firewall
+
+Files: *
+Copyright: 2026 Unified Firewall
+License: Apache-2.0
+
+License: Apache-2.0
+ Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+ this file except in compliance with the License. You may obtain a copy of the
+ License at
+ .
+     https://www.apache.org/licenses/LICENSE-2.0
+ .
+ Unless required by applicable law or agreed to in writing, software distributed
+ under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+ CONDITIONS OF ANY KIND, either express or implied.
+ .
+ On Debian systems, the full text of the Apache License version 2.0 can be found
+ in the file /usr/share/common-licenses/Apache-2.0.
+COPY
+
+# Debian changelog (compressed), so "No details for this release" is filled.
+CHANGELOG_DATE="$(date -uR -d "$RELEASE_DATE" 2>/dev/null || echo 'Sat, 22 Aug 2026 00:00:00 +0000')"
+cat > "$STAGE/usr/share/doc/unified-firewall/changelog.Debian" <<CHG
+unified-firewall ($VERSION) unstable; urgency=medium
+
+  * First public Linux release: kernel-level packet enforcement via nftables,
+    identity-aware policy, IDS/IPS signatures, egress-anomaly and beaconing
+    detection, an adaptive auto-response engine, and the live web console.
+    Installs in monitor mode.
+
+ -- Unified Firewall <support@unifiedfirewall.dev>  $CHANGELOG_DATE
+CHG
+gzip -9n "$STAGE/usr/share/doc/unified-firewall/changelog.Debian"
+
 cat > "$STAGE/usr/share/doc/unified-firewall/README.Debian" <<'DOC'
 Unified Firewall (Linux packet-layer stack)
 ===========================================
