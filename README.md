@@ -1,3 +1,16 @@
+<p align="center">
+  <img src="docs/assets/banner.svg" alt="Unified Firewall — one policy file, three kernels, the same verdict" width="100%">
+</p>
+
+<p align="center">
+  <a href="https://github.com/fahad90fa/Firewall/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/fahad90fa/Firewall/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-38bdf8?style=flat-square">
+  <img alt="Platforms" src="https://img.shields.io/badge/platforms-Windows%20%C2%B7%20Linux%20%C2%B7%20macOS-cbd5e1?style=flat-square">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-1012%20passing-34d399?style=flat-square">
+  <img alt="Runtime dependencies" src="https://img.shields.io/badge/runtime%20deps-0-38bdf8?style=flat-square">
+  <img alt="Language" src="https://img.shields.io/badge/Rust-stable-dea584?style=flat-square">
+</p>
+
 # Unified Firewall
 
 A host firewall that compiles **one policy file** into kernel-level filtering on
@@ -115,6 +128,61 @@ This is real enforcement of the L3/L4 policy via `ufw-nft` (one nftables
 table, `inet ufw`, nothing else touched). Identity and DPI rules still need
 the kernel module below.
 
+## The live operations console
+
+`firewall` (no arguments) is a full, animated single-page console — a
+page-by-page router with a live **Server-Sent Events** stream, global search, a
+notifications bell, KPI deltas, and transform-based transitions — served
+std-only over loopback, no framework, no external asset. It turns the raw kernel
+state into an operator's workspace:
+
+| Page | What it shows |
+| --- | --- |
+| **Overview** | Enforcement status, exposure grade, live traffic KPIs, threat origins |
+| **Threats** | Attack classification per source (port scans, brute-force, SMB probes), **beaconing** callbacks, **IDS/IPS** signature hits |
+| **Investigation** | Per-source incident dossier: reverse-DNS, one-click **contain**, bounded **pcap** capture |
+| **Network** | The LAN this host sits on and the devices sharing it (passive by default) |
+| **Fleet** | Every host publishing to the shared directory — aggregated, integrity-checked |
+| **Auto-response** | The opt-in playbook builder for the SOAR engine |
+| **Settings** | Auth, export, and console configuration |
+
+## Detection, response, and fleet
+
+Everything below is built and unit-tested. Where a capability's full assurance
+needs a vetted crypto library or a live kernel, that boundary is stated — never
+faked green (see [`docs/design/advanced_detection_status.md`](docs/design/advanced_detection_status.md)).
+
+- **Adaptive auto-response (SOAR).** Opt-in playbooks classify the live denial
+  stream and contain matching sources with escalating, auto-expiring blocks —
+  audited, public-IP-only, off until an operator turns it on.
+- **One-click containment.** Block a source at the kernel with an auto-expiry
+  timeout; every action is audited and gated by role (loopback, a bearer token,
+  or a client certificate — see access control below).
+- **IDS/IPS engine.** A Suricata-subset rule engine over the event stream, plus
+  the in-kernel DPI signature set the daemon compiles and ships as a table.
+- **Beaconing detection.** Flags command-and-control callbacks by the regularity
+  of their timing (low jitter over enough samples).
+- **Offline threat intelligence.** CIDR blocklists matched entirely offline —
+  known-bad sources are flagged and can be auto-contained. No lookups leave the
+  host.
+- **Policy linter** — sound shadowed / unreachable / duplicate / zero-hit
+  checks over the loaded ruleset.
+- **SIEM export** — the event stream as CEF or NDJSON for your collector.
+- **Role-based access control + mTLS.** Three roles (viewer / responder /
+  admin) gate every mutating action. A caller's role comes, strongest first,
+  from a **client certificate** (verified by rustls against your CA, mapped to a
+  role by its SHA-256 fingerprint — `--features tls`), then a bearer token, then
+  loopback. A build without TLS refuses `--tls-*` rather than serving plaintext.
+- **Signed fleet distribution.** HMAC-signed policy bundles with hash-based
+  canary membership and rate-based automatic rollback; a **staged-rollout
+  controller** widens a rollout through gated waves (1%→10%→50%→100%), advancing
+  only on a wave's convergence *and* health and aborting within the current
+  cohort on a regression — proven by a deterministic 1000-host simulation.
+  Console fleet summaries are HMAC-authenticated with tamper flagging.
+- **Supply-chain integrity.** A reproducible CycloneDX SBOM straight from the
+  lockfile, signed release manifests, and continuous **differential fuzzing**
+  (the Rust decoder port against the C, nightly in CI).
+
 ## Installing
 
 ```sh
@@ -227,20 +295,24 @@ port configured as encrypted.
 
 ## Status
 
-Every layer above the kernel boundary is implemented and tested: 747 tests
+Every layer above the kernel boundary is implemented and tested: **1012 tests**
 covering the compiler, the daemon, the CLI, the wire protocol and end-to-end
 scenarios, plus ABI checks that compile the generated C against the kernel's own
-headers.
+headers, a differential fuzzer, and a deterministic 1000-host rollout simulation.
 
 The kernel sources are complete and reviewed, and the containerised Linux
-environment compiles them and runs the real eBPF verifier. What no test here
-covers is the three modules' *runtime* behaviour on a live kernel — that needs a
-deployment, and the testing documentation says so rather than implying
-otherwise.
+environment compiles them and runs the real eBPF verifier. The nftables
+enforcement path has now had a **first real live-kernel run** — ~689,000 real
+packets pushed through the `inet ufw` hook on kernel 6.18, dropped exactly on the
+rules the policy named, zero counter anomalies; it is recorded and scripted
+(`scripts/live-run.sh`,
+[`docs/design/soak_testing.md`](docs/design/soak_testing.md)). What that run
+does **not** cover is stated plainly: it is seconds not a 30-day soak, the
+nftables path not the kernel module, one host not a fleet.
 
 This is a verified codebase, not yet a deployable product. The gap between the
-two — zero runtime hours, no independent audit, no signing/recovery scaffolding,
-and the macOS path lagging the other two — is set out honestly in
+two — the 30-day multi-platform soak, an independent audit, signing/recovery
+scaffolding, and the macOS path lagging the other two — is set out honestly in
 [`docs/design/production_readiness.md`](docs/design/production_readiness.md).
 None of it is an unsolved problem; all of it is time and process still owed.
 
