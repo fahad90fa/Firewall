@@ -1122,22 +1122,26 @@ function changed(k,v){ const s=JSON.stringify(v); if(_sig[k]===s) return false; 
 
 let state=null, rangeMin=store.get("range",2880), sparkHist=[], prevEventCount=null;
 
+// Process one snapshot — shared by the poller and the SSE stream so both paths
+// behave identically (throughput history, alerts, new-event toast, render).
+function applySnapshot(s, live){
+  const t=s.totals||{}; const last=sparkHist[sparkHist.length-1];
+  const dd = last ? Math.max(0, (t.denied_packets||0)-last.denied) : 0;
+  sparkHist.push({ t:s.generated_at||Date.now()/1000, denied:t.denied_packets||0, dd });
+  if(last) maybeAlert(dd);
+  if (sparkHist.length>120) sparkHist.shift();
+  if (prevEventCount!==null && (t.events||0) > prevEventCount) toastNew((t.events||0)-prevEventCount);
+  prevEventCount = t.events||0;
+  state=s; lastOk=true; failCount=0; render();
+  setLive(live||(intervalMs?"live":"paused"), live?"live · stream":undefined);
+}
 async function refresh(){
   if (busy) return; busy=true; progressStart();
   try {
     const ctl=new AbortController(); const to=setTimeout(()=>ctl.abort(),8000);
     const r=await fetch("/api/state",{cache:"no-store",signal:ctl.signal}); clearTimeout(to);
     const s=await r.json();
-    /* accumulate throughput history from totals */
-    const t=s.totals||{}; const last=sparkHist[sparkHist.length-1];
-    const dd = last ? Math.max(0, (t.denied_packets||0)-last.denied) : 0;
-    sparkHist.push({ t:s.generated_at||Date.now()/1000, denied:t.denied_packets||0, dd });
-    if(last) maybeAlert(dd);
-    if (sparkHist.length>120) sparkHist.shift();
-    /* new-event detection */
-    if (prevEventCount!==null && (t.events||0) > prevEventCount) toastNew((t.events||0)-prevEventCount);
-    prevEventCount = t.events||0;
-    state=s; lastOk=true; failCount=0; render(); setLive(intervalMs?"live":"paused");
+    applySnapshot(s);
   } catch(e){ lastOk=false; failCount++;
     // Invalidate the ribbon memo so the next good poll rebuilds it — the catch
     // writes the ribbon directly, bypassing renderRibbon's changed() guard.
@@ -1178,7 +1182,21 @@ function applyIntervalMs(v){
   intervalMs = +v||0; store.set("interval",intervalMs);
   const h=$("interval"); if(h) h.value=String(intervalMs);
   const g=$("setInterval"); if(g) g.value=String(intervalMs);
-  arm(); if(intervalMs) refresh();
+  if(intervalMs>0){ startSSE(); arm(); refresh(); }   // startSSE clears the poll timer once the stream is live
+  else { stopSSE(); arm(); }                           // paused: no stream, no polling
+}
+/* ---- live stream (Server-Sent Events), with graceful fallback --------- */
+let sse=null;
+function stopSSE(){ if(sse){ try{ sse.close(); }catch(_){} sse=null; } }
+function startSSE(){
+  if(!window.EventSource || intervalMs<=0) return;
+  stopSSE();
+  try{
+    sse=new EventSource("/api/stream?ms="+intervalMs);
+    sse.onopen=()=>{ if(timer){ clearInterval(timer); timer=null; } };   // stream authoritative → stop polling
+    sse.onmessage=(e)=>{ let s; try{ s=JSON.parse(e.data); }catch(_){ return; } busy=false; applySnapshot(s,"live"); };
+    sse.onerror=()=>{ stopSSE(); if(intervalMs>0){ arm(); } };            // dropped → resume polling
+  }catch(_){ arm(); }
 }
 function hideAlert(){ const b=$("alertBar"); if(b) b.style.display="none"; }
 /* Raise an alert when denials in one interval cross the operator's threshold.
@@ -2485,8 +2503,9 @@ $("arEnabled").addEventListener("change",async e=>{
 
 /* ---- go --------------------------------------------------------------- */
 onRoute();      // show the page named in the URL hash (or Overview); honours #investigate/<ip>
-refresh();
-arm();
+refresh();      // one immediate snapshot so the page is never blank
+arm();          // poll timer as the baseline / fallback
+startSSE();     // prefer the live stream; it clears the poll timer once connected
 loadNetwork(false);
 </script>
 </body>

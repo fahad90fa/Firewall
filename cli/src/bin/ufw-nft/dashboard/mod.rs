@@ -169,6 +169,16 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
             let body = state_json();
             respond(&mut stream, 200, "application/json", &body)
         }
+        ("GET", "/api/stream") => {
+            // Server-Sent Events: push a snapshot on the cadence the client asks
+            // for, until it disconnects. The write timeout set on the socket is
+            // the safety valve — a client that stops reading frees the thread.
+            let ms = qget(query, "ms")
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(3000)
+                .clamp(1000, 30000);
+            stream_sse(&mut stream, ms)
+        }
         (_, "/api/network") => {
             // Discovery is passive by default; a scan is opt-in via ?scan=1.
             let active = query
@@ -319,6 +329,27 @@ fn percent_decode(s: &str) -> String {
         i += 1;
     }
     out
+}
+
+/// Server-Sent Events stream of state snapshots. Runs until the client goes
+/// away (a write error), at which point the thread returns and its fd closes.
+/// `state_json()` emits a single line, so each snapshot is one SSE `data:` frame.
+fn stream_sse(stream: &mut TcpStream, interval_ms: u64) -> std::io::Result<()> {
+    let head = "HTTP/1.1 200 OK\r\n\
+         Content-Type: text/event-stream\r\n\
+         Cache-Control: no-store\r\n\
+         Connection: close\r\n\r\n";
+    stream.write_all(head.as_bytes())?;
+    // A comment line tells EventSource to keep the connection open immediately.
+    stream.write_all(b": ufw-nft live stream\n\n")?;
+    loop {
+        let body = state_json();
+        stream.write_all(b"data: ")?;
+        stream.write_all(body.as_bytes())?;
+        stream.write_all(b"\n\n")?;
+        stream.flush()?;
+        std::thread::sleep(std::time::Duration::from_millis(interval_ms));
+    }
 }
 
 /// A binary download response (a captured pcap). Separate from `respond`, which
