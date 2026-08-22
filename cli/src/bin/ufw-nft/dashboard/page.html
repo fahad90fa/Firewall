@@ -827,6 +827,7 @@
         <div class="body"><svg id="timeline" role="img" aria-label="Denied and alerted packets over time"></svg></div>
       </div>
       <div id="origins" style="margin-top:12px"></div>
+      <div id="idsPanel" style="margin-top:12px"></div>
       <div class="attacks" id="attacks" style="margin-top:12px"></div>
       <div id="contained" style="margin-top:12px"></div>
     </section>
@@ -1252,6 +1253,7 @@ function render(){
   updateNav(s);
   scanForAlerts(s);
   if(changed("origins",(s.attacks||[]).map(a=>[a.src,a.severity,a.count]))) renderOrigins(s);
+  if(changed("ids",s.ids||{})) renderIds(s.ids||{});
   applyGlobalSearch();
 }
 
@@ -2395,6 +2397,24 @@ function beep(){ try{ const AC=window.AudioContext||window.webkitAudioContext; i
 $("bell").onclick=()=>toggleNtf();
 $("ntfClear").onclick=()=>{ ntf.items=[]; ntf.unread=0; renderNtf(); };
 document.addEventListener("click",e=>{ const p=$("ntfPanel"); if(p&&!p.hidden&&!p.contains(e.target)&&e.target!==$("bell")&&!$("bell").contains(e.target)) closeNtf(); });
+
+/* ---- IDS/IPS signature engine hits ------------------------------------ */
+function renderIds(ids){
+  const el=$("idsPanel"); if(!el) return;
+  const loaded=ids.rules_loaded||0, hits=ids.hits||[];
+  if(!loaded){ el.innerHTML=""; return; }   // no signatures installed → no panel
+  el.innerHTML=`<div class="card"><div class="ch"><h3>IDS signatures</h3>
+    <span class="count">${fmtN(loaded)} rule(s) loaded${hits.length?` · ${hits.length} firing`:" · none firing"}</span>
+    <span class="hint">custom Suricata-style rules matched against the event stream — drop rules in /etc/unified-firewall/ids-rules/</span></div>`+
+    (hits.length?`<div class="pad0">`+hits.map(h=>`
+      <div class="lintrow sev-${h.severity==="critical"||h.severity==="high"?"high":"low"}">
+        <span class="lc">${h.action==="drop"||h.action==="reject"?"⛔":"⚑"}</span>
+        <div><div class="lt"><span class="chip sev-${esc(h.severity)}">${esc((h.severity||"").toUpperCase())}</span> <b>${esc(h.msg)}</b> <span class="muted mono">sid:${esc(h.sid)}</span></div>
+        <div class="ld">${fmtN(h.count)} match(es)${h.sources&&h.sources.length?` from ${h.sources.slice(0,6).map(esc).join(", ")}${h.sources.length>6?"…":""}`:""}</div></div>
+        <span class="chip plain" style="margin-left:auto">${esc(h.action)}</span>
+      </div>`).join("")+`</div>`
+    :`<div class="body muted" style="font-size:12.5px">No loaded signature has matched in the current window.</div>`)+`</div>`;
+}
 
 /* ---- threat origins: where the traffic comes from, from our data only - */
 function renderOrigins(s){

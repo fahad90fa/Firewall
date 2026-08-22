@@ -16,6 +16,7 @@ mod daemon;
 mod events;
 mod exposure;
 mod fleet;
+mod ids;
 mod lint;
 mod network;
 mod pcap;
@@ -666,6 +667,26 @@ fn state_json() -> String {
         w.end_object();
     }
     w.end_array();
+
+    // IDS signature engine: match the operator's ruleset against the event
+    // stream (header-field matching; see ids.rs for the honest scope).
+    let sigs = ids::load();
+    let ids_hits = ids::evaluate(&sigs, &events);
+    w.begin_object_field("ids");
+    w.u64_field("rules_loaded", sigs.len() as u64);
+    w.begin_array_field("hits");
+    for h in &ids_hits {
+        w.begin_object();
+        w.str_field("sid", &h.sid);
+        w.str_field("msg", &h.msg);
+        w.str_field("severity", &h.severity);
+        w.str_field("action", &h.action);
+        w.u64_field("count", h.count);
+        w.str_array_field("sources", h.sources.iter().map(|s| s.as_str()));
+        w.end_object();
+    }
+    w.end_array();
+    w.end_object();
 
     // Auto-response engine summary, so the console can show a live indicator.
     let ar_enabled = respond::is_enabled();
