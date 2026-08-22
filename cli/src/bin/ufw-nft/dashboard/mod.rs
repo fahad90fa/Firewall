@@ -15,6 +15,7 @@ mod contain;
 mod daemon;
 mod events;
 mod exposure;
+mod fleet;
 mod lint;
 mod network;
 mod pcap;
@@ -228,6 +229,10 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
             }
             w.end_object();
             respond(&mut stream, 200, "application/json", &w.finish())
+        }
+        (_, "/api/fleet") => {
+            let body = fleet::fleet_json();
+            respond(&mut stream, 200, "application/json", &body)
         }
         ("GET", "/api/pcap") => {
             // Bounded packet capture for the dossier — mutating-adjacent (spawns
@@ -624,22 +629,21 @@ fn state_json() -> String {
     w.u64_field("alert_packets", alert_packets);
     w.u64_field("accepted_packets", accepted_packets);
     w.u64_field("events", events.len() as u64);
-    w.u64_field(
-        "attackers",
-        attacks
-            .iter()
-            .filter(|a| a.src != "this host")
-            .map(|a| a.src.as_str())
-            .collect::<std::collections::BTreeSet<_>>()
-            .len() as u64,
-    );
+    let attacker_count = attacks
+        .iter()
+        .filter(|a| a.src != "this host")
+        .map(|a| a.src.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len() as u64;
+    w.u64_field("attackers", attacker_count);
     w.end_object();
 
     w.str_array_field("errors", errors.iter().map(|s| s.as_str()));
 
     // Sources currently contained (blocked at the kernel), with time to auto-expiry.
+    let contained_list = contain::list();
     w.begin_array_field("contained");
-    for c in contain::list() {
+    for c in &contained_list {
         w.begin_object();
         w.str_field("ip", &c.ip);
         match c.expires_secs {
@@ -664,10 +668,22 @@ fn state_json() -> String {
     w.end_array();
 
     // Auto-response engine summary, so the console can show a live indicator.
+    let ar_enabled = respond::is_enabled();
     w.begin_object_field("autoresponse");
-    w.bool_field("enabled", respond::is_enabled());
+    w.bool_field("enabled", ar_enabled);
     w.u64_field("recent", respond::recent_count() as u64);
     w.end_object();
+
+    // Publish this host's own summary to the fleet directory (throttled), so a
+    // synced fleet can be aggregated on the Fleet page.
+    fleet::publish_self(
+        &hostname(),
+        rs.loaded,
+        denied_packets,
+        attacker_count,
+        contained_list.len() as u64,
+        ar_enabled,
+    );
 
     // Live daemon / ufw-waf telemetry, best-effort — lights up the DPI, egress
     // anomaly, WAF, fleet and correlation layers when those processes publish it.

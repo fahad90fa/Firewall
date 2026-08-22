@@ -768,6 +768,7 @@
     <a href="#events" data-nav="events"><span class="ic">&#9776;</span>Events<span class="badge" id="nav-events">0</span></a>
     <div class="grp">Network</div>
     <a href="#network" data-nav="network"><span class="ic">&#127760;</span>Network manager<span class="badge" id="nav-network">0</span></a>
+    <a href="#fleet" data-nav="fleet"><span class="ic">&#9707;</span>Fleet<span class="badge" id="nav-fleet">1</span></a>
     <div class="grp">Enforcement</div>
     <a href="#respond" data-nav="respond"><span class="ic">&#9889;</span>Auto-response<span class="badge" id="nav-respond">off</span></a>
     <a href="#exposure" data-nav="exposure"><span class="ic">&#128737;</span>Attack surface<span class="badge" id="nav-exposure">0</span></a>
@@ -978,6 +979,23 @@
         </table></div></div>
       </div>
       <div id="netNotes" class="netnote" style="margin-top:10px;display:none"></div>
+    </section>
+
+    <section id="fleet">
+      <div class="sec-h"><h2>Fleet</h2><span class="hint">every host publishing to the shared fleet directory — aggregated, no central server</span></div>
+      <div class="ribbon" id="fleetHint" style="margin-bottom:14px">
+        <span class="rp" style="background:var(--info)"></span>
+        <div class="rb"><div class="rt" style="color:var(--info)">How the fleet is assembled</div>
+        <div class="rd">Each host's console writes a small summary to <span class="mono">/var/lib/unified-firewall/fleet/&lt;host&gt;.json</span>. Sync that directory across your hosts (rsync, a shared mount, or the daemon's fleet plane) and they all appear here. This host always registers itself. A host that stops updating for over two minutes is shown <b>stale</b>.</div></div>
+      </div>
+      <div class="netkpis" id="fleetKpis"></div>
+      <div class="card" style="margin-top:14px">
+        <div class="ch"><h3>Hosts</h3><span class="count" id="fleetCount"></span></div>
+        <div class="pad0"><div class="scroll-y tbl-wrap"><table id="fleetTable">
+          <thead><tr><th>Host</th><th>Status</th><th>Enforcing</th><th class="r">Attackers</th><th class="r">Denied</th><th class="r">Contained</th><th>Auto-response</th><th>Last seen</th></tr></thead>
+          <tbody><tr><td colspan="8" class="empty">Loading fleet…</td></tr></tbody>
+        </table></div></div>
+      </div>
     </section>
 
     <section id="settings">
@@ -2177,7 +2195,7 @@ function updateNav(s){
 const navLinks=[...document.querySelectorAll("nav.side a[data-nav]")];
 const PAGES=navLinks.map(a=>a.getAttribute("data-nav"));
 const PAGE_TITLE={overview:"Overview",threats:"Threats",investigate:"Investigation",talkers:"Top talkers",
-  events:"Events",network:"Network",respond:"Auto-response",exposure:"Attack surface",rules:"Rules",host:"Host surface",
+  events:"Events",network:"Network",fleet:"Fleet",respond:"Auto-response",exposure:"Attack surface",rules:"Rules",host:"Host surface",
   compliance:"Compliance",settings:"Settings",diag:"Diagnostics"};
 let currentPage=null;
 function go(id){ location.hash="#"+id; }
@@ -2194,6 +2212,7 @@ function applyRoute(id){
   if(id==="threats") scheduleChart();
   if(id==="overview") scheduleSpark();
   if(id==="respond" && typeof loadRespond==="function") loadRespond();
+  if(id==="fleet" && typeof loadFleet==="function") loadFleet();
   if(id==="settings" && typeof refreshSettingsMeta==="function") refreshSettingsMeta();
   const g=$("gsearch"); if(g) g.value="";   // search is per-page
   applyGlobalSearch();
@@ -2221,6 +2240,7 @@ const palette = (function(){
       {ic:"▲", label:"Go to Top talkers",      key:"3", run:()=>jump("talkers")},
       {ic:"☰", label:"Go to Events",           key:"4", run:()=>jump("events")},
       {ic:"◍", label:"Go to Network manager",           run:()=>jump("network")},
+      {ic:"◔", label:"Go to Fleet",                     run:()=>jump("fleet")},
       {ic:"⚡", label:"Go to Auto-response",             run:()=>jump("respond")},
       {ic:"🛡", label:"Go to Attack surface",           run:()=>jump("exposure")},
       {ic:"▦", label:"Go to Rules",                     run:()=>jump("rules")},
@@ -2500,6 +2520,35 @@ $("arEnabled").addEventListener("change",async e=>{
     else { toast("Failed to change engine"); e.target.checked=!on; } }
   catch(_){ toast("Failed to change engine"); e.target.checked=!on; }
 });
+
+/* ---- fleet view ------------------------------------------------------- */
+async function loadFleet(){
+  try{ const r=await fetch("/api/fleet",{cache:"no-store"}); renderFleet(await r.json()); }
+  catch(e){ /* keep last-good */ }
+}
+function renderFleet(f){
+  if(!f) return;
+  const t=f.totals||{}, hosts=f.hosts||[];
+  const kpi=(lab,big,sub,cls)=>`<div class="kpi ${cls||""}"><div class="lab">${lab}</div><div class="big">${big}</div><div class="sub">${sub}</div></div>`;
+  $("fleetKpis").innerHTML=
+    kpi("Hosts",fmtN(t.hosts||0),`${fmtN(t.live||0)} live`,"")+
+    kpi("Enforcing",fmtN(t.enforcing||0),"of live hosts",(t.live&&t.enforcing<t.live)?"warn":"ok")+
+    kpi("Attackers",fmtN(t.attackers||0),"across the fleet",t.attackers>0?"bad":"ok")+
+    kpi("Auto-response",fmtN(t.autoresponse||0),"hosts armed","");
+  $("fleetCount").textContent = hosts.length?`${hosts.length} host(s)`:"";
+  const nav=$("nav-fleet"); if(nav) nav.textContent=String(t.hosts||0);
+  const tb=qs("#fleetTable tbody");
+  tb.innerHTML = hosts.length ? hosts.map(h=>`<tr>
+    <td class="mono">${esc(h.hostname)}</td>
+    <td>${h.stale?'<span class="chip plain">STALE</span>':'<span class="chip accept">LIVE</span>'}</td>
+    <td>${h.enforced?'<span class="chip accept">yes</span>':'<span class="chip deny">no</span>'}</td>
+    <td class="r num" style="${h.attackers>0?'color:var(--bad);font-weight:700':''}">${fmtN(h.attackers)}</td>
+    <td class="r num">${fmtN(h.denied)}</td>
+    <td class="r num">${fmtN(h.contained)}</td>
+    <td>${h.autoresponse?'<span class="chip accept">on</span>':'<span class="chip plain">off</span>'}</td>
+    <td class="muted">${h.generated_at?ago(h.generated_at)+" ago":"—"}</td>
+  </tr>`).join("") : `<tr><td colspan="8" class="empty">No hosts yet — this host registers itself within ~15s; sync the fleet directory to see others.</td></tr>`;
+}
 
 /* ---- go --------------------------------------------------------------- */
 onRoute();      // show the page named in the URL hash (or Overview); honours #investigate/<ip>
