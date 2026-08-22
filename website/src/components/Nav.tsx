@@ -45,7 +45,7 @@ export default function Nav() {
 
         <div className="flex items-center gap-3">
           <a
-            href="https://github.com/fahad90fa/Firewall"
+            href="https://github.com/fahad90fa/"
             target="_blank"
             rel="noreferrer"
             className="hidden font-mono text-xs tracking-[0.14em] text-muted transition-colors hover:text-ink sm:inline"

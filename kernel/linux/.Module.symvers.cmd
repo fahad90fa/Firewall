@@ -1,0 +1,1 @@
+savedcmd_Module.symvers :=  /usr/src/linux-headers-7.0.13+parrot7-amd64/scripts/mod/modpost -M          -o Module.symvers -n -T modules.order -i /usr/src/linux-headers-7.0.13+parrot7-amd64/Module.symvers -e 
