@@ -94,6 +94,10 @@ USAGE:
     ufw-nft check  <policy.yaml>          Compile and validate with nft, loading nothing
     ufw-nft render <policy.yaml>          Print the exact ruleset `apply` would load
     ufw-nft dashboard [addr:port]         Serve the live web console (default 127.0.0.1:8787)
+                      [--tls-cert F --tls-key F --tls-client-ca F]
+                                          Serve it over mTLS: a client certificate that chains to
+                                          --tls-client-ca is mapped to an RBAC role by its SHA-256
+                                          fingerprint (console-auth.json). Needs a --features tls build.
     ufw-nft knock  <port> <k1> <k2>…      Hide a port behind a knock sequence (off | status)
     ufw-nft --version | --help
 
@@ -283,12 +287,43 @@ fn cmd_render(args: &[String]) -> Result<(), String> {
 }
 
 fn cmd_dashboard(args: &[String]) -> Result<(), String> {
-    let bind = match args.first().map(String::as_str) {
+    // The first non-flag argument is the bind address; the rest configure TLS.
+    // Each `--tls-*` flag consumes the following argument as a file path.
+    let mut bind: Option<String> = None;
+    let mut tls = dashboard::TlsOptions::default();
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        let value = |i: usize| -> Result<std::path::PathBuf, String> {
+            args.get(i + 1)
+                .map(std::path::PathBuf::from)
+                .ok_or_else(|| format!("{a} needs a file path"))
+        };
+        match a {
+            "--tls-cert" => {
+                tls.cert_path = Some(value(i)?);
+                i += 1;
+            }
+            "--tls-key" => {
+                tls.key_path = Some(value(i)?);
+                i += 1;
+            }
+            "--tls-client-ca" => {
+                tls.client_ca_path = Some(value(i)?);
+                i += 1;
+            }
+            _ if a.starts_with("--") => return Err(format!("unknown flag {a}")),
+            _ if bind.is_none() => bind = Some(a.to_string()),
+            _ => return Err(format!("unexpected argument {a}")),
+        }
+        i += 1;
+    }
+    let bind = match bind.as_deref() {
         None => "127.0.0.1:8787".to_string(),
         Some(a) if a.contains(':') => a.to_string(),
         Some(port) => format!("127.0.0.1:{port}"),
     };
-    dashboard::serve(&bind)
+    dashboard::serve(&bind, &tls)
 }
 
 /// Port knocking: `ufw-nft knock <protected> <p1> <p2> [p3 …] [--ttl secs]`,

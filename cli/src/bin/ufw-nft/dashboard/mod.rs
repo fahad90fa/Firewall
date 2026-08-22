@@ -27,9 +27,12 @@ mod respond;
 mod ruleset;
 mod services;
 mod threatintel;
+mod tls;
 
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
+
+pub use tls::TlsOptions;
 
 use ufw_shared::json::JsonWriter;
 
@@ -38,7 +41,19 @@ use crate::state;
 const PAGE: &str = include_str!("page.html");
 const MAX_EVENTS: usize = 2000;
 
-pub fn serve(bind: &str) -> Result<(), String> {
+pub fn serve(bind: &str, tls_opts: &TlsOptions) -> Result<(), String> {
+    // Validate the TLS request before binding, and refuse rather than serve
+    // plaintext on a port the operator believes is encrypted.
+    tls_opts.validate()?;
+    if tls_opts.is_enabled() && !tls::available() {
+        return Err(tls::unavailable_message());
+    }
+    let acceptor = if tls_opts.is_enabled() {
+        Some(tls::Acceptor::from_options(tls_opts)?)
+    } else {
+        None
+    };
+
     let listener =
         TcpListener::bind(bind).map_err(|e| format!("could not listen on {bind}: {e}"))?;
     let local = listener
@@ -46,12 +61,19 @@ pub fn serve(bind: &str) -> Result<(), String> {
         .map(|a| a.to_string())
         .unwrap_or_else(|_| bind.into());
 
-    println!("dashboard: http://{local}/");
+    let scheme = if acceptor.is_some() { "https" } else { "http" };
+    println!("dashboard: {scheme}://{local}/");
     println!("  live rules, denied packets, attack analysis, listeners; read-only.");
-    if !local.starts_with("127.") && !local.starts_with("[::1]") {
+    if acceptor.is_some() {
         println!(
-            "  \u{26a0} bound to a non-loopback address: anyone who can reach {local} can read\n     \
-             this host's firewall state. There is no authentication."
+            "  \u{1f512} TLS on, with mTLS: a client certificate that chains to your --tls-client-ca\n     \
+             is mapped to an RBAC role by its SHA-256 fingerprint (console-auth.json)."
+        );
+    } else if !local.starts_with("127.") && !local.starts_with("[::1]") {
+        println!(
+            "  \u{26a0} bound to a non-loopback address without TLS: anyone who can reach {local}\n     \
+             can read this host's firewall state, and only loopback callers may act. Consider\n     \
+             --tls-cert/--tls-key/--tls-client-ca (needs a --features tls build) or an SSH tunnel."
         );
     }
     if !is_root() {
@@ -74,8 +96,19 @@ pub fn serve(bind: &str) -> Result<(), String> {
     for stream in listener.incoming() {
         match stream {
             Ok(s) => {
+                let acceptor = acceptor.clone();
                 std::thread::spawn(move || {
-                    let _ = handle(s);
+                    // Wrap in TLS if configured; a handshake failure (a probe, a
+                    // client with no ClientHello) closes this one connection
+                    // without disturbing the accept loop.
+                    let stream = match &acceptor {
+                        Some(a) => match a.accept(s) {
+                            Ok(w) => w,
+                            Err(_) => return,
+                        },
+                        None => tls::Stream::Plain(s),
+                    };
+                    let _ = handle(stream);
                 });
             }
             // Back off briefly on a transient accept error (e.g. momentary fd
@@ -113,12 +146,13 @@ fn auto_response_loop() {
     }
 }
 
-fn handle(mut stream: TcpStream) -> std::io::Result<()> {
+fn handle(mut stream: tls::Stream) -> std::io::Result<()> {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
     // A write timeout too: without one, respond()'s write_all can block forever
     // on a client that stops reading, pinning the thread and its fd.
     let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(10)));
-    // Who is calling — the containment action is gated to loopback.
+    // Who is calling — the mutating actions are gated by role, of which loopback
+    // is the weakest source.
     let from_loopback = stream
         .peer_addr()
         .map(|p| p.ip().is_loopback())
@@ -160,9 +194,12 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
         return Ok(());
     }
     let request = String::from_utf8_lossy(&head);
-    // Optional `Authorization: Bearer <token>` — a token listed in the console
-    // auth config resolves to a role; otherwise loopback status decides. See
-    // rbac.rs for the role/permission table and the honest mTLS boundary.
+    // The caller's credentials, strongest first (see rbac.rs):
+    //   * a verified client-certificate fingerprint — available only now that
+    //     the head has been read and the TLS handshake has therefore completed;
+    //   * an `Authorization: Bearer <token>` header.
+    // Either resolves to a role via console-auth.json; otherwise loopback decides.
+    let cert_fp = stream.client_fingerprint();
     let token = rbac::bearer(&request);
     let mut line0 = request.lines().next().unwrap_or("").split_whitespace();
     let method = line0.next().unwrap_or("GET");
@@ -181,11 +218,14 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
             // The caller's resolved role and its capability map, so a role-aware
             // console can disable actions this caller may not perform. Reading is
             // open to everyone, so this endpoint is not itself gated.
-            let role = rbac::role_for(from_loopback, token.as_deref());
-            let mut w = JsonWriter::with_capacity(160);
+            let role = rbac::role_for(from_loopback, token.as_deref(), cert_fp.as_deref());
+            let mut w = JsonWriter::with_capacity(200);
             w.begin_object();
             w.str_field("role", rbac::role_name(role));
             w.bool_field("from_loopback", from_loopback);
+            // Report the identity source so the console can show how the caller
+            // was authenticated (a pinned cert, a token, or just loopback).
+            w.opt_str_field("client_cert", cert_fp.as_deref());
             w.begin_object_field("can");
             for (name, action) in rbac::ALL_ACTIONS {
                 w.bool_field(name, rbac::allows(role, action));
@@ -226,7 +266,12 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
             // A mutating surface. Authorize by role: loopback (or a responder/
             // admin token) may contain; a bare remote caller is read-only, so an
             // exposed dashboard can never be used to inject blocks remotely.
-            if !rbac::authorize(from_loopback, token.as_deref(), rbac::Action::Contain) {
+            if !rbac::authorize(
+                from_loopback,
+                token.as_deref(),
+                cert_fp.as_deref(),
+                rbac::Action::Contain,
+            ) {
                 return respond(
                     &mut stream,
                     403,
@@ -262,7 +307,12 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
         ("GET", "/api/pcap") => {
             // Bounded packet capture for the dossier — mutating-adjacent (spawns
             // tcpdump as root), so it is the most privileged action: admin only.
-            if !rbac::authorize(from_loopback, token.as_deref(), rbac::Action::Capture) {
+            if !rbac::authorize(
+                from_loopback,
+                token.as_deref(),
+                cert_fp.as_deref(),
+                rbac::Action::Capture,
+            ) {
                 return respond(
                     &mut stream,
                     403,
@@ -292,7 +342,12 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
         }
         ("POST", "/api/autoresponse") | ("POST", "/api/autoresponse/rule") => {
             // Mutating configuration: admin only (loopback or an admin token).
-            if !rbac::authorize(from_loopback, token.as_deref(), rbac::Action::Configure) {
+            if !rbac::authorize(
+                from_loopback,
+                token.as_deref(),
+                cert_fp.as_deref(),
+                rbac::Action::Configure,
+            ) {
                 return respond(
                     &mut stream,
                     403,
@@ -364,7 +419,7 @@ fn percent_decode(s: &str) -> String {
 /// Server-Sent Events stream of state snapshots. Runs until the client goes
 /// away (a write error), at which point the thread returns and its fd closes.
 /// `state_json()` emits a single line, so each snapshot is one SSE `data:` frame.
-fn stream_sse(stream: &mut TcpStream, interval_ms: u64) -> std::io::Result<()> {
+fn stream_sse<W: Write>(stream: &mut W, interval_ms: u64) -> std::io::Result<()> {
     let head = "HTTP/1.1 200 OK\r\n\
          Content-Type: text/event-stream\r\n\
          Cache-Control: no-store\r\n\
@@ -384,7 +439,7 @@ fn stream_sse(stream: &mut TcpStream, interval_ms: u64) -> std::io::Result<()> {
 
 /// A binary download response (a captured pcap). Separate from `respond`, which
 /// is text-only, because the body is raw bytes and carries a download filename.
-fn respond_pcap(stream: &mut TcpStream, ip: &str, bytes: &[u8]) -> std::io::Result<()> {
+fn respond_pcap<W: Write>(stream: &mut W, ip: &str, bytes: &[u8]) -> std::io::Result<()> {
     let head = format!(
         "HTTP/1.1 200 OK\r\n\
          Content-Type: application/vnd.tcpdump.pcap\r\n\
@@ -399,7 +454,7 @@ fn respond_pcap(stream: &mut TcpStream, ip: &str, bytes: &[u8]) -> std::io::Resu
     stream.write_all(bytes)
 }
 
-fn respond(stream: &mut TcpStream, code: u16, ctype: &str, body: &str) -> std::io::Result<()> {
+fn respond<W: Write>(stream: &mut W, code: u16, ctype: &str, body: &str) -> std::io::Result<()> {
     let reason = match code {
         200 => "OK",
         403 => "Forbidden",

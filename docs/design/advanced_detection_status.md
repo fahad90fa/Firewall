@@ -121,24 +121,30 @@ for the runtime hours and third-party audit that Tier 0 names.
   not a hand-rolled one. `daemon/src/fleet.rs` names `Verifier` as the exact
   place to add it, and the bundle format already carries a field for it.
 
-### 8. RBAC + mTLS — RBAC built; mTLS flagged as the transport it needs
+### 8. RBAC + mTLS — both built
 
 - **RBAC:** `cli/src/bin/ufw-nft/dashboard/rbac.rs` — three roles (viewer,
   responder, admin) and a permission table gating the console's mutating actions
   (`contain`/`release` → Contain, `autoresponse` → Configure, `pcap` → Capture).
-  A caller's role comes from an optional `Authorization: Bearer <token>` resolved
-  against `/etc/unified-firewall/console-auth.json`, else from loopback status
+  A caller's role comes, strongest credential first, from a verified client
+  certificate, then an `Authorization: Bearer <token>`, then loopback status
   (default admin), else viewer — preserving the previous loopback-only behaviour
-  exactly. `GET /api/whoami` reports the caller's role and capability map so the
-  UI can disable actions it cannot use. The role/permission logic is pure and
+  when no TLS or tokens are configured. `GET /api/whoami` reports the caller's
+  role, capability map, and cert identity. The role/permission logic is pure and
   unit-tested.
-- **mTLS — the flagged part, stated in `rbac.rs`:** authenticating a
-  *non-loopback* caller by client certificate, so a role binds to a network
-  identity, needs a **real TLS stack** (the `tls` feature's rustls), not a
-  hand-rolled one. Until then the console is reached over loopback or an SSH
-  tunnel and relies on tokens. The authorization layer is transport-agnostic and
-  correct the moment a real mTLS transport feeds it an authenticated identity —
-  which is the whole point of separating the two.
+- **mTLS — implemented, behind the `tls` feature:** `dashboard/tls.rs` terminates
+  TLS with rustls and verifies the client certificate against a configured CA
+  (`WebPkiClientVerifier`, `allow_unauthenticated` so the same port still serves
+  token and loopback callers). The verified leaf certificate's **SHA-256
+  fingerprint** is the caller's network identity, which
+  `client_certs` in `console-auth.json` maps to a role. Run it with
+  `ufw-nft dashboard --tls-cert … --tls-key … --tls-client-ca …` on a
+  `--features tls` build; a build without the feature refuses the flags rather
+  than serving plaintext. This is real rustls, not a hand-rolled stack — the one
+  reason the boundary existed. Verified end-to-end: a mapped client cert is
+  granted its role, an unmapped/absent cert falls to viewer, and a certificate
+  from an untrusted CA is rejected at the handshake. CI builds, tests, and lints
+  the `--features tls` path.
 
 ### 9. Flow-pipeline behavioural analysis — built, two complementary detectors
 
@@ -155,15 +161,24 @@ for the runtime hours and third-party audit that Tier 0 names.
 
 ## The review-gated boundaries, in one place
 
-Four boundaries recur above. They are collected here so the gate is a single,
-auditable list rather than a footnote repeated in five modules:
+Three boundaries remain. They are collected here so the gate is a single,
+auditable list rather than a footnote repeated across modules. (A fourth,
+**non-loopback console identity / mTLS**, has since been crossed — item 8: the
+`tls` feature's rustls verifies a client certificate and binds its fingerprint
+to a role.)
 
 | Boundary | What is built today | What crosses the boundary, and what it needs |
 | --- | --- | --- |
-| **Non-loopback console identity (mTLS)** | RBAC roles + bearer tokens over loopback/tunnel | Client-certificate auth binding a role to a network identity — needs the `tls` feature's rustls; the RBAC layer is already transport-agnostic |
 | **Per-host fleet identity** | HMAC-SHA256 over bundles, manifests, and console summaries (shared key) | Ed25519 per-host signatures so one member cannot forge another — needs a vetted signature impl behind `tls`; `Verifier` is the insertion point |
 | **Canonical in-kernel JA4** | JA4-structured fingerprint, FNV-1a components, canonical hash computable downstream from logged components | Truncated-SHA-256 JA4 in-kernel — real crypto belongs in a vetted library, not ring 0 |
 | **Ring-0 / eBPF trust** | Differential-tested decoders; `bpf_lsm` identity capture | The Tier 0 gate: 30+ days of live-kernel runtime hours and an independent audit of the parsers — closed by *running and auditing*, not by a commit |
+
+The pattern the crossed mTLS boundary sets is the one the remaining three follow:
+each is crossed by wiring a **vetted** implementation (rustls did it for mTLS;
+an Ed25519 crate behind `tls` would do it for fleet identity and JA4) or by
+earning assurance through runtime and audit (ring 0) — never by hand-rolling the
+sensitive part. That the console now speaks real mTLS is the proof the boundaries
+are honest markers of "not yet wired", not permanent excuses.
 
 The rule these share: where correctness depends on cryptography or on the
 kernel behaving as assumed under real traffic, the code is written to be correct

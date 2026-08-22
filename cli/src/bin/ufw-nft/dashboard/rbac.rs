@@ -5,22 +5,26 @@
 //! permission table, so a multi-operator deployment can hand out narrower
 //! access than "root on the box".
 //!
-//! How a caller's role is decided, and the honest boundary:
-//!   * A request may carry `Authorization: Bearer <token>`; a token listed in
-//!     `/etc/unified-firewall/console-auth.json` resolves to its configured
-//!     role. A bearer token is a real shared secret — fine over loopback or an
-//!     SSH tunnel, which is how this console is meant to be reached.
+//! How a caller's role is decided, strongest credential first:
+//!   * **A client certificate (mTLS).** When the console is built and run with
+//!     TLS (`--features tls`, `ufw-nft dashboard --tls-cert … --tls-key …
+//!     --tls-client-ca …`), a peer that presents a certificate chaining to the
+//!     configured CA is identified by that certificate's SHA-256 fingerprint
+//!     (see `tls.rs`). A fingerprint listed under `client_certs` in
+//!     `/etc/unified-firewall/console-auth.json` resolves to its role. This is
+//!     the strongest identity — a key that cannot be copied out of a log file —
+//!     so it wins over a bearer token.
+//!   * **A bearer token.** A request may carry `Authorization: Bearer <token>`;
+//!     a token listed under `tokens` resolves to its role. A shared secret —
+//!     fine over loopback or an SSH tunnel.
 //!   * Otherwise a loopback caller gets the configured `loopback_role`
 //!     (default: admin — being root-adjacent on the host already), and any
 //!     other caller gets viewer (read-only).
 //!
-//! What is NOT here, and needs review before it ships: authenticating a
-//! *non-loopback* caller by client certificate (mTLS) so a role can be bound to
-//! an identity over the network. That needs a real TLS stack (the `tls`
-//! feature's rustls), not a hand-rolled one. Until then, reach the console over
-//! a tunnel and rely on loopback + tokens. The role/permission logic below is
-//! pure and unit-tested, so it is correct the moment a real transport feeds it
-//! an authenticated identity.
+//! The transport boundary is now real, not flagged: the `tls` feature's rustls
+//! terminates mTLS and verifies the client certificate against the CA; this
+//! module only maps the resulting cryptographic identity to a role. Everything
+//! here is pure and unit-tested, including the certificate path.
 
 use std::collections::BTreeMap;
 
@@ -86,12 +90,28 @@ pub fn allows(role: Role, action: Action) -> bool {
 struct AuthConfig {
     loopback_role: Role,
     tokens: BTreeMap<String, Role>,
+    /// Client-certificate SHA-256 fingerprint (lowercase hex) -> role.
+    client_certs: BTreeMap<String, Role>,
+}
+
+/// Normalize a fingerprint for lookup: lowercase, and drop the `:` separators
+/// and any `sha256:` prefix that `openssl x509 -fingerprint -sha256` emits, so
+/// an operator can paste it in whatever form their tool produced.
+fn norm_fp(s: &str) -> String {
+    s.trim()
+        .strip_prefix("sha256:")
+        .unwrap_or(s.trim())
+        .chars()
+        .filter(|c| *c != ':')
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 fn load() -> AuthConfig {
     let mut cfg = AuthConfig {
         loopback_role: Role::Admin,
         tokens: BTreeMap::new(),
+        client_certs: BTreeMap::new(),
     };
     if let Ok(text) = std::fs::read_to_string(CONFIG) {
         if let Ok(v) = json::parse(&text) {
@@ -109,14 +129,29 @@ fn load() -> AuthConfig {
                     }
                 }
             }
+            if let Some(Json::Object(pairs)) = v.get("client_certs") {
+                for (fp, role) in pairs {
+                    if let Some(r) = role.as_str().and_then(role_from_str) {
+                        cfg.client_certs.insert(norm_fp(fp), r);
+                    }
+                }
+            }
         }
     }
     cfg
 }
 
-/// Resolve a caller's role from its loopback status and optional bearer token.
-pub fn role_for(from_loopback: bool, token: Option<&str>) -> Role {
+/// Resolve a caller's role from, strongest first: a verified client-certificate
+/// fingerprint, then a bearer token, then loopback status. The certificate wins
+/// over the token because it is a key that cannot leak from a log; the token
+/// wins over loopback because it is an explicit grant.
+pub fn role_for(from_loopback: bool, token: Option<&str>, cert_fp: Option<&str>) -> Role {
     let cfg = load();
+    if let Some(fp) = cert_fp {
+        if let Some(&r) = cfg.client_certs.get(&norm_fp(fp)) {
+            return r;
+        }
+    }
     if let Some(t) = token {
         if let Some(&r) = cfg.tokens.get(t) {
             return r;
@@ -130,8 +165,13 @@ pub fn role_for(from_loopback: bool, token: Option<&str>) -> Role {
 }
 
 /// Is this caller permitted to perform `action`?
-pub fn authorize(from_loopback: bool, token: Option<&str>, action: Action) -> bool {
-    allows(role_for(from_loopback, token), action)
+pub fn authorize(
+    from_loopback: bool,
+    token: Option<&str>,
+    cert_fp: Option<&str>,
+    action: Action,
+) -> bool {
+    allows(role_for(from_loopback, token, cert_fp), action)
 }
 
 /// Extract a bearer token from a raw HTTP request head, if present.
@@ -174,10 +214,20 @@ mod tests {
     #[test]
     fn loopback_defaults_to_admin_without_config() {
         // No config file on the test box -> default loopback_role = admin.
-        assert_eq!(role_for(true, None), Role::Admin);
-        assert_eq!(role_for(false, None), Role::Viewer);
-        assert!(authorize(true, None, Action::Configure));
-        assert!(!authorize(false, None, Action::Contain));
+        assert_eq!(role_for(true, None, None), Role::Admin);
+        assert_eq!(role_for(false, None, None), Role::Viewer);
+        assert!(authorize(true, None, None, Action::Configure));
+        assert!(!authorize(false, None, None, Action::Contain));
+    }
+
+    #[test]
+    fn fingerprints_normalize_to_one_form() {
+        // openssl prints `AA:BB:…`; a config or a paste may use any case or a
+        // `sha256:` prefix. They must all match the same stored key.
+        let a = norm_fp("AA:BB:CC");
+        assert_eq!(a, "aabbcc");
+        assert_eq!(norm_fp("sha256:aAbBcC"), "aabbcc");
+        assert_eq!(norm_fp("  aabbcc \n"), "aabbcc");
     }
 
     #[test]

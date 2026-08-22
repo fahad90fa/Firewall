@@ -26,6 +26,11 @@ jobs:
       # builds in one configuration is a path that breaks in the other without
       # anyone noticing until a release.
       - run: cargo test -p ufw-daemon --features tls
+      # The console's mTLS path (client-certificate identity -> RBAC role) is the
+      # same kind of cfg-gated code and gets the same treatment: build, test, and
+      # lint it in the configuration that actually compiles rustls in.
+      - run: cargo test -p ufw-cli --features tls
+      - run: cargo clippy -p ufw-cli --all-targets --features tls -- -D warnings
       - run: make policies
       # A CycloneDX SBOM straight from the committed lockfile — reproducible,
       # no network, no external tooling — published as a build artifact.
