@@ -116,13 +116,18 @@ Some now exist; the rest are the sequenced next steps.
   enforces today; the WFP callout and the Network Extension would each need
   their own token bucket to honour the same `rate_limit:` block. The verdict is
   already identical across all three — only the throttle is Linux-only.
-- **Sender-side fleet distribution.** The receive side is complete: a daemon
-  authenticates a pushed bundle, decides its canary membership, compiles it
-  locally, and — when in the rollout — installs it through the same fail-closed
-  pipeline as a local reload (`fleet-push`, `POST /v1/fleet/push`). What remains
-  is the orchestration that *sends*: a distribution point iterating its members
-  and posting the signed bundle to each. That is a client loop over the surface
-  that already exists, not new daemon capability.
+- **Sender-side fleet distribution — now built, pending field runtime.** The
+  receive side authenticates a pushed bundle, decides canary membership,
+  compiles it locally, and installs it through the fail-closed pipeline
+  (`fleet-push`, `POST /v1/fleet/push`). The send side is now here too: a
+  single-shot fan-out (`daemon/src/fleet_client.rs`: sign once, post to each
+  member, collect outcomes) and, on top of it, a **staged-rollout controller**
+  (`daemon/src/fleet_rollout.rs`) — a pure decision engine that widens a rollout
+  through gated waves (1%→10%→50%→100%), advancing only when a wave both
+  converges and stays healthy and aborting within the current cohort on a
+  regression. It is proven at scale by a deterministic 1000-host simulation. What
+  is left is not code but wall-clock: driving it against real hosts outside the
+  lab, which is the Tier 0 runtime gate, not new daemon capability.
 
 ## Tier 2 — separate systems this firewall integrates with, and must not become
 

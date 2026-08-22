@@ -2,6 +2,7 @@ pub mod automaton;
 pub mod config;
 pub mod fleet;
 pub mod fleet_client;
+pub mod fleet_rollout;
 pub mod identity;
 pub mod ipc;
 pub mod logging;
