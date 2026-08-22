@@ -870,6 +870,8 @@
             <input id="evSearch" class="search" type="search" placeholder="filter ip · port · rule · service  ( / )" aria-label="Filter events">
             <button id="exportCsv" title="Export filtered events as CSV">CSV</button>
             <button id="exportJson" title="Export filtered events as JSON (e)">JSON</button>
+            <button id="exportNdjson" title="Export as newline-delimited JSON (SIEM ingest)">NDJSON</button>
+            <button id="exportCef" title="Export as ArcSight CEF (SIEM)">CEF</button>
           </div>
         </div>
         <div class="pad0"><div class="scroll-y tbl-wrap"><table id="events">
@@ -2075,6 +2077,24 @@ $("exportCsv").onclick=()=>{ const cols=["ts","action","dir","iface","src","spt"
   const csv=[cols.join(",")].concat(filteredEvents.map(e=>cols.map(c=>{ let v=e[c]; if(c==="ts")v=new Date((e.ts||0)*1000).toISOString(); v=v==null?"":String(v);
     return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; }).join(","))).join("\n");
   download(`ufw-events-${stamp()}.csv`, csv, "text/csv"); toast(`Exported ${filteredEvents.length} events (CSV)`); };
+// SIEM formats. NDJSON = one record per line (the common ingest shape). CEF =
+// ArcSight Common Event Format, understood by most SIEMs out of the box.
+$("exportNdjson").onclick=()=>{ const host=(state&&state.host)||"unknown";
+  const nd=filteredEvents.map(e=>JSON.stringify({host,ts:new Date((e.ts||0)*1000).toISOString(),
+    action:e.action,dir:e.dir,iface:e.iface,src:e.src,spt:e.spt,dst:e.dst,dpt:e.dpt,proto:e.proto,service:e.service,rule:e.rule,reason:e.why})).join("\n");
+  download(`ufw-events-${stamp()}.ndjson`, nd, "application/x-ndjson"); toast(`Exported ${filteredEvents.length} events (NDJSON)`); };
+$("exportCef").onclick=()=>{ const host=(state&&state.host)||"unknown";
+  const cefSev=a=>a==="deny"?7:5;
+  const ex=(k,v)=>v==null||v===""?"":` ${k}=${String(v).replace(/([\\=|])/g,"\\$1").replace(/\n/g," ")}`;
+  const lines=filteredEvents.map(e=>{
+    const name=e.action==="deny"?"Denied packet":"Alerted packet";
+    const sig=(e.rule||e.action||"event").replace(/\|/g,"/");
+    return `CEF:0|UnifiedFirewall|ufw-nft|1|${sig}|${name}|${cefSev(e.action)}|`+
+      `dvchost=${host}`+ex("rt",new Date((e.ts||0)*1000).toISOString())+ex("src",e.src)+ex("spt",e.spt)+
+      ex("dst",e.dst)+ex("dpt",e.dpt)+ex("proto",e.proto)+ex("app",e.service)+ex("deviceDirection",e.dir==="in"?0:1)+
+      ex("act",e.action)+ex("cs1Label","rule")+ex("cs1",e.rule)+ex("msg",e.why);
+  }).join("\n");
+  download(`ufw-events-${stamp()}.cef`, lines, "text/plain"); toast(`Exported ${filteredEvents.length} events (CEF)`); };
 function copy(text){ if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(()=>toast("Copied"),()=>fallbackCopy(text)); } else fallbackCopy(text); }
 function fallbackCopy(text){ const ta=document.createElement("textarea"); ta.value=text; ta.style.position="fixed"; ta.style.opacity="0"; document.body.appendChild(ta); ta.select();
   try{ document.execCommand("copy"); toast("Copied"); }catch{ toast("Copy failed"); } ta.remove(); }
