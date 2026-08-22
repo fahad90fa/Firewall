@@ -157,3 +157,21 @@ jobs:
           name: crash-${{ matrix.name }}
           path: fuzz/crash-*
           if-no-files-found: ignore
+
+  # Differential campaign: run the Rust decoders and the C they replace over the
+  # same inputs — the full accumulated corpus plus a heavy mutation run — and
+  # fail on any field-level disagreement. `cargo test` runs a small version of
+  # this on every push; here it is turned up so a nightly finds divergences a
+  # short run would miss.
+  differential:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install a C compiler
+        run: sudo apt-get update && sudo apt-get install -y clang
+      - name: Rust vs C differential (heavy)
+        env:
+          UFW_DIFF_ITERS: "400000"
+          UFW_DIFF_CORPUS_ALL: "1"
+        run: cargo test -p ufw-kcore --test differential -- --nocapture
