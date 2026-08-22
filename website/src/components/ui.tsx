@@ -70,6 +70,7 @@ export function Button({
   type = "button",
   className = "",
   disabled,
+  download,
 }: {
   children: ReactNode;
   href?: string;
@@ -78,6 +79,7 @@ export function Button({
   type?: "button" | "submit";
   className?: string;
   disabled?: boolean;
+  download?: boolean;
 }) {
   const base =
     "inline-flex items-center justify-center gap-2 rounded-lg px-5 py-3 font-display text-sm font-semibold tracking-wide transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none";
@@ -89,7 +91,13 @@ export function Button({
   if (href) {
     const external = href.startsWith("http");
     return (
-      <a className={cls} href={href} target={external ? "_blank" : undefined} rel={external ? "noreferrer" : undefined}>
+      <a
+        className={cls}
+        href={href}
+        download={download}
+        target={external ? "_blank" : undefined}
+        rel={external ? "noreferrer" : undefined}
+      >
         {children}
       </a>
     );

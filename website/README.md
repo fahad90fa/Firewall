@@ -67,6 +67,27 @@ npx skills add supabase/agent-skills
 Authentication is an interactive browser OAuth flow, so it has to be run by you
 locally — it can't be completed in a headless/CI session.
 
+## The Linux download (.deb)
+
+The "Download for Linux" buttons serve a real Debian package straight from the
+site — `public/downloads/unified-firewall_<ver>_<arch>.deb` (checksum alongside
+it). Because it lives under `public/`, `vite build` copies it into `dist/` and a
+static host serves it directly; the site links to the file, not to a repo.
+
+Rebuild the package (from the repo root) after changing the binaries or bumping
+the version, then refresh the copy here:
+
+```sh
+sh build/linux/build-deb.sh                       # -> dist/unified-firewall_<ver>_<arch>.deb
+cp dist/unified-firewall_*_amd64.deb website/public/downloads/
+sha256sum website/public/downloads/unified-firewall_*_amd64.deb   # update LINUX_DEB in src/lib/content.ts
+```
+
+The package installs `ufw-nft`, `ufwctl`, `ufw-daemon`, `ufw-waf` and the
+`firewall` wrapper to `/usr/bin`, the systemd units, and monitor-mode config —
+and starts in monitor mode (observes, never blocks). Update `LINUX_DEB` in
+`src/lib/content.ts` (version, size, sha256) when you replace the file.
+
 ## What's real vs. illustrative
 
 The **capabilities** described are the real features of the engine in this repo

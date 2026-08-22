@@ -53,7 +53,7 @@ export default function Nav() {
           >
             GitHub ↗
           </a>
-          <Button href={LINUX_DOWNLOAD_URL} className="px-4 py-2.5 text-xs">
+          <Button href={LINUX_DOWNLOAD_URL} download className="px-4 py-2.5 text-xs">
             Get for Linux
           </Button>
         </div>

@@ -2,7 +2,7 @@ import { type ReactNode } from "react";
 import { Button, Label, Reveal } from "./ui";
 import SignupForm from "./SignupForm";
 import { joinWaitlist, type Platform } from "../lib/supabase";
-import { LINUX_DOWNLOAD_URL } from "../lib/content";
+import { LINUX_DOWNLOAD_URL, LINUX_DEB, LINUX_INSTALL_CMD } from "../lib/content";
 
 export default function Platforms() {
   return (
@@ -29,14 +29,30 @@ export default function Platforms() {
             </span>
           </div>
           <h3 className="mt-5 font-display text-xl font-bold text-ink">Linux</h3>
-          <p className="mt-2 flex-1 text-sm leading-relaxed text-muted">
+          <p className="mt-2 text-sm leading-relaxed text-muted">
             Debian, Ubuntu, Parrot, Kali and friends. Packet-layer policy enforces today via nftables — no
-            kernel module required — with eBPF for the identity and DPI fast path.
+            kernel module required. Installs in monitor mode; one command to enforce.
           </p>
-          <div className="mt-6">
-            <Button href={LINUX_DOWNLOAD_URL} variant="ghost" className="w-full border-safe/40 text-safe hover:border-safe hover:text-safe">
-              Download for Linux ↗
+          <div className="mt-4 rounded-lg border border-line bg-void/70 p-3 font-mono text-[11px] leading-relaxed text-muted">
+            <div className="flex items-center justify-between">
+              <span className="text-safe">.deb · {LINUX_DEB.arch}</span>
+              <span>
+                v{LINUX_DEB.version} · {LINUX_DEB.size}
+              </span>
+            </div>
+            <div className="mt-2 overflow-x-auto whitespace-nowrap text-ink/90">
+              <span className="text-safe">$</span> {LINUX_INSTALL_CMD}
+            </div>
+          </div>
+          <div className="mt-auto pt-5">
+            <Button
+              href={LINUX_DOWNLOAD_URL}
+              download
+              className="w-full bg-safe text-void hover:shadow-[0_0_0_1px_rgba(52,211,153,0.3),0_8px_40px_-12px_rgba(52,211,153,0.4)]"
+            >
+              <DownloadGlyph /> Download .deb
             </Button>
+            <p className="mt-2 break-all font-mono text-[10px] text-muted/60">sha256 {LINUX_DEB.sha256}</p>
           </div>
         </Reveal>
 
@@ -95,6 +111,13 @@ function ComingSoon({
 }
 
 /* --- glyphs --- */
+function DownloadGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16" />
+    </svg>
+  );
+}
 function TuxGlyph() {
   return (
     <svg viewBox="0 0 24 24" className="h-8 w-8 text-safe" fill="currentColor" aria-hidden="true">
