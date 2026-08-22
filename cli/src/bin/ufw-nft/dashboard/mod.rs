@@ -15,6 +15,7 @@ mod contain;
 mod daemon;
 mod events;
 mod exposure;
+mod lint;
 mod network;
 mod ports;
 mod respond;
@@ -569,6 +570,19 @@ fn state_json() -> String {
             Some(s) => w.u64_field("expires_secs", s),
             None => w.null_field("expires_secs"),
         }
+        w.end_object();
+    }
+    w.end_array();
+
+    // Policy-correctness lint findings over the loaded ruleset.
+    w.begin_array_field("lint");
+    for f in lint::analyze(&rs.chains) {
+        w.begin_object();
+        w.str_field("severity", &f.severity);
+        w.str_field("chain", &f.chain);
+        w.str_field("rule", &f.rule);
+        w.str_field("kind", &f.kind);
+        w.str_field("detail", &f.detail);
         w.end_object();
     }
     w.end_array();
