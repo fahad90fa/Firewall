@@ -988,14 +988,14 @@
       <div class="ribbon" id="fleetHint" style="margin-bottom:14px">
         <span class="rp" style="background:var(--info)"></span>
         <div class="rb"><div class="rt" style="color:var(--info)">How the fleet is assembled</div>
-        <div class="rd">Each host's console writes a small summary to <span class="mono">/var/lib/unified-firewall/fleet/&lt;host&gt;.json</span>. Sync that directory across your hosts (rsync, a shared mount, or the daemon's fleet plane) and they all appear here. This host always registers itself. A host that stops updating for over two minutes is shown <b>stale</b>.</div></div>
+        <div class="rd">Each host's console writes a small summary to <span class="mono">/var/lib/unified-firewall/fleet/&lt;host&gt;.json</span>. Sync that directory across your hosts (rsync, a shared mount, or the daemon's fleet plane) and they all appear here. This host always registers itself. A host that stops updating for over two minutes is shown <b>stale</b>. <b>Integrity:</b> drop a shared secret in <span class="mono">/etc/unified-firewall/fleet-key</span> on every host and each summary is authenticated with HMAC-SHA256 — a forged or altered row shows <b>TAMPERED</b> and is excluded from the totals. A shared key proves "a fleet member wrote this", not which one; per-host signatures need the <span class="mono">tls</span> build.</div></div>
       </div>
       <div class="netkpis" id="fleetKpis"></div>
       <div class="card" style="margin-top:14px">
         <div class="ch"><h3>Hosts</h3><span class="count" id="fleetCount"></span></div>
         <div class="pad0"><div class="scroll-y tbl-wrap"><table id="fleetTable">
-          <thead><tr><th>Host</th><th>Status</th><th>Enforcing</th><th class="r">Attackers</th><th class="r">Denied</th><th class="r">Contained</th><th>Auto-response</th><th>Last seen</th></tr></thead>
-          <tbody><tr><td colspan="8" class="empty">Loading fleet…</td></tr></tbody>
+          <thead><tr><th>Host</th><th>Status</th><th>Integrity</th><th>Enforcing</th><th class="r">Attackers</th><th class="r">Denied</th><th class="r">Contained</th><th>Auto-response</th><th>Last seen</th></tr></thead>
+          <tbody><tr><td colspan="9" class="empty">Loading fleet…</td></tr></tbody>
         </table></div></div>
       </div>
     </section>
@@ -2569,24 +2569,37 @@ function renderFleet(f){
   if(!f) return;
   const t=f.totals||{}, hosts=f.hosts||[];
   const kpi=(lab,big,sub,cls)=>`<div class="kpi ${cls||""}"><div class="lab">${lab}</div><div class="big">${big}</div><div class="sub">${sub}</div></div>`;
+  // Fourth KPI reflects summary authentication when a fleet key is configured;
+  // otherwise it keeps showing armed auto-response hosts as before.
+  const tampered=t.tampered||0;
+  const authKpi = f.signing
+    ? kpi("Integrity", tampered?`${fmtN(tampered)} bad`:`${fmtN(t.verified||0)} ok`,
+        tampered?"summaries failed auth":"summaries signed", tampered?"bad":"ok")
+    : kpi("Auto-response",fmtN(t.autoresponse||0),"hosts armed","");
   $("fleetKpis").innerHTML=
     kpi("Hosts",fmtN(t.hosts||0),`${fmtN(t.live||0)} live`,"")+
     kpi("Enforcing",fmtN(t.enforcing||0),"of live hosts",(t.live&&t.enforcing<t.live)?"warn":"ok")+
     kpi("Attackers",fmtN(t.attackers||0),"across the fleet",t.attackers>0?"bad":"ok")+
-    kpi("Auto-response",fmtN(t.autoresponse||0),"hosts armed","");
+    authKpi;
   $("fleetCount").textContent = hosts.length?`${hosts.length} host(s)`:"";
   const nav=$("nav-fleet"); if(nav) nav.textContent=String(t.hosts||0);
+  const integ=iv=>{
+    if(iv==="verified") return '<span class="chip accept" title="summary authenticated with the shared fleet key">signed</span>';
+    if(iv==="tampered") return '<span class="chip deny" title="summary failed authentication — forged, corrupted, or a different key. Excluded from fleet totals.">TAMPERED</span>';
+    return '<span class="chip plain" title="no fleet key configured; summary taken as-is">unsigned</span>';
+  };
   const tb=qs("#fleetTable tbody");
-  tb.innerHTML = hosts.length ? hosts.map(h=>`<tr>
+  tb.innerHTML = hosts.length ? hosts.map(h=>`<tr${h.integrity==="tampered"?' style="background:color-mix(in srgb,var(--bad) 8%,transparent)"':''}>
     <td class="mono">${esc(h.hostname)}</td>
     <td>${h.stale?'<span class="chip plain">STALE</span>':'<span class="chip accept">LIVE</span>'}</td>
+    <td>${integ(h.integrity)}</td>
     <td>${h.enforced?'<span class="chip accept">yes</span>':'<span class="chip deny">no</span>'}</td>
     <td class="r num" style="${h.attackers>0?'color:var(--bad);font-weight:700':''}">${fmtN(h.attackers)}</td>
     <td class="r num">${fmtN(h.denied)}</td>
     <td class="r num">${fmtN(h.contained)}</td>
     <td>${h.autoresponse?'<span class="chip accept">on</span>':'<span class="chip plain">off</span>'}</td>
     <td class="muted">${h.generated_at?ago(h.generated_at)+" ago":"—"}</td>
-  </tr>`).join("") : `<tr><td colspan="8" class="empty">No hosts yet — this host registers itself within ~15s; sync the fleet directory to see others.</td></tr>`;
+  </tr>`).join("") : `<tr><td colspan="9" class="empty">No hosts yet — this host registers itself within ~15s; sync the fleet directory to see others.</td></tr>`;
 }
 
 /* ---- go --------------------------------------------------------------- */
