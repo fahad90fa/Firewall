@@ -22,6 +22,7 @@ mod lint;
 mod network;
 mod pcap;
 mod ports;
+mod rbac;
 mod respond;
 mod ruleset;
 mod services;
@@ -159,6 +160,10 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
         return Ok(());
     }
     let request = String::from_utf8_lossy(&head);
+    // Optional `Authorization: Bearer <token>` — a token listed in the console
+    // auth config resolves to a role; otherwise loopback status decides. See
+    // rbac.rs for the role/permission table and the honest mTLS boundary.
+    let token = rbac::bearer(&request);
     let mut line0 = request.lines().next().unwrap_or("").split_whitespace();
     let method = line0.next().unwrap_or("GET");
     let target = line0.next().unwrap_or("/");
@@ -171,6 +176,23 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
         (_, "/api/state") => {
             let body = state_json();
             respond(&mut stream, 200, "application/json", &body)
+        }
+        ("GET", "/api/whoami") => {
+            // The caller's resolved role and its capability map, so a role-aware
+            // console can disable actions this caller may not perform. Reading is
+            // open to everyone, so this endpoint is not itself gated.
+            let role = rbac::role_for(from_loopback, token.as_deref());
+            let mut w = JsonWriter::with_capacity(160);
+            w.begin_object();
+            w.str_field("role", rbac::role_name(role));
+            w.bool_field("from_loopback", from_loopback);
+            w.begin_object_field("can");
+            for (name, action) in rbac::ALL_ACTIONS {
+                w.bool_field(name, rbac::allows(role, action));
+            }
+            w.end_object();
+            w.end_object();
+            respond(&mut stream, 200, "application/json", &w.finish())
         }
         ("GET", "/api/stream") => {
             // Server-Sent Events: push a snapshot on the cadence the client asks
@@ -201,14 +223,15 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
             respond(&mut stream, 200, "application/json", &w.finish())
         }
         ("POST", "/api/contain") | ("POST", "/api/release") => {
-            // The one mutating surface. Gate it to loopback callers so an
+            // A mutating surface. Authorize by role: loopback (or a responder/
+            // admin token) may contain; a bare remote caller is read-only, so an
             // exposed dashboard can never be used to inject blocks remotely.
-            if !from_loopback {
+            if !rbac::authorize(from_loopback, token.as_deref(), rbac::Action::Contain) {
                 return respond(
                     &mut stream,
                     403,
                     "application/json",
-                    "{\"ok\":false,\"error\":\"containment is only allowed from localhost\"}",
+                    "{\"ok\":false,\"error\":\"containment requires responder or admin (loopback, or a bearer token)\"}",
                 );
             }
             let ip = qget(query, "ip").unwrap_or_default();
@@ -238,13 +261,13 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
         }
         ("GET", "/api/pcap") => {
             // Bounded packet capture for the dossier — mutating-adjacent (spawns
-            // tcpdump as root), so gate it to loopback like containment.
-            if !from_loopback {
+            // tcpdump as root), so it is the most privileged action: admin only.
+            if !rbac::authorize(from_loopback, token.as_deref(), rbac::Action::Capture) {
                 return respond(
                     &mut stream,
                     403,
                     "application/json",
-                    "{\"ok\":false,\"error\":\"packet capture is only allowed from localhost\"}",
+                    "{\"ok\":false,\"error\":\"packet capture requires admin (loopback, or an admin bearer token)\"}",
                 );
             }
             let ip = qget(query, "ip").unwrap_or_default();
@@ -268,13 +291,13 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
             respond(&mut stream, 200, "application/json", &body)
         }
         ("POST", "/api/autoresponse") | ("POST", "/api/autoresponse/rule") => {
-            // Mutating: gate to loopback exactly like containment.
-            if !from_loopback {
+            // Mutating configuration: admin only (loopback or an admin token).
+            if !rbac::authorize(from_loopback, token.as_deref(), rbac::Action::Configure) {
                 return respond(
                     &mut stream,
                     403,
                     "application/json",
-                    "{\"ok\":false,\"error\":\"auto-response can only be changed from localhost\"}",
+                    "{\"ok\":false,\"error\":\"changing auto-response requires admin (loopback, or an admin bearer token)\"}",
                 );
             }
             let ok = if route == "/api/autoresponse" {
