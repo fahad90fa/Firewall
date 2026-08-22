@@ -51,6 +51,8 @@ pub struct Rule {
     pub min_ports: u64,
     /// Only act on public-internet sources (never LAN/loopback).
     pub public_only: bool,
+    /// Only act on sources that appear on an installed threat-intel feed.
+    pub known_bad_only: bool,
     /// First-offence block duration, seconds.
     pub base_ttl: u64,
     /// Repeat offenders get progressively longer blocks.
@@ -77,6 +79,19 @@ pub struct Decision {
 fn catalog() -> Vec<Rule> {
     vec![
         Rule {
+            id: "known-bad",
+            name: "Known-bad source",
+            desc: "Contain any source on an installed threat-intel feed, at any severity.",
+            enabled: true,
+            min_severity: "low".into(),
+            min_count: 1,
+            min_ports: 0,
+            public_only: true,
+            known_bad_only: true,
+            base_ttl: 24 * 3600,
+            escalate: true,
+        },
+        Rule {
             id: "critical",
             name: "Critical attack",
             desc: "Contain any source classified critical — exploit attempts, injection, RCE.",
@@ -85,6 +100,7 @@ fn catalog() -> Vec<Rule> {
             min_count: 1,
             min_ports: 0,
             public_only: true,
+            known_bad_only: false,
             base_ttl: 6 * 3600,
             escalate: true,
         },
@@ -97,6 +113,7 @@ fn catalog() -> Vec<Rule> {
             min_count: 1,
             min_ports: 10,
             public_only: true,
+            known_bad_only: false,
             base_ttl: 3600,
             escalate: true,
         },
@@ -109,6 +126,7 @@ fn catalog() -> Vec<Rule> {
             min_count: 40,
             min_ports: 0,
             public_only: true,
+            known_bad_only: false,
             base_ttl: 3600,
             escalate: true,
         },
@@ -121,6 +139,7 @@ fn catalog() -> Vec<Rule> {
             min_count: 20,
             min_ports: 0,
             public_only: true,
+            known_bad_only: false,
             base_ttl: 3600,
             escalate: true,
         },
@@ -184,6 +203,7 @@ pub fn evaluate(
     attacks: &[Attack],
     contained: &BTreeSet<String>,
     hist: &BTreeMap<String, (u64, u64)>,
+    known_bad: &BTreeSet<String>,
 ) -> Vec<Decision> {
     let mut out = Vec::new();
     if !cfg.enabled {
@@ -199,6 +219,7 @@ pub fn evaluate(
                 || (a.count as u64) < r.min_count
                 || (r.min_ports > 0 && (a.ports.len() as u64) < r.min_ports)
                 || (r.public_only && !is_public(&a.src))
+                || (r.known_bad_only && !known_bad.contains(&a.src))
             {
                 continue;
             }
@@ -230,8 +251,15 @@ pub fn tick(attacks: &[Attack]) {
         return;
     }
     let contained: BTreeSet<String> = contain::list().into_iter().map(|c| c.ip).collect();
+    // Which of the current sources are on an installed threat-intel feed.
+    let feeds = super::threatintel::load();
+    let known_bad: BTreeSet<String> = attacks
+        .iter()
+        .filter(|a| feeds.lookup(&a.src).is_some())
+        .map(|a| a.src.clone())
+        .collect();
     let mut hist = load_history();
-    let decisions = evaluate(&cfg, attacks, &contained, &hist);
+    let decisions = evaluate(&cfg, attacks, &contained, &hist, &known_bad);
     if decisions.is_empty() {
         return;
     }
@@ -294,6 +322,9 @@ fn overlay(r: &mut Rule, item: &Json) {
     if let Some(b) = item.get("public_only").and_then(Json::as_bool) {
         r.public_only = b;
     }
+    if let Some(b) = item.get("known_bad_only").and_then(Json::as_bool) {
+        r.known_bad_only = b;
+    }
     if let Some(n) = item.get("base_ttl").and_then(Json::as_u64) {
         r.base_ttl = n.clamp(60, MAX_TTL);
     }
@@ -318,6 +349,7 @@ fn save(cfg: &Config) -> Result<(), String> {
         w.u64_field("min_count", r.min_count);
         w.u64_field("min_ports", r.min_ports);
         w.bool_field("public_only", r.public_only);
+        w.bool_field("known_bad_only", r.known_bad_only);
         w.u64_field("base_ttl", r.base_ttl);
         w.bool_field("escalate", r.escalate);
         w.end_object();
@@ -408,6 +440,7 @@ pub fn update_rule(
     min_count: Option<u64>,
     min_ports: Option<u64>,
     public_only: Option<bool>,
+    known_bad_only: Option<bool>,
     base_ttl: Option<u64>,
     escalate: Option<bool>,
 ) -> bool {
@@ -431,6 +464,9 @@ pub fn update_rule(
     }
     if let Some(b) = public_only {
         r.public_only = b;
+    }
+    if let Some(b) = known_bad_only {
+        r.known_bad_only = b;
     }
     if let Some(n) = base_ttl {
         r.base_ttl = n.clamp(60, MAX_TTL);
@@ -459,6 +495,7 @@ pub fn config_json() -> String {
         w.u64_field("min_count", r.min_count);
         w.u64_field("min_ports", r.min_ports);
         w.bool_field("public_only", r.public_only);
+        w.bool_field("known_bad_only", r.known_bad_only);
         w.u64_field("base_ttl", r.base_ttl);
         w.bool_field("escalate", r.escalate);
         w.end_object();
@@ -518,6 +555,7 @@ mod tests {
             &[atk("203.0.113.9", "critical", 5, 2)],
             &BTreeSet::new(),
             &BTreeMap::new(),
+            &BTreeSet::new(),
         );
         assert!(d.is_empty());
     }
@@ -529,6 +567,7 @@ mod tests {
             &[atk("203.0.113.9", "critical", 1, 1)],
             &BTreeSet::new(),
             &BTreeMap::new(),
+            &BTreeSet::new(),
         );
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].src, "203.0.113.9");
@@ -543,6 +582,7 @@ mod tests {
             &[atk("192.168.1.10", "critical", 50, 20)],
             &BTreeSet::new(),
             &BTreeMap::new(),
+            &BTreeSet::new(),
         );
         assert!(d.is_empty());
     }
@@ -556,6 +596,7 @@ mod tests {
             &[atk("203.0.113.9", "critical", 5, 2)],
             &contained,
             &BTreeMap::new(),
+            &BTreeSet::new(),
         );
         assert!(d.is_empty());
     }
@@ -568,6 +609,7 @@ mod tests {
             &[atk("203.0.113.9", "low", 1, 1)],
             &BTreeSet::new(),
             &BTreeMap::new(),
+            &BTreeSet::new(),
         );
         assert!(d.is_empty());
     }
@@ -579,6 +621,7 @@ mod tests {
             &[atk("198.51.100.7", "medium", 12, 15)],
             &BTreeSet::new(),
             &BTreeMap::new(),
+            &BTreeSet::new(),
         );
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].rule, "Aggressive port scan");
@@ -593,6 +636,7 @@ mod tests {
             &[atk("203.0.113.9", "critical", 1, 1)],
             &BTreeSet::new(),
             &hist,
+            &BTreeSet::new(),
         );
         assert_eq!(d[0].ttl, 6 * 3600 * 6); // second offence: x6
     }
@@ -610,12 +654,41 @@ mod tests {
                     min_count: 0,
                     min_ports: 0,
                     public_only: true,
+                    known_bad_only: false,
                     base_ttl: MAX_TTL,
                     escalate: true,
                 },
                 9
             ) == MAX_TTL
         );
+    }
+
+    #[test]
+    fn known_bad_only_requires_a_feed_hit() {
+        // The "known-bad" playbook (first in the catalogue) only fires for a
+        // source present in the threat-intel set — regardless of severity.
+        let low = atk("203.0.113.9", "low", 1, 1);
+        // Not on a feed: no playbook matches a single low-severity probe.
+        assert!(evaluate(
+            &cfg_on(catalog()),
+            std::slice::from_ref(&low),
+            &BTreeSet::new(),
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+        )
+        .is_empty());
+        // On a feed: the known-bad playbook contains it.
+        let mut kb = BTreeSet::new();
+        kb.insert("203.0.113.9".to_string());
+        let d = evaluate(
+            &cfg_on(catalog()),
+            std::slice::from_ref(&low),
+            &BTreeSet::new(),
+            &BTreeMap::new(),
+            &kb,
+        );
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].rule, "Known-bad source");
     }
 
     #[test]

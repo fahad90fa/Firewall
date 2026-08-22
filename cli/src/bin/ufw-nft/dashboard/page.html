@@ -396,6 +396,10 @@
   .ar-toggle > div:first-child { flex: 1; min-width: 0; }
   .ar-mt { font-size: 15px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
   .ar-md { font-size: 12.5px; color: var(--text-dim); margin-top: 6px; line-height: 1.6; }
+  .ar-ti { font-size: 12px; color: var(--text-mute); margin-top: 8px; }
+  .ar-ti .ti-on { color: var(--warn); font-weight: 600; }
+  .ar-ti .ti-off { color: var(--text-mute); font-weight: 600; }
+  .ar-ti .mono { font-family: var(--mono); font-size: 11px; background: var(--surface-3); padding: 1px 5px; border-radius: 5px; }
   .switch.big { width: 52px; height: 30px; }
   .switch.big .sl::before { width: 24px; height: 24px; }
   .switch.big input:checked + .sl::before { transform: translateX(22px); }
@@ -480,6 +484,7 @@
   .mini.danger, .drawer-actions .danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 38%, var(--border)); }
   .mini.danger:hover, .drawer-actions .danger:hover { background: var(--bad-weak); border-color: var(--bad); }
   .chip.held { background: var(--bad-weak); color: var(--bad); font-size: 10px; letter-spacing: .04em; }
+  .chip.kb { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 32%, transparent); font-size: 10px; letter-spacing: .04em; }
   .crow { display: flex; align-items: center; gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--border); }
   .crow:last-child { border-bottom: 0; }
   .crow .mono { flex: 1; }
@@ -884,6 +889,7 @@
           <div>
             <div class="ar-mt"><span id="arStateChip" class="chip plain">OFF</span> Automatic containment</div>
             <div class="ar-md">When on, a source that trips an enabled playbook below is blocked at the kernel automatically. Every block <b>auto-expires</b>, is <b>written to the audit log</b> with the playbook that fired it, and only ever targets <b>public</b> sources — a misfire can't lock out your LAN or management access. Repeat offenders get progressively longer blocks.</div>
+            <div class="ar-ti" id="arThreatIntel"></div>
           </div>
           <label class="switch big"><input type="checkbox" id="arEnabled"><span class="sl"></span></label>
         </div>
@@ -1422,6 +1428,7 @@ function renderAttacks(attacks){
     <div class="attack sev-${esc(a.severity)}" data-src="${esc(a.src)}" tabindex="0" role="button" aria-label="Filter events for ${esc(a.src)}">
       <div class="ah"><span class="chip sev-${esc(a.severity)}">${SEV_ICON[a.severity]||""} ${esc((a.severity||"").toUpperCase())}</span><span class="at">${esc(a.title)}</span>
         ${held?`<span class="chip held" title="blocked at the kernel">CONTAINED</span>`:""}
+        ${a.known_bad?`<span class="chip kb" title="on threat-intel feed: ${esc(a.known_bad)}">⚑ KNOWN-BAD</span>`:""}
         <button class="mini" data-investigate="${esc(a.src)}" aria-label="Investigate ${esc(a.src)}">Investigate ↗</button>
         ${real?(held?`<button class="mini" data-release="${esc(a.src)}">Release</button>`:`<button class="mini danger" data-contain="${esc(a.src)}" aria-label="Contain ${esc(a.src)}">⦸ Contain</button>`):""}</div>
       <div class="ad">${esc(a.detail)}</div>
@@ -1637,7 +1644,8 @@ function dossierData(src){
     {k:"Flagged for review", on: alerted>0},
   ];
   const recent=evs.slice().sort((a,b)=>b.ts-a.ts).slice(0,20);
-  return { src, atks, evs, g, first, last, denied, alerted, ports, rules, sev, stages, recent,
+  const knownBad=(atks.find(a=>a.known_bad)||{}).known_bad||null;
+  return { src, atks, evs, g, first, last, denied, alerted, ports, rules, sev, stages, recent, knownBad,
            held:containedSet().has(src), real:!!src && src!=="this host" };
 }
 
@@ -1668,7 +1676,7 @@ function renderInvSources(){
 function renderDossier(src){
   const d=dossierData(src); if(!d) return;
   $("invEmpty").hidden=true; const dos=$("invDossier"); dos.hidden=false;
-  const {g,first,last,denied,alerted,ports,rules,sev,stages,recent,held,real,atks,evs}=d;
+  const {g,first,last,denied,alerted,ports,rules,sev,stages,recent,held,real,atks,evs,knownBad}=d;
   const seen=evs.length||atks.reduce((n,a)=>n+(a.count||0),0);
   const ptr = real ? (invPtrCache[src]||"looking up…") : "—";
   dos.innerHTML=`
@@ -1678,6 +1686,7 @@ function renderDossier(src){
         <span class="ipname">${esc(src)}</span>
         <span class="geo ${esc(g.scope)}">${SCOPE_ICON[g.scope]||""} ${esc(g.label)}</span>
         ${held?'<span class="chip held">CONTAINED</span>':''}
+        ${knownBad?`<span class="chip kb" title="threat-intel feed">⚑ KNOWN-BAD · ${esc(knownBad)}</span>`:''}
       </div>
       <div class="sum">${seen?`${fmtN(seen)} logged packet(s) from this source — ${fmtN(denied)} denied, ${fmtN(alerted)} alerted${atks.length?` — ${atks.map(a=>esc(a.title)).join(", ")}`:""}.`:"No activity from this source in the current window."}</div>
       <div class="ptr"><b>Reverse DNS:</b> <span id="invPtr">${esc(ptr)}</span></div>
@@ -2364,6 +2373,10 @@ function renderRespond(){
   $("arMaster").classList.toggle("on",on);
   $("arEnabled").checked=on;
   const chip=$("arStateChip"); chip.textContent=on?"ON":"OFF"; chip.classList.toggle("on2",on);
+  const ti=(state&&state.threatintel)||{entries:0,sources:[]}, tel=$("arThreatIntel");
+  if(tel){ tel.innerHTML = ti.entries>0
+    ? `<span class="ti-on">⚑ Threat-intel: ${fmtN(ti.entries)} blocklisted range(s) from ${(ti.sources||[]).length} feed(s)</span> — the “Known-bad source” playbook contains any hit.`
+    : `<span class="ti-off">No threat-intel feeds installed.</span> Drop IP/CIDR lists in <span class="mono">/etc/unified-firewall/threat-intel/</span> to enable the “Known-bad source” playbook.`; }
   const sevs=["critical","high","medium","low"];
   $("arPlaybooks").innerHTML=(respondCfg.rules||[]).map(r=>`
     <div class="ar-pb ${r.enabled?"on":"dim-controls"}" data-id="${esc(r.id)}">
@@ -2375,6 +2388,7 @@ function renderRespond(){
       <div class="pbrow"><label>Min distinct ports</label><input type="number" min="0" step="1" class="pb-ports" value="${r.min_ports}"></div>
       <div class="pbrow"><label>Block for (min)</label><input type="number" min="1" step="1" class="pb-ttl" value="${Math.round(r.base_ttl/60)}"></div>
       <div class="pbrow"><label>Public sources only</label><label class="switch"><input type="checkbox" class="pb-pub" ${r.public_only?"checked":""}><span class="sl"></span></label></div>
+      <div class="pbrow"><label>Known-bad only</label><label class="switch"><input type="checkbox" class="pb-kb" ${r.known_bad_only?"checked":""}><span class="sl"></span></label></div>
       <div class="pbrow"><label>Escalate repeats</label><label class="switch"><input type="checkbox" class="pb-esc" ${r.escalate?"checked":""}><span class="sl"></span></label></div>
     </div>`).join("");
   $("arPlaybooks").querySelectorAll(".ar-pb").forEach(card=>{
@@ -2385,6 +2399,7 @@ function renderRespond(){
     card.querySelector(".pb-ports").addEventListener("change",e=>send({min_ports:Math.max(0,+e.target.value||0)}));
     card.querySelector(".pb-ttl").addEventListener("change",e=>send({base_ttl:Math.max(60,(+e.target.value||1)*60)}));
     card.querySelector(".pb-pub").addEventListener("change",e=>send({public_only:e.target.checked?1:0}));
+    card.querySelector(".pb-kb").addEventListener("change",e=>send({known_bad_only:e.target.checked?1:0}));
     card.querySelector(".pb-esc").addEventListener("change",e=>send({escalate:e.target.checked?1:0}));
   });
   const rc=$("arRecent"), rec=respondCfg.recent||[];

@@ -20,6 +20,7 @@ mod ports;
 mod respond;
 mod ruleset;
 mod services;
+mod threatintel;
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -244,6 +245,7 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
                         qget(query, "min_count").and_then(|v| v.parse().ok()),
                         qget(query, "min_ports").and_then(|v| v.parse().ok()),
                         qget(query, "public_only").map(|v| is_truthy(&v)),
+                        qget(query, "known_bad_only").map(|v| is_truthy(&v)),
                         qget(query, "base_ttl").and_then(|v| v.parse().ok()),
                         qget(query, "escalate").map(|v| is_truthy(&v)),
                     ),
@@ -317,6 +319,7 @@ fn state_json() -> String {
     let exposure = exposure::analyze(&rs);
     let (events, mut errors) = events::collect(MAX_EVENTS);
     let attacks = attacks::classify(&events);
+    let feeds = threatintel::load();
     let (listeners, conns, svc_errors) = services::snapshot();
     errors.extend(svc_errors);
     if let Some(e) = &rs.error {
@@ -459,9 +462,24 @@ fn state_json() -> String {
         w.f64_field("first_ts", a.first_ts);
         w.f64_field("last_ts", a.last_ts);
         w.str_array_field("rules", a.rules.iter().map(|s| s.as_str()));
+        // Threat-intel: label of the first installed feed this source is on.
+        w.opt_str_field("known_bad", feeds.lookup(&a.src));
         w.end_object();
     }
     w.end_array();
+
+    // Threat-intel feed status (offline blocklists), for the console.
+    w.begin_object_field("threatintel");
+    w.u64_field("entries", feeds.entries() as u64);
+    w.begin_array_field("sources");
+    for (name, count) in &feeds.sources {
+        w.begin_object();
+        w.str_field("name", name);
+        w.u64_field("entries", *count as u64);
+        w.end_object();
+    }
+    w.end_array();
+    w.end_object();
 
     // --- exposure (inbound attack surface) --------------------------------
     w.begin_object_field("exposure");
