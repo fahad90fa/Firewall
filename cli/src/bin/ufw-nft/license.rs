@@ -61,7 +61,9 @@ fn parse_config(text: &str) -> Config {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let Some((k, v)) = line.split_once('=') else { continue };
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
         let (k, v) = (k.trim(), v.trim().trim_matches('"'));
         match k {
             "endpoint" if !v.is_empty() => endpoint = v.trim_end_matches('/').to_string(),
@@ -76,12 +78,17 @@ fn parse_config(text: &str) -> Config {
             _ => {}
         }
     }
-    Config { endpoint, apikey, timeout_secs }
+    Config {
+        endpoint,
+        apikey,
+        timeout_secs,
+    }
 }
 
 fn load_config() -> Result<Config, String> {
-    let text = std::fs::read_to_string(LICENSE_CONF)
-        .map_err(|_| format!("licensing is not configured on this host ({LICENSE_CONF} is missing)"))?;
+    let text = std::fs::read_to_string(LICENSE_CONF).map_err(|_| {
+        format!("licensing is not configured on this host ({LICENSE_CONF} is missing)")
+    })?;
     Ok(parse_config(&text))
 }
 
@@ -105,7 +112,9 @@ fn fingerprint_from(raw: &str) -> String {
 fn machine_fingerprint() -> Result<String, String> {
     let raw = std::fs::read_to_string("/etc/machine-id")
         .or_else(|_| std::fs::read_to_string("/var/lib/dbus/machine-id"))
-        .map_err(|_| "cannot read /etc/machine-id — this host has no stable machine id".to_string())?;
+        .map_err(|_| {
+            "cannot read /etc/machine-id — this host has no stable machine id".to_string()
+        })?;
     let raw = raw.trim();
     if raw.is_empty() {
         return Err("/etc/machine-id is empty".into());
@@ -184,7 +193,9 @@ pub fn load_store() -> Option<Store> {
 }
 
 fn save_store(s: &Store) -> Result<(), String> {
-    let dir = Path::new(LICENSE_STORE).parent().expect("constant has a parent");
+    let dir = Path::new(LICENSE_STORE)
+        .parent()
+        .expect("constant has a parent");
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     std::fs::write(LICENSE_STORE, store_to_json(s)).map_err(|e| format!("{LICENSE_STORE}: {e}"))?;
     // Root-only: the token is a bearer of the machine's activation.
@@ -308,7 +319,10 @@ fn call_endpoint(cfg: &Config, path: &str, body: &str) -> Result<Verdict, String
         .map_err(|e| format!("could not run curl (is it installed?): {e}"))?;
     if !out.status.success() && out.stdout.is_empty() {
         let err = String::from_utf8_lossy(&out.stderr);
-        return Err(format!("network error contacting the license server: {}", err.trim()));
+        return Err(format!(
+            "network error contacting the license server: {}",
+            err.trim()
+        ));
     }
     let text = String::from_utf8_lossy(&out.stdout);
     let (json_text, code) = match text.trim_end().rsplit_once('\n') {
@@ -325,8 +339,16 @@ fn store_from_verdict(key: &str, machine_id: &str, v: &Verdict, now: u64) -> Sto
     Store {
         key: key.to_string(),
         machine_id: machine_id.to_string(),
-        plan: if v.plan.is_empty() { "pro".into() } else { v.plan.clone() },
-        status: if v.status.is_empty() { "active".into() } else { v.status.clone() },
+        plan: if v.plan.is_empty() {
+            "pro".into()
+        } else {
+            v.plan.clone()
+        },
+        status: if v.status.is_empty() {
+            "active".into()
+        } else {
+            v.status.clone()
+        },
         expires_at_unix: v.expires_at_unix,
         recheck_by_unix: v.recheck_by_unix,
         token: v.token.clone(),
@@ -346,7 +368,10 @@ pub fn cmd_license(args: &[String]) -> Result<(), String> {
         Some("status") => status(args.get(1..).unwrap_or(&[])),
         Some("check") => check(),
         Some("deactivate") => deactivate(),
-        _ => Err("usage: ufw-nft license <activate <KEY> | status [--refresh] | check | deactivate>".into()),
+        _ => Err(
+            "usage: ufw-nft license <activate <KEY> | status [--refresh] | check | deactivate>"
+                .into(),
+        ),
     }
 }
 
@@ -368,7 +393,11 @@ fn activate(args: &[String]) -> Result<(), String> {
 
     let v = call_endpoint(&cfg, "activate", &body.finish())?;
     if !v.ok {
-        let why = if v.reason.is_empty() { v.status.clone() } else { v.reason.clone() };
+        let why = if v.reason.is_empty() {
+            v.status.clone()
+        } else {
+            v.reason.clone()
+        };
         return Err(match why.as_str() {
             "key_bound_to_another_machine" => {
                 "this key is already activated on another machine (one key, one machine). \
@@ -385,9 +414,16 @@ fn activate(args: &[String]) -> Result<(), String> {
 
     let store = store_from_verdict(&key, &machine_id, &v, state::now_unix());
     save_store(&store)?;
-    println!("activated: {} plan, this machine is now licensed.", store.plan);
+    println!(
+        "activated: {} plan, this machine is now licensed.",
+        store.plan
+    );
     if store.expires_at_unix != 0 {
-        println!("  expires:  {} (UTC unix {})", fmt_unix(store.expires_at_unix), store.expires_at_unix);
+        println!(
+            "  expires:  {} (UTC unix {})",
+            fmt_unix(store.expires_at_unix),
+            store.expires_at_unix
+        );
     }
     println!("  enforce:  sudo ufw-nft apply default_allow");
     Ok(())
@@ -419,7 +455,11 @@ fn status(args: &[String]) -> Result<(), String> {
             println!("  plan:     {}", s.plan);
             println!("  status:   {}", describe_validity(v, s, now));
             if s.expires_at_unix != 0 {
-                println!("  expires:  {} (unix {})", fmt_unix(s.expires_at_unix), s.expires_at_unix);
+                println!(
+                    "  expires:  {} (unix {})",
+                    fmt_unix(s.expires_at_unix),
+                    s.expires_at_unix
+                );
             }
             if s.last_ok != 0 {
                 println!("  last ok:  {} (unix {})", fmt_unix(s.last_ok), s.last_ok);
@@ -433,7 +473,8 @@ fn status(args: &[String]) -> Result<(), String> {
 /// the verdict, and — on a definitive lapse — reverts enforcement and warns.
 fn check() -> Result<(), String> {
     let cfg = load_config()?;
-    let store = load_store().ok_or("no activated key on this machine (run: ufw-nft license activate <KEY>)")?;
+    let store = load_store()
+        .ok_or("no activated key on this machine (run: ufw-nft license activate <KEY>)")?;
     let machine_id = machine_fingerprint()?;
 
     let mut body = JsonWriter::with_capacity(256);
@@ -452,7 +493,10 @@ fn check() -> Result<(), String> {
             updated.plan = store.plan.clone();
         }
         save_store(&updated)?;
-        println!("license OK ({} plan), next re-check by unix {}.", updated.plan, updated.recheck_by_unix);
+        println!(
+            "license OK ({} plan), next re-check by unix {}.",
+            updated.plan, updated.recheck_by_unix
+        );
         return Ok(());
     }
 
@@ -464,7 +508,11 @@ fn check() -> Result<(), String> {
         _ => Reason::Unknown,
     };
     let mut lapsed = store.clone();
-    lapsed.status = if v.status.is_empty() { "expired".into() } else { v.status.clone() };
+    lapsed.status = if v.status.is_empty() {
+        "expired".into()
+    } else {
+        v.status.clone()
+    };
     lapsed.last_check = now;
     let _ = save_store(&lapsed);
 
@@ -530,11 +578,9 @@ pub fn gate_enforcement() -> Gate {
 
 fn deny_message(v: Validity) -> String {
     match v {
-        Validity::NotActivated => {
-            "this firewall is not activated on this machine. \
+        Validity::NotActivated => "this firewall is not activated on this machine. \
              Activate it first: sudo ufw-nft license activate <KEY>"
-                .to_string()
-        }
+            .to_string(),
         Validity::Invalid(r) => format!(
             "the license for this machine is {} — enforcement is disabled until it is renewed. \
              Then: sudo ufw-nft license activate <KEY>",
@@ -551,7 +597,10 @@ fn deny_message(v: Validity) -> String {
 
 fn mask_key(key: &str) -> String {
     // Show the group prefix, hide the rest: UFW-4KD2-****-****-****-****
-    match key.split_once('-').and_then(|(p, rest)| rest.split_once('-').map(|(a, _)| (p, a))) {
+    match key
+        .split_once('-')
+        .and_then(|(p, rest)| rest.split_once('-').map(|(a, _)| (p, a)))
+    {
         Some((p, a)) => format!("{p}-{a}-****-****-****-****"),
         None => "****".to_string(),
     }
@@ -561,7 +610,10 @@ fn describe_validity(v: Validity, s: &Store, now: u64) -> String {
     match v {
         Validity::Valid => {
             if s.recheck_by_unix > now {
-                format!("active (offline grace for {})", fmt_duration(s.recheck_by_unix - now))
+                format!(
+                    "active (offline grace for {})",
+                    fmt_duration(s.recheck_by_unix - now)
+                )
             } else {
                 "active".to_string()
             }
@@ -587,7 +639,11 @@ fn fmt_duration(secs: u64) -> String {
 fn fmt_unix(ts: u64) -> String {
     let days = (ts / 86_400) as i64;
     let secs_of_day = ts % 86_400;
-    let (h, mi, s) = (secs_of_day / 3600, (secs_of_day % 3600) / 60, secs_of_day % 60);
+    let (h, mi, s) = (
+        secs_of_day / 3600,
+        (secs_of_day % 3600) / 60,
+        secs_of_day % 60,
+    );
     let (y, m, d) = civil_from_days(days);
     format!("{y:04}-{m:02}-{d:02} {h:02}:{mi:02}:{s:02}Z")
 }
@@ -648,18 +704,30 @@ mod tests {
     fn past_expiry_is_invalid_expired_even_before_grace() {
         // Expiry beats the grace window: once expired, it is invalid immediately.
         let s = store("active", 4_000, 9_000);
-        assert_eq!(evaluate(Some(&s), 4_500), Validity::Invalid(Reason::Expired));
+        assert_eq!(
+            evaluate(Some(&s), 4_500),
+            Validity::Invalid(Reason::Expired)
+        );
     }
 
     #[test]
     fn suspended_and_blocked_short_circuit() {
-        assert_eq!(evaluate(Some(&store("suspended", 10_000, 9_000)), 1), Validity::Invalid(Reason::Suspended));
-        assert_eq!(evaluate(Some(&store("blocked", 10_000, 9_000)), 1), Validity::Invalid(Reason::Blocked));
+        assert_eq!(
+            evaluate(Some(&store("suspended", 10_000, 9_000)), 1),
+            Validity::Invalid(Reason::Suspended)
+        );
+        assert_eq!(
+            evaluate(Some(&store("blocked", 10_000, 9_000)), 1),
+            Validity::Invalid(Reason::Blocked)
+        );
     }
 
     #[test]
     fn unknown_status_is_invalid() {
-        assert_eq!(evaluate(Some(&store("weird", 10_000, 9_000)), 1), Validity::Invalid(Reason::Unknown));
+        assert_eq!(
+            evaluate(Some(&store("weird", 10_000, 9_000)), 1),
+            Validity::Invalid(Reason::Unknown)
+        );
     }
 
     #[test]
@@ -693,7 +761,9 @@ mod tests {
 
     #[test]
     fn config_parses_and_defaults() {
-        let c = parse_config("# comment\nendpoint = https://x/functions/v1/\napikey=\"pub-key\"\ntimeout_secs=30\n");
+        let c = parse_config(
+            "# comment\nendpoint = https://x/functions/v1/\napikey=\"pub-key\"\ntimeout_secs=30\n",
+        );
         assert_eq!(c.endpoint, "https://x/functions/v1");
         assert_eq!(c.apikey.as_deref(), Some("pub-key"));
         assert_eq!(c.timeout_secs, 30);
@@ -722,7 +792,10 @@ mod tests {
 
     #[test]
     fn mask_key_hides_all_but_prefix() {
-        assert_eq!(mask_key("UFW-4KD2-9QMT-XXXX-YYYY-ZZZZ"), "UFW-4KD2-****-****-****-****");
+        assert_eq!(
+            mask_key("UFW-4KD2-9QMT-XXXX-YYYY-ZZZZ"),
+            "UFW-4KD2-****-****-****-****"
+        );
     }
 
     #[test]
