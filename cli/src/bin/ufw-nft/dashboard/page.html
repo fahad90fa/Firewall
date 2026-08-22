@@ -1728,6 +1728,7 @@ function renderDossier(src){
       <button data-act="src">Filter event stream</button>
       <button data-copy="${esc(src)}">Copy IP</button>
       ${real?(held?`<button data-act="release" class="danger">Release block</button>`:`<button data-act="contain" class="danger">⦸ Contain (block 1h)</button>`):""}
+      ${real?`<button data-act="pcap" title="Capture up to 200 packets to/from this source">⤓ Capture packets</button>`:""}
       ${real?`<button data-act="report">Export abuse report</button>`:""}
       ${real?`<button data-act="copydossier">Copy dossier</button>`:""}
     </div>`;
@@ -1736,6 +1737,22 @@ function renderDossier(src){
   const rbtn=dos.querySelector('[data-act="release"]'); if(rbtn) rbtn.onclick=()=>releaseIp(src);
   const rep=dos.querySelector('[data-act="report"]'); if(rep) rep.onclick=()=>exportAbuseReport(src);
   const cpd=dos.querySelector('[data-act="copydossier"]'); if(cpd) cpd.onclick=()=>copy(abuseReportText(src));
+  const pc=dos.querySelector('[data-act="pcap"]'); if(pc) pc.onclick=()=>capturePcap(src,pc);
+}
+// On-demand packet capture: fetch the bounded pcap and hand it to the browser
+// as a download. A JSON body instead of a pcap means it failed — surface why.
+function capturePcap(src,btn){
+  if(btn){ btn.disabled=true; btn.classList.add("busy"); btn.textContent="Capturing… (≤12s)"; }
+  const done=()=>{ if(btn){ btn.disabled=false; btn.classList.remove("busy"); btn.textContent="⤓ Capture packets"; } };
+  fetch("/api/pcap?ip="+encodeURIComponent(src)+"&n=200").then(async r=>{
+    const ct=r.headers.get("content-type")||"";
+    if(ct.indexOf("tcpdump")!==-1){
+      const b=await r.blob(); const url=URL.createObjectURL(b); const a=document.createElement("a");
+      a.href=url; a.download="ufw-capture-"+src.replace(/[^\w.]/g,"_")+".pcap"; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),1000); toast("Capture downloaded — open it in Wireshark");
+    } else { const j=await r.json().catch(()=>({})); toast("Capture failed: "+(j.error||"unknown error")); }
+    done();
+  }).catch(e=>{ toast("Capture failed: "+(e&&e.message||e)); done(); });
 }
 
 // PTR lookup — bounded to the system resolver on the server; cached per src.

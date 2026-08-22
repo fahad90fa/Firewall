@@ -17,6 +17,7 @@ mod events;
 mod exposure;
 mod lint;
 mod network;
+mod pcap;
 mod ports;
 mod respond;
 mod ruleset;
@@ -218,6 +219,33 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
             w.end_object();
             respond(&mut stream, 200, "application/json", &w.finish())
         }
+        ("GET", "/api/pcap") => {
+            // Bounded packet capture for the dossier — mutating-adjacent (spawns
+            // tcpdump as root), so gate it to loopback like containment.
+            if !from_loopback {
+                return respond(
+                    &mut stream,
+                    403,
+                    "application/json",
+                    "{\"ok\":false,\"error\":\"packet capture is only allowed from localhost\"}",
+                );
+            }
+            let ip = qget(query, "ip").unwrap_or_default();
+            let n = qget(query, "n")
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(200);
+            match pcap::capture(&ip, n) {
+                Ok(bytes) => respond_pcap(&mut stream, &ip, &bytes),
+                Err(e) => {
+                    let mut w = JsonWriter::with_capacity(160);
+                    w.begin_object();
+                    w.bool_field("ok", false);
+                    w.str_field("error", &e);
+                    w.end_object();
+                    respond(&mut stream, 200, "application/json", &w.finish())
+                }
+            }
+        }
         ("GET", "/api/autoresponse") => {
             let body = respond::config_json();
             respond(&mut stream, 200, "application/json", &body)
@@ -291,6 +319,23 @@ fn percent_decode(s: &str) -> String {
         i += 1;
     }
     out
+}
+
+/// A binary download response (a captured pcap). Separate from `respond`, which
+/// is text-only, because the body is raw bytes and carries a download filename.
+fn respond_pcap(stream: &mut TcpStream, ip: &str, bytes: &[u8]) -> std::io::Result<()> {
+    let head = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: application/vnd.tcpdump.pcap\r\n\
+         Content-Length: {}\r\n\
+         Content-Disposition: attachment; filename=\"{}\"\r\n\
+         Cache-Control: no-store\r\n\
+         Connection: close\r\n\r\n",
+        bytes.len(),
+        pcap::filename(ip)
+    );
+    stream.write_all(head.as_bytes())?;
+    stream.write_all(bytes)
 }
 
 fn respond(stream: &mut TcpStream, code: u16, ctype: &str, body: &str) -> std::io::Result<()> {
