@@ -99,11 +99,67 @@ watchdog transition, and — for a leak — a heap profile of the daemon under t
 same load, then fix the code. The soak is re-run from the start after a fix,
 because a leak detector's clock resets when the binary changes.
 
+## A recorded live-kernel run (nftables enforcement path)
+
+Below the 30-day production soak sits a smaller but real question the repo *can*
+answer directly: does the compiled policy actually enforce on a live kernel, on
+real packets, without faulting? This is a recorded run of exactly that — not the
+soak, a smoke-scale slice of it — kept here as evidence and as a repeatable
+procedure.
+
+**Method.** The run is scripted and repeatable — `sudo sh scripts/live-run.sh
+[window_seconds] [policy]`. In an isolated network namespace (`unshare --net`,
+so the run can never cost the host its own connectivity — the watchdog's
+governing rule applied to the test itself), `ufw-nft apply
+policies/base/default_allow.yaml` loads the compiled ruleset into the live
+kernel. Real traffic is then driven for a fixed
+window: continuous HTTP requests to a loopback listener (the accept path) and a
+stream of unsolicited SYNs to cleartext and RDP ports the policy drops (the deny
+path). The evidence is the kernel's own per-rule counters, read back through
+`ufw-nft status`.
+
+**Result (kernel 6.18.44, single host, 90 s window):**
+
+| Measure | Value |
+|---|---|
+| Packets through the `inet ufw` hook | ~689,000 |
+| Accepted (`allow-everything-else`) | 409,268 |
+| Dropped, cleartext ports (dport 23) | 140,000 |
+| Dropped, RDP ports (dport 3389) | 140,000 |
+| HTTP requests served through the accept path | 11,190 / 11,200 (99.9%) |
+| Sustained rate through the hook | ~7,660 packets/s |
+| Crashes / counter anomalies / lost enforcement | 0 |
+
+Every dropped packet landed on the rule the policy named; the accept path passed
+legitimate traffic; `ufw-nft status` read the same live counters the kernel kept.
+The apply→enforce→read cycle worked end to end on a real kernel under real load.
+
+**What this does and does not prove.** It *does* show the nftables enforcement
+path is real: the kernel evaluates real packets against the compiled policy and
+its counters are correct and stable over the window. It does **not** substitute
+for the soak or for the rest of the matrix, and deliberately is not written up as
+if it did:
+
+- It is **seconds, not 30 days** — it says nothing about a slow memory leak or
+  throughput decay, which only the long run reveals.
+- It exercises the **nftables path, not the kernel module** — the identity/DPI
+  ring-0 path (`ufw.ko`) is not loaded here (an unsigned module will not `insmod`
+  under this container's constraints), so its runtime is still unmeasured.
+- It is **loopback in one namespace**, not WAN traffic across a fleet, and
+  **Linux only** — Windows and macOS remain entirely unrun.
+
+So it moves the "zero runtime hours" needle from *zero* to *a first real
+enforcement-path run on Linux*, and no further. The production soak below stays
+exactly as open as it was.
+
 ## Status
 
-The instrument and the harness are built and tested here. The 30-day run on live
-kernels is not, and cannot be, done in this repository — it needs real hardware
-and real time. It remains the single largest item between this codebase and a
-deployable product, and it is now *measurable* rather than merely *acknowledged*:
-the difference between "we should soak this" and "here is exactly how, here is
-what to watch, and here is the instrument that reads the answer."
+The instrument and the harness are built and tested here, and a first short
+live-kernel enforcement run is now recorded above. The 30-day run on live
+kernels — across all three platforms, including the kernel module — is not, and
+cannot be, done in this repository: it needs real hardware and real time. It
+remains the single largest item between this codebase and a deployable product,
+and it is now *measurable* rather than merely *acknowledged*: the difference
+between "we should soak this" and "here is exactly how, here is what to watch,
+here is the instrument that reads the answer, and here is a first real run through
+it."
