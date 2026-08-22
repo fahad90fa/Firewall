@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { PLANS, LINUX_DOWNLOAD_URL } from "../lib/content";
+import { PLANS } from "../lib/content";
 import { Button, Label, Reveal } from "./ui";
 import SignupForm from "./SignupForm";
 import { submitLead } from "../lib/supabase";
@@ -59,7 +59,7 @@ export default function Pricing() {
 
               <div className="mt-7">
                 {p.name === "Community" ? (
-                  <Button href={LINUX_DOWNLOAD_URL} download variant="ghost" className="w-full">
+                  <Button href="#download" variant="ghost" className="w-full">
                     {p.cta}
                   </Button>
                 ) : openPlan === p.name ? (

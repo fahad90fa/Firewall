@@ -204,10 +204,10 @@ Installed and started in MONITOR mode (observes, does not block). Open the live
 console at http://127.0.0.1:8787 .
 
 Enforce the packet policy (safe: denies only never-legitimate protocols):
-    sudo firewall apply base/default_allow
+    sudo firewall apply default_allow
 
 Go to real deny-by-default once you have catalogued egress:
-    sudo firewall apply base/default_deny
+    sudo firewall apply default_deny
 
 Turn the daemon to blocking (needs the kernel module, a separate DKMS step):
     edit /etc/unified-firewall/daemon.toml -> mode = "enforce"
@@ -268,7 +268,7 @@ if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
 else
     echo "Unified Firewall installed (no systemd detected — start services manually)."
 fi
-echo "Enforce the packet policy when ready:  sudo firewall apply base/default_allow"
+echo "Enforce the packet policy when ready:  sudo firewall apply default_allow"
 exit 0
 POST
 chmod 0755 "$STAGE/DEBIAN/postinst"

@@ -1,7 +1,6 @@
 import { Button, Reveal, ShieldMark } from "./ui";
 import SignupForm from "./SignupForm";
 import { submitLead } from "../lib/supabase";
-import { LINUX_DOWNLOAD_URL } from "../lib/content";
 
 export default function Footer() {
   return (
@@ -19,7 +18,7 @@ export default function Footer() {
               threat research.
             </p>
             <div className="mx-auto mt-8 flex max-w-md flex-col items-center gap-4">
-              <Button href={LINUX_DOWNLOAD_URL} download className="px-7">
+              <Button href="#download" className="px-7">
                 Download for Linux — free
               </Button>
               <div className="w-full">

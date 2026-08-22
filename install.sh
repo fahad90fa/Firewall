@@ -150,7 +150,7 @@ else
     if "$BIN/ufw-nft" apply "$POLICY_DST/base/monitor_baseline.yaml" >/dev/null 2>&1; then
         echo "   loaded: packet-filter, rate-limiting and attack-surface layers are now live"
     else
-        echo "   (could not load rules — is nftables installed? try: sudo firewall apply base/monitor_baseline)"
+        echo "   (could not load rules — is nftables installed? try: sudo firewall apply monitor_baseline)"
     fi
     echo "   note: without systemd these do NOT survive a reboot — re-run this after booting, or add your own init hook"
 fi
@@ -179,7 +179,7 @@ echo "  sudo firewall status                the loaded rules, with live counters
 echo
 echo "when you are ready to actually BLOCK (not just observe):"
 echo "  edit $CONFIG  → set  mode = \"enforce\"   then  sudo systemctl restart ufw-daemon"
-echo "  and graduate the policy:  sudo firewall apply base/default_deny"
+echo "  and graduate the policy:  sudo firewall apply default_deny"
 echo "  (whatever you 'apply' becomes what reloads on the next boot)"
 echo
 if have_systemd; then
