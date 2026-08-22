@@ -389,6 +389,34 @@
   body.compact .card > .ch { padding: 9px 13px; }
   body.compact .kpi { padding: 10px 12px; }
 
+  /* ---- auto-response page ---------------------------------------------- */
+  .ar-master { margin-bottom: 14px; }
+  .ar-master.on { border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ok) 30%, transparent), var(--shadow-sm); }
+  .ar-toggle { display: flex; align-items: center; gap: 18px; padding: 16px 18px; }
+  .ar-toggle > div:first-child { flex: 1; min-width: 0; }
+  .ar-mt { font-size: 15px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
+  .ar-md { font-size: 12.5px; color: var(--text-dim); margin-top: 6px; line-height: 1.6; }
+  .switch.big { width: 52px; height: 30px; }
+  .switch.big .sl::before { width: 24px; height: 24px; }
+  .switch.big input:checked + .sl::before { transform: translateX(22px); }
+  .chip.plain.on2 { background: var(--ok-weak); color: var(--ok); }
+  .ar-playbooks { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+  .ar-pb { border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); box-shadow: var(--shadow-sm); padding: 14px 15px; opacity: .62; transition: opacity .15s, border-color .15s; }
+  .ar-pb.on { opacity: 1; border-left: 3px solid var(--accent); }
+  .ar-pb .pbh { display: flex; align-items: center; gap: 10px; }
+  .ar-pb .pbn { font-weight: 650; font-size: 13.5px; flex: 1; }
+  .ar-pb .pbd { font-size: 12px; color: var(--text-mute); margin: 6px 0 10px; line-height: 1.5; }
+  .ar-pb .pbrow { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 5px 0; flex-wrap: wrap; }
+  .ar-pb .pbrow label { color: var(--text-dim); min-width: 118px; }
+  .ar-pb .pbrow input[type=number] { width: 74px; height: 30px; }
+  .ar-pb .pbrow select { height: 30px; }
+  .ar-pb .pbrow .switch { width: 38px; height: 22px; }
+  .ar-pb .pbrow .switch .sl::before { width: 16px; height: 16px; }
+  .ar-pb .pbrow .switch input:checked + .sl::before { transform: translateX(16px); }
+  .ar-pb.dim-controls .pbrow:not(.always) { opacity: .5; pointer-events: none; }
+  #arRecent .crow .rl { color: var(--text-mute); font-size: 11.5px; }
+  #arRecent .crow { cursor: pointer; }
+
   /* ---- network manager -------------------------------------------------- */
   .netkpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
   @media (max-width: 900px) { .netkpis { grid-template-columns: repeat(2, 1fr); } }
@@ -729,6 +757,7 @@
     <div class="grp">Network</div>
     <a href="#network" data-nav="network"><span class="ic">&#127760;</span>Network manager<span class="badge" id="nav-network">0</span></a>
     <div class="grp">Enforcement</div>
+    <a href="#respond" data-nav="respond"><span class="ic">&#9889;</span>Auto-response<span class="badge" id="nav-respond">off</span></a>
     <a href="#exposure" data-nav="exposure"><span class="ic">&#128737;</span>Attack surface<span class="badge" id="nav-exposure">0</span></a>
     <a href="#rules" data-nav="rules"><span class="ic">&#9636;</span>Rules<span class="badge" id="nav-rules">0</span></a>
     <a href="#host" data-nav="host"><span class="ic">&#9635;</span>Host surface<span class="badge" id="nav-host">0</span></a>
@@ -845,6 +874,23 @@
           </tr></thead>
           <tbody><tr><td colspan="8" class="empty">Loading events…</td></tr></tbody>
         </table></div></div>
+      </div>
+    </section>
+
+    <section id="respond">
+      <div class="sec-h"><h2>Auto-response</h2><span class="hint">opt-in playbooks that contain an attacker automatically — off until you switch it on</span></div>
+      <div class="ar-master card" id="arMaster">
+        <div class="ar-toggle">
+          <div>
+            <div class="ar-mt"><span id="arStateChip" class="chip plain">OFF</span> Automatic containment</div>
+            <div class="ar-md">When on, a source that trips an enabled playbook below is blocked at the kernel automatically. Every block <b>auto-expires</b>, is <b>written to the audit log</b> with the playbook that fired it, and only ever targets <b>public</b> sources — a misfire can't lock out your LAN or management access. Repeat offenders get progressively longer blocks.</div>
+          </div>
+          <label class="switch big"><input type="checkbox" id="arEnabled"><span class="sl"></span></label>
+        </div>
+      </div>
+      <div class="ar-playbooks" id="arPlaybooks"></div>
+      <div class="card" style="margin-top:14px"><div class="ch"><h3>Recently auto-contained</h3><span class="hint">actions the engine has taken this session — click a row to investigate</span></div>
+        <div class="pad0" id="arRecent"><div class="empty">Nothing auto-contained yet.</div></div>
       </div>
     </section>
 
@@ -2029,6 +2075,8 @@ function updateNav(s){
   const a=(s.attacks||[]).length; const nt=$("nav-threats"); nt.textContent=a; nt.parentElement.classList.toggle("hot",a>0);
   const isrc=new Set((s.attacks||[]).map(x=>x.src)).size; const ni=$("nav-investigate");
   if(ni){ ni.textContent=isrc; ni.parentElement.classList.toggle("hot",isrc>0); }
+  const ar=s.autoresponse||{}; const na=$("nav-respond");
+  if(na){ na.textContent = ar.enabled ? (ar.recent>0?String(ar.recent):"on") : "off"; na.parentElement.classList.toggle("hot", ar.enabled && ar.recent>0); }
   $("nav-events").textContent=fmtN((s.totals||{}).events||0);
   let rc=0; for(const c of (s.chains||[])) rc+=c.rules.length; $("nav-rules").textContent=rc;
   $("nav-host").textContent=(s.listeners||[]).length+(s.connections||[]).length;
@@ -2041,7 +2089,7 @@ function updateNav(s){
 const navLinks=[...document.querySelectorAll("nav.side a[data-nav]")];
 const PAGES=navLinks.map(a=>a.getAttribute("data-nav"));
 const PAGE_TITLE={overview:"Overview",threats:"Threats",investigate:"Investigation",talkers:"Top talkers",
-  events:"Events",network:"Network",exposure:"Attack surface",rules:"Rules",host:"Host surface",
+  events:"Events",network:"Network",respond:"Auto-response",exposure:"Attack surface",rules:"Rules",host:"Host surface",
   compliance:"Compliance",settings:"Settings",diag:"Diagnostics"};
 let currentPage=null;
 function go(id){ location.hash="#"+id; }
@@ -2057,6 +2105,7 @@ function applyRoute(id){
   // hidden — redraw the active page's charts now that it can be measured.
   if(id==="threats") scheduleChart();
   if(id==="overview") scheduleSpark();
+  if(id==="respond" && typeof loadRespond==="function") loadRespond();
   if(id==="settings" && typeof refreshSettingsMeta==="function") refreshSettingsMeta();
   const g=$("gsearch"); if(g) g.value="";   // search is per-page
   applyGlobalSearch();
@@ -2084,6 +2133,7 @@ const palette = (function(){
       {ic:"▲", label:"Go to Top talkers",      key:"3", run:()=>jump("talkers")},
       {ic:"☰", label:"Go to Events",           key:"4", run:()=>jump("events")},
       {ic:"◍", label:"Go to Network manager",           run:()=>jump("network")},
+      {ic:"⚡", label:"Go to Auto-response",             run:()=>jump("respond")},
       {ic:"🛡", label:"Go to Attack surface",           run:()=>jump("exposure")},
       {ic:"▦", label:"Go to Rules",                     run:()=>jump("rules")},
       {ic:"▥", label:"Go to Host surface",              run:()=>jump("host")},
@@ -2301,6 +2351,61 @@ function initSettings(){
 // keep the About line and version fresh once state arrives
 function refreshSettingsMeta(){ if(!state) return; const v=$("setVer"); if(v) v.textContent=(state.host?("host "+state.host):""); const a=$("setAbout"); if(a) a.textContent="ufw-nft enforcement console"; }
 initSettings();
+
+/* ---- auto-response playbooks ----------------------------------------- */
+let respondCfg=null;
+async function loadRespond(){
+  try{ const r=await fetch("/api/autoresponse",{cache:"no-store"}); respondCfg=await r.json(); renderRespond(); }
+  catch(e){ /* keep last-good */ }
+}
+function renderRespond(){
+  if(!respondCfg) return;
+  const on=!!respondCfg.enabled;
+  $("arMaster").classList.toggle("on",on);
+  $("arEnabled").checked=on;
+  const chip=$("arStateChip"); chip.textContent=on?"ON":"OFF"; chip.classList.toggle("on2",on);
+  const sevs=["critical","high","medium","low"];
+  $("arPlaybooks").innerHTML=(respondCfg.rules||[]).map(r=>`
+    <div class="ar-pb ${r.enabled?"on":"dim-controls"}" data-id="${esc(r.id)}">
+      <div class="pbh"><span class="pbn">${esc(r.name)}</span>
+        <label class="switch"><input type="checkbox" class="pb-en" ${r.enabled?"checked":""} aria-label="Enable ${esc(r.name)}"><span class="sl"></span></label></div>
+      <div class="pbd">${esc(r.desc)}</div>
+      <div class="pbrow"><label>Min severity</label><select class="pb-sev">${sevs.map(s=>`<option value="${s}" ${s===r.min_severity?"selected":""}>${s}</option>`).join("")}</select></div>
+      <div class="pbrow"><label>Min denials</label><input type="number" min="1" step="1" class="pb-count" value="${r.min_count}"></div>
+      <div class="pbrow"><label>Min distinct ports</label><input type="number" min="0" step="1" class="pb-ports" value="${r.min_ports}"></div>
+      <div class="pbrow"><label>Block for (min)</label><input type="number" min="1" step="1" class="pb-ttl" value="${Math.round(r.base_ttl/60)}"></div>
+      <div class="pbrow"><label>Public sources only</label><label class="switch"><input type="checkbox" class="pb-pub" ${r.public_only?"checked":""}><span class="sl"></span></label></div>
+      <div class="pbrow"><label>Escalate repeats</label><label class="switch"><input type="checkbox" class="pb-esc" ${r.escalate?"checked":""}><span class="sl"></span></label></div>
+    </div>`).join("");
+  $("arPlaybooks").querySelectorAll(".ar-pb").forEach(card=>{
+    const id=card.dataset.id, send=(p)=>postRule(id,p);
+    card.querySelector(".pb-en").addEventListener("change",e=>send({enabled:e.target.checked?1:0}));
+    card.querySelector(".pb-sev").addEventListener("change",e=>send({min_severity:e.target.value}));
+    card.querySelector(".pb-count").addEventListener("change",e=>send({min_count:Math.max(1,+e.target.value||1)}));
+    card.querySelector(".pb-ports").addEventListener("change",e=>send({min_ports:Math.max(0,+e.target.value||0)}));
+    card.querySelector(".pb-ttl").addEventListener("change",e=>send({base_ttl:Math.max(60,(+e.target.value||1)*60)}));
+    card.querySelector(".pb-pub").addEventListener("change",e=>send({public_only:e.target.checked?1:0}));
+    card.querySelector(".pb-esc").addEventListener("change",e=>send({escalate:e.target.checked?1:0}));
+  });
+  const rc=$("arRecent"), rec=respondCfg.recent||[];
+  rc.innerHTML=rec.length
+    ? rec.map(d=>`<div class="crow" data-inv="${esc(d.src)}"><span class="mono">${esc(d.src)}</span><span class="rl">${esc(d.rule)} · ${Math.round(d.ttl/60)}m block · ${ago(d.ts)} ago</span></div>`).join("")
+    : `<div class="empty">Nothing auto-contained yet.</div>`;
+  rc.querySelectorAll("[data-inv]").forEach(row=>row.addEventListener("click",()=>investigate(row.dataset.inv)));
+}
+async function postRule(id,params){
+  const qs=Object.entries(params).map(([k,v])=>k+"="+encodeURIComponent(v)).join("&");
+  try{ const r=await fetch(`/api/autoresponse/rule?id=${encodeURIComponent(id)}&${qs}`,{method:"POST"}); const j=await r.json();
+    if(j.ok){ toast("Playbook updated"); loadRespond(); } else toast("Update failed"); }
+  catch(e){ toast("Update failed"); }
+}
+$("arEnabled").addEventListener("change",async e=>{
+  const on=e.target.checked;
+  try{ const r=await fetch(`/api/autoresponse?enabled=${on?1:0}`,{method:"POST"}); const j=await r.json();
+    if(j.ok){ toast(on?"Auto-response ENABLED":"Auto-response disabled"); if(on && "Notification" in window && Notification.permission==="default"){ try{Notification.requestPermission();}catch(_){} } loadRespond(); }
+    else { toast("Failed to change engine"); e.target.checked=!on; } }
+  catch(_){ toast("Failed to change engine"); e.target.checked=!on; }
+});
 
 /* ---- go --------------------------------------------------------------- */
 onRoute();      // show the page named in the URL hash (or Overview); honours #investigate/<ip>

@@ -17,6 +17,7 @@ mod events;
 mod exposure;
 mod network;
 mod ports;
+mod respond;
 mod ruleset;
 mod services;
 
@@ -52,7 +53,16 @@ pub fn serve(bind: &str) -> Result<(), String> {
              so the page will show errors instead of live data. Run with sudo."
         );
     }
+    if respond::is_enabled() {
+        println!("  auto-response: ENABLED — matching sources will be contained automatically.");
+    }
     println!("  stop: Ctrl-C");
+
+    // The adaptive auto-response engine: a slow background loop that classifies
+    // the live denial stream and applies opt-in containment playbooks. It reads
+    // nothing expensive while disabled, so it is free until an operator turns it
+    // on from the console.
+    std::thread::spawn(auto_response_loop);
 
     for stream in listener.incoming() {
         match stream {
@@ -77,6 +87,23 @@ fn is_root() -> bool {
     std::fs::read_to_string("/proc/self/status")
         .map(|s| s.lines().any(|l| l.starts_with("Uid:\t0\t")))
         .unwrap_or(false)
+}
+
+/// How often the auto-response engine re-evaluates the denial stream. Slow on
+/// purpose: containment is not latency-critical and the log read is bounded.
+const RESPOND_INTERVAL_SECS: u64 = 12;
+
+fn auto_response_loop() {
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(RESPOND_INTERVAL_SECS));
+        // Cheap gate: while the engine is off we do not even read the log.
+        if !respond::is_enabled() {
+            continue;
+        }
+        let (events, _errors) = events::collect(MAX_EVENTS);
+        let attacks = attacks::classify(&events);
+        respond::tick(&attacks);
+    }
 }
 
 fn handle(mut stream: TcpStream) -> std::io::Result<()> {
@@ -189,8 +216,50 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
             w.end_object();
             respond(&mut stream, 200, "application/json", &w.finish())
         }
+        ("GET", "/api/autoresponse") => {
+            let body = respond::config_json();
+            respond(&mut stream, 200, "application/json", &body)
+        }
+        ("POST", "/api/autoresponse") | ("POST", "/api/autoresponse/rule") => {
+            // Mutating: gate to loopback exactly like containment.
+            if !from_loopback {
+                return respond(
+                    &mut stream,
+                    403,
+                    "application/json",
+                    "{\"ok\":false,\"error\":\"auto-response can only be changed from localhost\"}",
+                );
+            }
+            let ok = if route == "/api/autoresponse" {
+                match qget(query, "enabled") {
+                    Some(v) => respond::set_enabled(is_truthy(&v)).is_ok(),
+                    None => false,
+                }
+            } else {
+                match qget(query, "id") {
+                    Some(id) => respond::update_rule(
+                        &id,
+                        qget(query, "enabled").map(|v| is_truthy(&v)),
+                        qget(query, "min_severity"),
+                        qget(query, "min_count").and_then(|v| v.parse().ok()),
+                        qget(query, "min_ports").and_then(|v| v.parse().ok()),
+                        qget(query, "public_only").map(|v| is_truthy(&v)),
+                        qget(query, "base_ttl").and_then(|v| v.parse().ok()),
+                        qget(query, "escalate").map(|v| is_truthy(&v)),
+                    ),
+                    None => false,
+                }
+            };
+            let body = format!("{{\"ok\":{ok}}}");
+            respond(&mut stream, 200, "application/json", &body)
+        }
         _ => respond(&mut stream, 404, "text/plain", "not found\n"),
     }
+}
+
+/// A query flag is true unless it is explicitly a false-ish value.
+fn is_truthy(v: &str) -> bool {
+    !matches!(v, "0" | "false" | "no" | "off" | "")
 }
 
 /// Read a single query-string value, percent-decoded. IPs sent by the page are
@@ -485,6 +554,12 @@ fn state_json() -> String {
         w.end_object();
     }
     w.end_array();
+
+    // Auto-response engine summary, so the console can show a live indicator.
+    w.begin_object_field("autoresponse");
+    w.bool_field("enabled", respond::is_enabled());
+    w.u64_field("recent", respond::recent_count() as u64);
+    w.end_object();
 
     // Live daemon / ufw-waf telemetry, best-effort — lights up the DPI, egress
     // anomaly, WAF, fleet and correlation layers when those processes publish it.
