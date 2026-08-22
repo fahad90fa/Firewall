@@ -88,6 +88,20 @@ The package installs `ufw-nft`, `ufwctl`, `ufw-daemon`, `ufw-waf` and the
 and starts in monitor mode (observes, never blocks). Update `LINUX_DEB` in
 `src/lib/content.ts` (version, size, sha256) when you replace the file.
 
+It embeds AppStream metadata (`/usr/share/metainfo/…metainfo.xml`), a
+machine-readable Apache-2.0 copyright, and a Debian changelog, so a software
+centre (GNOME Software, KDE Discover) shows the name, **Apache-2.0 license**, and
+**release notes** rather than "Unknown License / No details for this release".
+
+One warning a sideloaded `.deb` always shows — **"Potentially unsafe · provided
+by a third party"** — is about *provenance*, not metadata: a software centre
+trusts only packages from configured, signed apt repositories. Metadata can't
+remove it. To remove it for real, publish through a **signed apt repository** (an
+`apt-get update`-able source whose `Release` file is GPG-signed with your key),
+or ship a detached signature (`gpg --detach-sign`) with published verification
+steps. Both need *your* signing key, so they're a deliberate release step, not
+something baked into this build.
+
 ## What's real vs. illustrative
 
 The **capabilities** described are the real features of the engine in this repo
