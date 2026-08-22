@@ -53,45 +53,52 @@ three Supabase Edge Functions that act with the service role.
 
 ## Deploy
 
-> The Supabase MCP server in `.mcp.json` is **not authenticated in this
-> environment**, so migrations and functions were authored here but must be
-> deployed by you with the Supabase CLI (or dashboard).
+Project ref: **`bpcylnfjdsjouqoezbpa`** (region eu-central-1).
 
-1. **Apply the migrations**
-   ```sh
-   supabase link --project-ref bpcylnfjdsjouqoezbpa
-   supabase db push          # applies 0001_init.sql + 0002_licensing.sql
-   ```
+**Live now** (applied directly to the project):
+- ✅ Migrations `0001_init` + `0002_licensing` — `waitlist`, `leads`, `licenses`,
+  `activation_events`, `admin_users`, all with RLS on (the three licensing
+  tables have no policies → service-role only).
+- ✅ Edge functions deployed and ACTIVE: `activate` and `validate`
+  (`verify_jwt=false`), `admin` (`verify_jwt=true`).
+- ✅ First admin seeded into `admin_users`.
 
-2. **Set the function secrets** (server-only; never in the browser)
+**Two operator steps remain** — neither can be done from code, and the site is
+not fully wired until they are:
+
+1. **Set the signing secret** (server-only; never in the browser). Dashboard →
+   **Project Settings → Edge Functions → Secrets → Add**, or:
    ```sh
-   # a strong random value — this signs activation tokens
    supabase secrets set LICENSE_SIGNING_SECRET="$(openssl rand -hex 32)"
    ```
-   `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` are
-   injected into the function runtime automatically — do not set them by hand.
+   Until it is set, `activate`/`validate` sign tokens with a weak built-in
+   fallback. `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY`
+   are injected automatically — do not set those by hand.
 
-3. **Deploy the functions**
-   ```sh
-   supabase functions deploy activate
-   supabase functions deploy validate
-   supabase functions deploy admin
-   ```
+2. **Give the seeded admin a password.** The `admin_users` row authorizes the
+   email; the person still needs an Auth account to sign in. Dashboard →
+   **Authentication → Users → Add user** (tick *Auto Confirm*). Then sign in at
+   `/#admin`.
 
-4. **Seed the first admin** (SQL editor or `psql`)
-   ```sql
-   insert into public.admin_users (email) values ('you@example.com');
-   ```
-   Then create that user in **Authentication → Users** with a password. Sign in
-   at `/#admin`.
+**Point the site at the project** — copy `.env.example` to `.env.local`:
+```
+VITE_SUPABASE_URL=https://bpcylnfjdsjouqoezbpa.supabase.co
+VITE_SUPABASE_ANON_KEY=<anon public key>   # Dashboard → Project Settings → API → anon/public
+```
+Until these are set, `/#admin` shows a "Backend not configured" notice instead
+of the console.
 
-5. **Point the site at the project** — copy `.env.example` to `.env.local`:
-   ```
-   VITE_SUPABASE_URL=https://bpcylnfjdsjouqoezbpa.supabase.co
-   VITE_SUPABASE_ANON_KEY=<anon public key>
-   ```
-   Until these are set, `/#admin` shows a "Backend not configured" notice
-   instead of the console.
+### Re-deploying from source
+
+The committed `supabase/migrations/*` and `supabase/functions/*` are the source
+of truth. To reproduce or update the deployment with the CLI:
+```sh
+supabase link --project-ref bpcylnfjdsjouqoezbpa
+supabase db push                       # migrations
+supabase functions deploy activate     # + validate, admin
+```
+The `config.toml` pins `verify_jwt=false` for `activate`/`validate` and
+`verify_jwt=true` for `admin`.
 
 ## The admin console (`/#admin`)
 
