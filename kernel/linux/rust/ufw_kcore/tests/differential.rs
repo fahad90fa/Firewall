@@ -108,6 +108,58 @@ fn seeds() -> Vec<(u8, Vec<u8>)> {
     out
 }
 
+/// Replay the accumulated fuzz corpus through the differential check, so inputs
+/// the coverage-guided fuzzers actually discovered are also proven to decode
+/// identically in Rust and C — not just the synthetic seeds. The corpus files
+/// use `decoders.c`'s convention: the first byte selects the decoder
+/// (`% 5`: 1=HTTP, 2=TLS, 3=DNS, 4=SSH, 0=none) and the rest is the payload,
+/// capped at the 32 KiB reassembly budget.
+fn corpus_cases(root: &std::path::Path) -> Vec<(u8, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut total = 0usize;
+    for sub in [
+        "fuzz/corpus",
+        "fuzz/corpus-reassembly",
+        "fuzz/corpus-automaton",
+    ] {
+        let dir = root.join(sub);
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        // Bound how many we pull so `cargo test` stays quick; a campaign run can
+        // lift the cap with UFW_DIFF_CORPUS_ALL=1.
+        let cap = if std::env::var("UFW_DIFF_CORPUS_ALL").is_ok() {
+            usize::MAX
+        } else {
+            1500
+        };
+        for path in entries.flatten().map(|e| e.path()).take(cap) {
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            if bytes.is_empty() {
+                continue;
+            }
+            let l7 = match bytes[0] % 5 {
+                1 => fields::L7_HTTP,
+                2 => fields::L7_TLS,
+                3 => fields::L7_DNS,
+                4 => fields::L7_SSH,
+                _ => continue, // 0 == none: nothing to compare
+            };
+            let mut payload = bytes[1..].to_vec();
+            payload.truncate(16 * 1024);
+            total += payload.len();
+            out.push((l7, payload));
+            // Keep the encoded corpus well under the C harness input buffer.
+            if total > 4_000_000 && std::env::var("UFW_DIFF_CORPUS_ALL").is_err() {
+                return out;
+            }
+        }
+    }
+    out
+}
+
 fn mutate(seed: &[u8], rng: &mut Rng) -> Vec<u8> {
     let mut v = seed.to_vec();
     for _ in 0..1 + rng.below(3) {
@@ -163,7 +215,7 @@ const HARNESS: &str = r#"
 #include <stdlib.h>
 #include "dpi_decoders.h"
 
-static unsigned char corpus[1 << 20];
+static unsigned char corpus[24 << 20];
 static unsigned char payload[1 << 16];
 static __u32 counts[256];   /* entropy_centibits() scratch histogram */
 
@@ -235,12 +287,23 @@ fn the_rust_port_agrees_with_the_c_it_replaces() {
     }
 
     let mut cases = seeds();
+    // Real fuzzer-discovered inputs, replayed through both decoders.
+    let corpus = corpus_cases(&repo_root());
+    let corpus_n = corpus.len();
+    cases.extend(corpus);
+    // Synthetic mutation on top; the count is CI-configurable so a nightly
+    // campaign can run far more iterations than a developer's `cargo test`.
+    let iters: usize = std::env::var("UFW_DIFF_ITERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8000);
     let mut rng = Rng(0xC0DE_F00D_1234_5678);
     let base = seeds();
-    for _ in 0..8000 {
+    for _ in 0..iters {
         let (l7, seed) = &base[rng.below(base.len())];
         cases.push((*l7, mutate(seed, &mut rng)));
     }
+    eprintln!("differential: {corpus_n} corpus + {iters} mutated cases");
 
     let dir = std::env::temp_dir().join(format!("ufw-kcore-diff-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

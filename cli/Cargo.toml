@@ -25,3 +25,24 @@ path = "src/lib.rs"
 [dependencies]
 ufw-shared = { path = "../shared" }
 ufw-policy-lang = { path = "../policy-lang" }
+rustls = { version = "0.23", optional = true, default-features = false, features = ["std", "ring", "tls12"] }
+rustls-pemfile = { version = "2", optional = true }
+
+# Optional TLS / mTLS for the ufw-nft web console.
+#
+# Off by default, and that default is the point: the workspace is otherwise
+# dependency-free so `cargo build` stays offline and reproducible, and the
+# console is meant to be reached over loopback or an SSH tunnel. But the
+# alternative to a vetted TLS library is a hand-written one, and hand-rolled
+# crypto in a security product is strictly worse than no TLS at all. So TLS is a
+# build-time opt-in, matching the daemon's own `tls` feature:
+#
+#   cargo build                    zero dependencies, loopback / tunnel
+#   cargo build --features tls     console mTLS: client-certificate identity
+#                                  mapped to an RBAC role over the network
+#
+# `ufw-nft dashboard` refuses to start if --tls-* flags are given to a binary
+# built without this feature, rather than silently serving plaintext.
+[features]
+default = []
+tls = ["dep:rustls", "dep:rustls-pemfile"]

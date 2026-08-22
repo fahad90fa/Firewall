@@ -32,6 +32,7 @@
 //! this tool added and touches no other firewall rules on the host.
 
 mod dashboard;
+mod knock;
 mod state;
 
 use std::io::Write;
@@ -58,6 +59,7 @@ fn main() -> ExitCode {
         Some("check") => cmd_check(rest),
         Some("render") => cmd_render(rest),
         Some("dashboard") => cmd_dashboard(rest),
+        Some("knock") => cmd_knock(rest),
         Some("-h") | Some("--help") | None => {
             print_usage();
             return ExitCode::SUCCESS;
@@ -92,6 +94,11 @@ USAGE:
     ufw-nft check  <policy.yaml>          Compile and validate with nft, loading nothing
     ufw-nft render <policy.yaml>          Print the exact ruleset `apply` would load
     ufw-nft dashboard [addr:port]         Serve the live web console (default 127.0.0.1:8787)
+                      [--tls-cert F --tls-key F --tls-client-ca F]
+                                          Serve it over mTLS: a client certificate that chains to
+                                          --tls-client-ca is mapped to an RBAC role by its SHA-256
+                                          fingerprint (console-auth.json). Needs a --features tls build.
+    ufw-nft knock  <port> <k1> <k2>…      Hide a port behind a knock sequence (off | status)
     ufw-nft --version | --help
 
 This is real enforcement: after `apply`, the kernel filters this machine's
@@ -280,12 +287,123 @@ fn cmd_render(args: &[String]) -> Result<(), String> {
 }
 
 fn cmd_dashboard(args: &[String]) -> Result<(), String> {
-    let bind = match args.first().map(String::as_str) {
+    // The first non-flag argument is the bind address; the rest configure TLS.
+    // Each `--tls-*` flag consumes the following argument as a file path.
+    let mut bind: Option<String> = None;
+    let mut tls = dashboard::TlsOptions::default();
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        let value = |i: usize| -> Result<std::path::PathBuf, String> {
+            args.get(i + 1)
+                .map(std::path::PathBuf::from)
+                .ok_or_else(|| format!("{a} needs a file path"))
+        };
+        match a {
+            "--tls-cert" => {
+                tls.cert_path = Some(value(i)?);
+                i += 1;
+            }
+            "--tls-key" => {
+                tls.key_path = Some(value(i)?);
+                i += 1;
+            }
+            "--tls-client-ca" => {
+                tls.client_ca_path = Some(value(i)?);
+                i += 1;
+            }
+            _ if a.starts_with("--") => return Err(format!("unknown flag {a}")),
+            _ if bind.is_none() => bind = Some(a.to_string()),
+            _ => return Err(format!("unexpected argument {a}")),
+        }
+        i += 1;
+    }
+    let bind = match bind.as_deref() {
         None => "127.0.0.1:8787".to_string(),
         Some(a) if a.contains(':') => a.to_string(),
         Some(port) => format!("127.0.0.1:{port}"),
     };
-    dashboard::serve(&bind)
+    dashboard::serve(&bind, &tls)
+}
+
+/// Port knocking: `ufw-nft knock <protected> <p1> <p2> [p3 …] [--ttl secs]`,
+/// `ufw-nft knock off`, `ufw-nft knock status`.
+fn cmd_knock(args: &[String]) -> Result<(), String> {
+    match args.first().map(String::as_str) {
+        None => Err("usage: ufw-nft knock <protected-port> <knock1> <knock2> [knock3 …] [--ttl secs]\n       ufw-nft knock off | status".into()),
+        Some("off") => {
+            let out = nft_run(&["delete", "table", "inet", "ufw_knock"])?;
+            if out.status.success() {
+                println!("port knocking removed (table inet ufw_knock)");
+                Ok(())
+            } else {
+                let err = String::from_utf8_lossy(&out.stderr);
+                if is_missing_table(&err) {
+                    println!("port knocking was not active");
+                    Ok(())
+                } else {
+                    Err(with_root_hint(err.trim()))
+                }
+            }
+        }
+        Some("status") => {
+            let out = nft_run(&["list", "table", "inet", "ufw_knock"])?;
+            if out.status.success() {
+                print!("{}", String::from_utf8_lossy(&out.stdout));
+                Ok(())
+            } else {
+                println!("port knocking is not active (run: ufw-nft knock <port> <k1> <k2>)");
+                Ok(())
+            }
+        }
+        Some(_) => {
+            // Parse: <protected> <k1> <k2> [k3…] [--ttl secs]
+            let mut ttl = 3600u64;
+            let mut ports: Vec<u16> = Vec::new();
+            let mut it = args.iter();
+            while let Some(a) = it.next() {
+                if a == "--ttl" {
+                    ttl = it
+                        .next()
+                        .and_then(|s| s.parse().ok())
+                        .ok_or("--ttl needs a number of seconds")?;
+                } else {
+                    ports.push(
+                        a.parse::<u16>()
+                            .map_err(|_| format!("`{a}` is not a valid port"))?,
+                    );
+                }
+            }
+            if ports.len() < 3 {
+                return Err(
+                    "usage: ufw-nft knock <protected-port> <knock1> <knock2> [knock3 …]".into(),
+                );
+            }
+            let protected = ports[0];
+            let knocks = &ports[1..];
+            knock::validate(protected, knocks)?;
+            let prog = knock::program(protected, knocks, ttl);
+            // The kernel's own parser validates it before we load anything.
+            nft_pipe(&prog, true)
+                .map_err(|e| format!("the generated knock ruleset failed nft's own check: {e}"))?;
+            nft_pipe(&prog, false)?;
+            let seq = knocks
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join(" ");
+            println!(
+                "port knocking active: TCP {protected} is now hidden — dropped until the sequence is knocked."
+            );
+            println!("\n  knock, in order (each a TCP SYN within 10s of the last), then connect:");
+            println!("    for p in {seq}; do nmap -Pn --host-timeout 1 -p $p <this-host> >/dev/null; done");
+            println!("    # or:  for p in {seq}; do (exec 3<>/dev/tcp/<this-host>/$p) 2>/dev/null; done");
+            println!("  an admitted source keeps access for {ttl}s.");
+            println!("\n  applies-when: your policy does not itself drop {protected} (default-allow, or leave {protected} unlisted).");
+            println!("  inspect: ufw-nft knock status     remove: ufw-nft knock off");
+            Ok(())
+        }
+    }
 }
 
 fn cmd_status() -> Result<(), String> {

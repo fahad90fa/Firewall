@@ -10,18 +10,29 @@
 //! when told otherwise.
 
 mod attacks;
+mod beacon;
 mod bounded;
 mod contain;
 mod daemon;
 mod events;
 mod exposure;
+mod fleet;
+mod ids;
+mod lint;
 mod network;
+mod pcap;
 mod ports;
+mod rbac;
+mod respond;
 mod ruleset;
 mod services;
+mod threatintel;
+mod tls;
 
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
+
+pub use tls::TlsOptions;
 
 use ufw_shared::json::JsonWriter;
 
@@ -30,7 +41,19 @@ use crate::state;
 const PAGE: &str = include_str!("page.html");
 const MAX_EVENTS: usize = 2000;
 
-pub fn serve(bind: &str) -> Result<(), String> {
+pub fn serve(bind: &str, tls_opts: &TlsOptions) -> Result<(), String> {
+    // Validate the TLS request before binding, and refuse rather than serve
+    // plaintext on a port the operator believes is encrypted.
+    tls_opts.validate()?;
+    if tls_opts.is_enabled() && !tls::available() {
+        return Err(tls::unavailable_message());
+    }
+    let acceptor = if tls_opts.is_enabled() {
+        Some(tls::Acceptor::from_options(tls_opts)?)
+    } else {
+        None
+    };
+
     let listener =
         TcpListener::bind(bind).map_err(|e| format!("could not listen on {bind}: {e}"))?;
     let local = listener
@@ -38,12 +61,19 @@ pub fn serve(bind: &str) -> Result<(), String> {
         .map(|a| a.to_string())
         .unwrap_or_else(|_| bind.into());
 
-    println!("dashboard: http://{local}/");
+    let scheme = if acceptor.is_some() { "https" } else { "http" };
+    println!("dashboard: {scheme}://{local}/");
     println!("  live rules, denied packets, attack analysis, listeners; read-only.");
-    if !local.starts_with("127.") && !local.starts_with("[::1]") {
+    if acceptor.is_some() {
         println!(
-            "  \u{26a0} bound to a non-loopback address: anyone who can reach {local} can read\n     \
-             this host's firewall state. There is no authentication."
+            "  \u{1f512} TLS on, with mTLS: a client certificate that chains to your --tls-client-ca\n     \
+             is mapped to an RBAC role by its SHA-256 fingerprint (console-auth.json)."
+        );
+    } else if !local.starts_with("127.") && !local.starts_with("[::1]") {
+        println!(
+            "  \u{26a0} bound to a non-loopback address without TLS: anyone who can reach {local}\n     \
+             can read this host's firewall state, and only loopback callers may act. Consider\n     \
+             --tls-cert/--tls-key/--tls-client-ca (needs a --features tls build) or an SSH tunnel."
         );
     }
     if !is_root() {
@@ -52,13 +82,33 @@ pub fn serve(bind: &str) -> Result<(), String> {
              so the page will show errors instead of live data. Run with sudo."
         );
     }
+    if respond::is_enabled() {
+        println!("  auto-response: ENABLED — matching sources will be contained automatically.");
+    }
     println!("  stop: Ctrl-C");
+
+    // The adaptive auto-response engine: a slow background loop that classifies
+    // the live denial stream and applies opt-in containment playbooks. It reads
+    // nothing expensive while disabled, so it is free until an operator turns it
+    // on from the console.
+    std::thread::spawn(auto_response_loop);
 
     for stream in listener.incoming() {
         match stream {
             Ok(s) => {
+                let acceptor = acceptor.clone();
                 std::thread::spawn(move || {
-                    let _ = handle(s);
+                    // Wrap in TLS if configured; a handshake failure (a probe, a
+                    // client with no ClientHello) closes this one connection
+                    // without disturbing the accept loop.
+                    let stream = match &acceptor {
+                        Some(a) => match a.accept(s) {
+                            Ok(w) => w,
+                            Err(_) => return,
+                        },
+                        None => tls::Stream::Plain(s),
+                    };
+                    let _ = handle(stream);
                 });
             }
             // Back off briefly on a transient accept error (e.g. momentary fd
@@ -79,12 +129,30 @@ fn is_root() -> bool {
         .unwrap_or(false)
 }
 
-fn handle(mut stream: TcpStream) -> std::io::Result<()> {
+/// How often the auto-response engine re-evaluates the denial stream. Slow on
+/// purpose: containment is not latency-critical and the log read is bounded.
+const RESPOND_INTERVAL_SECS: u64 = 12;
+
+fn auto_response_loop() {
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(RESPOND_INTERVAL_SECS));
+        // Cheap gate: while the engine is off we do not even read the log.
+        if !respond::is_enabled() {
+            continue;
+        }
+        let (events, _errors) = events::collect(MAX_EVENTS);
+        let attacks = attacks::classify(&events);
+        respond::tick(&attacks);
+    }
+}
+
+fn handle(mut stream: tls::Stream) -> std::io::Result<()> {
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
     // A write timeout too: without one, respond()'s write_all can block forever
     // on a client that stops reading, pinning the thread and its fd.
     let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(10)));
-    // Who is calling — the containment action is gated to loopback.
+    // Who is calling — the mutating actions are gated by role, of which loopback
+    // is the weakest source.
     let from_loopback = stream
         .peer_addr()
         .map(|p| p.ip().is_loopback())
@@ -126,6 +194,13 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
         return Ok(());
     }
     let request = String::from_utf8_lossy(&head);
+    // The caller's credentials, strongest first (see rbac.rs):
+    //   * a verified client-certificate fingerprint — available only now that
+    //     the head has been read and the TLS handshake has therefore completed;
+    //   * an `Authorization: Bearer <token>` header.
+    // Either resolves to a role via console-auth.json; otherwise loopback decides.
+    let cert_fp = stream.client_fingerprint();
+    let token = rbac::bearer(&request);
     let mut line0 = request.lines().next().unwrap_or("").split_whitespace();
     let method = line0.next().unwrap_or("GET");
     let target = line0.next().unwrap_or("/");
@@ -138,6 +213,36 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
         (_, "/api/state") => {
             let body = state_json();
             respond(&mut stream, 200, "application/json", &body)
+        }
+        ("GET", "/api/whoami") => {
+            // The caller's resolved role and its capability map, so a role-aware
+            // console can disable actions this caller may not perform. Reading is
+            // open to everyone, so this endpoint is not itself gated.
+            let role = rbac::role_for(from_loopback, token.as_deref(), cert_fp.as_deref());
+            let mut w = JsonWriter::with_capacity(200);
+            w.begin_object();
+            w.str_field("role", rbac::role_name(role));
+            w.bool_field("from_loopback", from_loopback);
+            // Report the identity source so the console can show how the caller
+            // was authenticated (a pinned cert, a token, or just loopback).
+            w.opt_str_field("client_cert", cert_fp.as_deref());
+            w.begin_object_field("can");
+            for (name, action) in rbac::ALL_ACTIONS {
+                w.bool_field(name, rbac::allows(role, action));
+            }
+            w.end_object();
+            w.end_object();
+            respond(&mut stream, 200, "application/json", &w.finish())
+        }
+        ("GET", "/api/stream") => {
+            // Server-Sent Events: push a snapshot on the cadence the client asks
+            // for, until it disconnects. The write timeout set on the socket is
+            // the safety valve — a client that stops reading frees the thread.
+            let ms = qget(query, "ms")
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(3000)
+                .clamp(1000, 30000);
+            stream_sse(&mut stream, ms)
         }
         (_, "/api/network") => {
             // Discovery is passive by default; a scan is opt-in via ?scan=1.
@@ -158,14 +263,20 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
             respond(&mut stream, 200, "application/json", &w.finish())
         }
         ("POST", "/api/contain") | ("POST", "/api/release") => {
-            // The one mutating surface. Gate it to loopback callers so an
+            // A mutating surface. Authorize by role: loopback (or a responder/
+            // admin token) may contain; a bare remote caller is read-only, so an
             // exposed dashboard can never be used to inject blocks remotely.
-            if !from_loopback {
+            if !rbac::authorize(
+                from_loopback,
+                token.as_deref(),
+                cert_fp.as_deref(),
+                rbac::Action::Contain,
+            ) {
                 return respond(
                     &mut stream,
                     403,
                     "application/json",
-                    "{\"ok\":false,\"error\":\"containment is only allowed from localhost\"}",
+                    "{\"ok\":false,\"error\":\"containment requires responder or admin (loopback, or a bearer token)\"}",
                 );
             }
             let ip = qget(query, "ip").unwrap_or_default();
@@ -189,8 +300,92 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
             w.end_object();
             respond(&mut stream, 200, "application/json", &w.finish())
         }
+        (_, "/api/fleet") => {
+            let body = fleet::fleet_json();
+            respond(&mut stream, 200, "application/json", &body)
+        }
+        ("GET", "/api/pcap") => {
+            // Bounded packet capture for the dossier — mutating-adjacent (spawns
+            // tcpdump as root), so it is the most privileged action: admin only.
+            if !rbac::authorize(
+                from_loopback,
+                token.as_deref(),
+                cert_fp.as_deref(),
+                rbac::Action::Capture,
+            ) {
+                return respond(
+                    &mut stream,
+                    403,
+                    "application/json",
+                    "{\"ok\":false,\"error\":\"packet capture requires admin (loopback, or an admin bearer token)\"}",
+                );
+            }
+            let ip = qget(query, "ip").unwrap_or_default();
+            let n = qget(query, "n")
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(200);
+            match pcap::capture(&ip, n) {
+                Ok(bytes) => respond_pcap(&mut stream, &ip, &bytes),
+                Err(e) => {
+                    let mut w = JsonWriter::with_capacity(160);
+                    w.begin_object();
+                    w.bool_field("ok", false);
+                    w.str_field("error", &e);
+                    w.end_object();
+                    respond(&mut stream, 200, "application/json", &w.finish())
+                }
+            }
+        }
+        ("GET", "/api/autoresponse") => {
+            let body = respond::config_json();
+            respond(&mut stream, 200, "application/json", &body)
+        }
+        ("POST", "/api/autoresponse") | ("POST", "/api/autoresponse/rule") => {
+            // Mutating configuration: admin only (loopback or an admin token).
+            if !rbac::authorize(
+                from_loopback,
+                token.as_deref(),
+                cert_fp.as_deref(),
+                rbac::Action::Configure,
+            ) {
+                return respond(
+                    &mut stream,
+                    403,
+                    "application/json",
+                    "{\"ok\":false,\"error\":\"changing auto-response requires admin (loopback, or an admin bearer token)\"}",
+                );
+            }
+            let ok = if route == "/api/autoresponse" {
+                match qget(query, "enabled") {
+                    Some(v) => respond::set_enabled(is_truthy(&v)).is_ok(),
+                    None => false,
+                }
+            } else {
+                match qget(query, "id") {
+                    Some(id) => respond::update_rule(
+                        &id,
+                        qget(query, "enabled").map(|v| is_truthy(&v)),
+                        qget(query, "min_severity"),
+                        qget(query, "min_count").and_then(|v| v.parse().ok()),
+                        qget(query, "min_ports").and_then(|v| v.parse().ok()),
+                        qget(query, "public_only").map(|v| is_truthy(&v)),
+                        qget(query, "known_bad_only").map(|v| is_truthy(&v)),
+                        qget(query, "base_ttl").and_then(|v| v.parse().ok()),
+                        qget(query, "escalate").map(|v| is_truthy(&v)),
+                    ),
+                    None => false,
+                }
+            };
+            let body = format!("{{\"ok\":{ok}}}");
+            respond(&mut stream, 200, "application/json", &body)
+        }
         _ => respond(&mut stream, 404, "text/plain", "not found\n"),
     }
+}
+
+/// A query flag is true unless it is explicitly a false-ish value.
+fn is_truthy(v: &str) -> bool {
+    !matches!(v, "0" | "false" | "no" | "off" | "")
 }
 
 /// Read a single query-string value, percent-decoded. IPs sent by the page are
@@ -221,7 +416,45 @@ fn percent_decode(s: &str) -> String {
     out
 }
 
-fn respond(stream: &mut TcpStream, code: u16, ctype: &str, body: &str) -> std::io::Result<()> {
+/// Server-Sent Events stream of state snapshots. Runs until the client goes
+/// away (a write error), at which point the thread returns and its fd closes.
+/// `state_json()` emits a single line, so each snapshot is one SSE `data:` frame.
+fn stream_sse<W: Write>(stream: &mut W, interval_ms: u64) -> std::io::Result<()> {
+    let head = "HTTP/1.1 200 OK\r\n\
+         Content-Type: text/event-stream\r\n\
+         Cache-Control: no-store\r\n\
+         Connection: close\r\n\r\n";
+    stream.write_all(head.as_bytes())?;
+    // A comment line tells EventSource to keep the connection open immediately.
+    stream.write_all(b": ufw-nft live stream\n\n")?;
+    loop {
+        let body = state_json();
+        stream.write_all(b"data: ")?;
+        stream.write_all(body.as_bytes())?;
+        stream.write_all(b"\n\n")?;
+        stream.flush()?;
+        std::thread::sleep(std::time::Duration::from_millis(interval_ms));
+    }
+}
+
+/// A binary download response (a captured pcap). Separate from `respond`, which
+/// is text-only, because the body is raw bytes and carries a download filename.
+fn respond_pcap<W: Write>(stream: &mut W, ip: &str, bytes: &[u8]) -> std::io::Result<()> {
+    let head = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: application/vnd.tcpdump.pcap\r\n\
+         Content-Length: {}\r\n\
+         Content-Disposition: attachment; filename=\"{}\"\r\n\
+         Cache-Control: no-store\r\n\
+         Connection: close\r\n\r\n",
+        bytes.len(),
+        pcap::filename(ip)
+    );
+    stream.write_all(head.as_bytes())?;
+    stream.write_all(bytes)
+}
+
+fn respond<W: Write>(stream: &mut W, code: u16, ctype: &str, body: &str) -> std::io::Result<()> {
     let reason = match code {
         200 => "OK",
         403 => "Forbidden",
@@ -248,6 +481,7 @@ fn state_json() -> String {
     let exposure = exposure::analyze(&rs);
     let (events, mut errors) = events::collect(MAX_EVENTS);
     let attacks = attacks::classify(&events);
+    let feeds = threatintel::load();
     let (listeners, conns, svc_errors) = services::snapshot();
     errors.extend(svc_errors);
     if let Some(e) = &rs.error {
@@ -390,9 +624,24 @@ fn state_json() -> String {
         w.f64_field("first_ts", a.first_ts);
         w.f64_field("last_ts", a.last_ts);
         w.str_array_field("rules", a.rules.iter().map(|s| s.as_str()));
+        // Threat-intel: label of the first installed feed this source is on.
+        w.opt_str_field("known_bad", feeds.lookup(&a.src));
         w.end_object();
     }
     w.end_array();
+
+    // Threat-intel feed status (offline blocklists), for the console.
+    w.begin_object_field("threatintel");
+    w.u64_field("entries", feeds.entries() as u64);
+    w.begin_array_field("sources");
+    for (name, count) in &feeds.sources {
+        w.begin_object();
+        w.str_field("name", name);
+        w.u64_field("entries", *count as u64);
+        w.end_object();
+    }
+    w.end_array();
+    w.end_object();
 
     // --- exposure (inbound attack surface) --------------------------------
     w.begin_object_field("exposure");
@@ -460,22 +709,21 @@ fn state_json() -> String {
     w.u64_field("alert_packets", alert_packets);
     w.u64_field("accepted_packets", accepted_packets);
     w.u64_field("events", events.len() as u64);
-    w.u64_field(
-        "attackers",
-        attacks
-            .iter()
-            .filter(|a| a.src != "this host")
-            .map(|a| a.src.as_str())
-            .collect::<std::collections::BTreeSet<_>>()
-            .len() as u64,
-    );
+    let attacker_count = attacks
+        .iter()
+        .filter(|a| a.src != "this host")
+        .map(|a| a.src.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len() as u64;
+    w.u64_field("attackers", attacker_count);
     w.end_object();
 
     w.str_array_field("errors", errors.iter().map(|s| s.as_str()));
 
     // Sources currently contained (blocked at the kernel), with time to auto-expiry.
+    let contained_list = contain::list();
     w.begin_array_field("contained");
-    for c in contain::list() {
+    for c in &contained_list {
         w.begin_object();
         w.str_field("ip", &c.ip);
         match c.expires_secs {
@@ -485,6 +733,71 @@ fn state_json() -> String {
         w.end_object();
     }
     w.end_array();
+
+    // Policy-correctness lint findings over the loaded ruleset.
+    w.begin_array_field("lint");
+    for f in lint::analyze(&rs.chains) {
+        w.begin_object();
+        w.str_field("severity", &f.severity);
+        w.str_field("chain", &f.chain);
+        w.str_field("rule", &f.rule);
+        w.str_field("kind", &f.kind);
+        w.str_field("detail", &f.detail);
+        w.end_object();
+    }
+    w.end_array();
+
+    // Beaconing detection: regular-interval egress callbacks (possible C2).
+    w.begin_array_field("beacons");
+    for b in beacon::detect(&events) {
+        w.begin_object();
+        w.str_field("dst", &b.dst);
+        w.u64_field("samples", b.samples as u64);
+        w.u64_field("period_secs", b.period_secs as u64);
+        w.u64_field("jitter_pct", (b.cv * 100.0) as u64);
+        w.f64_field("first_ts", b.first_ts);
+        w.f64_field("last_ts", b.last_ts);
+        w.end_object();
+    }
+    w.end_array();
+
+    // IDS signature engine: match the operator's ruleset against the event
+    // stream (header-field matching; see ids.rs for the honest scope).
+    let sigs = ids::load();
+    let ids_hits = ids::evaluate(&sigs, &events);
+    w.begin_object_field("ids");
+    w.u64_field("rules_loaded", sigs.len() as u64);
+    w.begin_array_field("hits");
+    for h in &ids_hits {
+        w.begin_object();
+        w.str_field("sid", &h.sid);
+        w.str_field("msg", &h.msg);
+        w.str_field("severity", &h.severity);
+        w.str_field("action", &h.action);
+        w.u64_field("count", h.count);
+        w.str_array_field("sources", h.sources.iter().map(|s| s.as_str()));
+        w.end_object();
+    }
+    w.end_array();
+    w.end_object();
+
+    // Auto-response engine summary, so the console can show a live indicator.
+    let ar_enabled = respond::is_enabled();
+    w.begin_object_field("autoresponse");
+    w.bool_field("enabled", ar_enabled);
+    w.u64_field("recent", respond::recent_count() as u64);
+    w.end_object();
+
+    // Publish this host's own summary to the fleet directory (throttled), so a
+    // synced fleet can be aggregated on the Fleet page.
+    fleet::publish_self(
+        &hostname(),
+        rs.loaded,
+        denied_packets,
+        attacker_count,
+        contained_list.len() as u64,
+        ar_enabled,
+    );
 
     // Live daemon / ufw-waf telemetry, best-effort — lights up the DPI, egress
     // anomaly, WAF, fleet and correlation layers when those processes publish it.

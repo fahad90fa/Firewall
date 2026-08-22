@@ -277,7 +277,7 @@ mod imp {
         /// Wrap an accepted connection.
         pub fn accept(&self, stream: std::net::TcpStream) -> io::Result<MaybeTls> {
             let connection = rustls::ServerConnection::new(Arc::clone(&self.config))
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                .map_err(|e| io::Error::other(e.to_string()))?;
             Ok(MaybeTls::Tls(Box::new(rustls::StreamOwned::new(
                 connection, stream,
             ))))
@@ -357,7 +357,7 @@ mod imp {
                     )
                 })?;
             let connection = rustls::ClientConnection::new(Arc::clone(&self.config), name)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                .map_err(|e| io::Error::other(e.to_string()))?;
             Ok(MaybeTls::TlsClient(Box::new(rustls::StreamOwned::new(
                 connection, stream,
             ))))

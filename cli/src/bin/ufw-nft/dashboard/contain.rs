@@ -127,6 +127,16 @@ fn audit(line: &str) {
 /// Block `ip` for `ttl_secs` (0 = permanent). Idempotent: re-containing an
 /// already-contained address refreshes its timer.
 pub fn contain(ip: &str, ttl_secs: u64) -> Result<(), String> {
+    contain_inner(ip, ttl_secs, None)
+}
+
+/// Like [`contain`], but the audit line carries a `note` — used by the
+/// auto-response engine to record which playbook fired the block.
+pub fn contain_note(ip: &str, ttl_secs: u64, note: &str) -> Result<(), String> {
+    contain_inner(ip, ttl_secs, Some(note))
+}
+
+fn contain_inner(ip: &str, ttl_secs: u64, note: Option<&str>) -> Result<(), String> {
     let (addr, v6) = parse_ip(ip)?;
     ensure()?;
     let set = if v6 { "contained6" } else { "contained" };
@@ -146,14 +156,15 @@ pub fn contain(ip: &str, ttl_secs: u64) -> Result<(), String> {
         ],
         None,
     )?;
-    audit(&format!(
-        "contain {addr} ttl={}",
-        if ttl_secs == 0 {
-            "permanent".into()
-        } else {
-            format!("{ttl_secs}s")
-        }
-    ));
+    let ttl = if ttl_secs == 0 {
+        "permanent".into()
+    } else {
+        format!("{ttl_secs}s")
+    };
+    match note {
+        Some(n) => audit(&format!("contain {addr} ttl={ttl} {n}")),
+        None => audit(&format!("contain {addr} ttl={ttl}")),
+    }
     Ok(())
 }
 

@@ -389,6 +389,38 @@
   body.compact .card > .ch { padding: 9px 13px; }
   body.compact .kpi { padding: 10px 12px; }
 
+  /* ---- auto-response page ---------------------------------------------- */
+  .ar-master { margin-bottom: 14px; }
+  .ar-master.on { border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ok) 30%, transparent), var(--shadow-sm); }
+  .ar-toggle { display: flex; align-items: center; gap: 18px; padding: 16px 18px; }
+  .ar-toggle > div:first-child { flex: 1; min-width: 0; }
+  .ar-mt { font-size: 15px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
+  .ar-md { font-size: 12.5px; color: var(--text-dim); margin-top: 6px; line-height: 1.6; }
+  .ar-ti { font-size: 12px; color: var(--text-mute); margin-top: 8px; }
+  .ar-ti .ti-on { color: var(--warn); font-weight: 600; }
+  .ar-ti .ti-off { color: var(--text-mute); font-weight: 600; }
+  .ar-ti .mono { font-family: var(--mono); font-size: 11px; background: var(--surface-3); padding: 1px 5px; border-radius: 5px; }
+  .switch.big { width: 52px; height: 30px; }
+  .switch.big .sl::before { width: 24px; height: 24px; }
+  .switch.big input:checked + .sl::before { transform: translateX(22px); }
+  .chip.plain.on2 { background: var(--ok-weak); color: var(--ok); }
+  .ar-playbooks { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+  .ar-pb { border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); box-shadow: var(--shadow-sm); padding: 14px 15px; opacity: .62; transition: opacity .15s, border-color .15s; }
+  .ar-pb.on { opacity: 1; border-left: 3px solid var(--accent); }
+  .ar-pb .pbh { display: flex; align-items: center; gap: 10px; }
+  .ar-pb .pbn { font-weight: 650; font-size: 13.5px; flex: 1; }
+  .ar-pb .pbd { font-size: 12px; color: var(--text-mute); margin: 6px 0 10px; line-height: 1.5; }
+  .ar-pb .pbrow { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 5px 0; flex-wrap: wrap; }
+  .ar-pb .pbrow label { color: var(--text-dim); min-width: 118px; }
+  .ar-pb .pbrow input[type=number] { width: 74px; height: 30px; }
+  .ar-pb .pbrow select { height: 30px; }
+  .ar-pb .pbrow .switch { width: 38px; height: 22px; }
+  .ar-pb .pbrow .switch .sl::before { width: 16px; height: 16px; }
+  .ar-pb .pbrow .switch input:checked + .sl::before { transform: translateX(16px); }
+  .ar-pb.dim-controls .pbrow:not(.always) { opacity: .5; pointer-events: none; }
+  #arRecent .crow .rl { color: var(--text-mute); font-size: 11.5px; }
+  #arRecent .crow { cursor: pointer; }
+
   /* ---- network manager -------------------------------------------------- */
   .netkpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
   @media (max-width: 900px) { .netkpis { grid-template-columns: repeat(2, 1fr); } }
@@ -452,6 +484,14 @@
   .mini.danger, .drawer-actions .danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 38%, var(--border)); }
   .mini.danger:hover, .drawer-actions .danger:hover { background: var(--bad-weak); border-color: var(--bad); }
   .chip.held { background: var(--bad-weak); color: var(--bad); font-size: 10px; letter-spacing: .04em; }
+  .chip.kb { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 32%, transparent); font-size: 10px; letter-spacing: .04em; }
+  .lint-ok .body { color: var(--ok); font-size: 13px; }
+  .lintrow { display: flex; gap: 11px; align-items: flex-start; padding: 11px 15px; border-bottom: 1px solid var(--border); border-left: 3px solid var(--border-strong); }
+  .lintrow:last-child { border-bottom: 0; }
+  .lintrow.sev-high { border-left-color: var(--bad); } .lintrow.sev-low { border-left-color: var(--info); }
+  .lintrow .lc { font-size: 15px; margin-top: 1px; }
+  .lintrow .lt { font-size: 12.5px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .lintrow .ld { font-size: 12px; color: var(--text-dim); margin-top: 3px; line-height: 1.5; }
   .crow { display: flex; align-items: center; gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--border); }
   .crow:last-child { border-bottom: 0; }
   .crow .mono { flex: 1; }
@@ -728,7 +768,9 @@
     <a href="#events" data-nav="events"><span class="ic">&#9776;</span>Events<span class="badge" id="nav-events">0</span></a>
     <div class="grp">Network</div>
     <a href="#network" data-nav="network"><span class="ic">&#127760;</span>Network manager<span class="badge" id="nav-network">0</span></a>
+    <a href="#fleet" data-nav="fleet"><span class="ic">&#9707;</span>Fleet<span class="badge" id="nav-fleet">1</span></a>
     <div class="grp">Enforcement</div>
+    <a href="#respond" data-nav="respond"><span class="ic">&#9889;</span>Auto-response<span class="badge" id="nav-respond">off</span></a>
     <a href="#exposure" data-nav="exposure"><span class="ic">&#128737;</span>Attack surface<span class="badge" id="nav-exposure">0</span></a>
     <a href="#rules" data-nav="rules"><span class="ic">&#9636;</span>Rules<span class="badge" id="nav-rules">0</span></a>
     <a href="#host" data-nav="host"><span class="ic">&#9635;</span>Host surface<span class="badge" id="nav-host">0</span></a>
@@ -785,6 +827,8 @@
         <div class="body"><svg id="timeline" role="img" aria-label="Denied and alerted packets over time"></svg></div>
       </div>
       <div id="origins" style="margin-top:12px"></div>
+      <div id="beaconPanel" style="margin-top:12px"></div>
+      <div id="idsPanel" style="margin-top:12px"></div>
       <div class="attacks" id="attacks" style="margin-top:12px"></div>
       <div id="contained" style="margin-top:12px"></div>
     </section>
@@ -836,6 +880,8 @@
             <input id="evSearch" class="search" type="search" placeholder="filter ip · port · rule · service  ( / )" aria-label="Filter events">
             <button id="exportCsv" title="Export filtered events as CSV">CSV</button>
             <button id="exportJson" title="Export filtered events as JSON (e)">JSON</button>
+            <button id="exportNdjson" title="Export as newline-delimited JSON (SIEM ingest)">NDJSON</button>
+            <button id="exportCef" title="Export as ArcSight CEF (SIEM)">CEF</button>
           </div>
         </div>
         <div class="pad0"><div class="scroll-y tbl-wrap"><table id="events">
@@ -848,6 +894,24 @@
       </div>
     </section>
 
+    <section id="respond">
+      <div class="sec-h"><h2>Auto-response</h2><span class="hint">opt-in playbooks that contain an attacker automatically — off until you switch it on</span></div>
+      <div class="ar-master card" id="arMaster">
+        <div class="ar-toggle">
+          <div>
+            <div class="ar-mt"><span id="arStateChip" class="chip plain">OFF</span> Automatic containment</div>
+            <div class="ar-md">When on, a source that trips an enabled playbook below is blocked at the kernel automatically. Every block <b>auto-expires</b>, is <b>written to the audit log</b> with the playbook that fired it, and only ever targets <b>public</b> sources — a misfire can't lock out your LAN or management access. Repeat offenders get progressively longer blocks.</div>
+            <div class="ar-ti" id="arThreatIntel"></div>
+          </div>
+          <label class="switch big"><input type="checkbox" id="arEnabled"><span class="sl"></span></label>
+        </div>
+      </div>
+      <div class="ar-playbooks" id="arPlaybooks"></div>
+      <div class="card" style="margin-top:14px"><div class="ch"><h3>Recently auto-contained</h3><span class="hint">actions the engine has taken this session — click a row to investigate</span></div>
+        <div class="pad0" id="arRecent"><div class="empty">Nothing auto-contained yet.</div></div>
+      </div>
+    </section>
+
     <section id="exposure">
       <div class="sec-h"><h2>Attack surface</h2><span class="hint" id="expHint">what this host accepts inbound, and to whom — derived from the live ruleset</span></div>
       <div class="exp-sum" id="expSum"></div>
@@ -855,6 +919,7 @@
     </section>
 
     <section id="rules">
+      <div id="ruleHealth" style="margin-bottom:14px"></div>
       <div class="card">
         <div class="ch"><h3>Enforced rules</h3><span class="count" id="ruleCount"></span>
           <div class="tools"><button id="copyRules" title="Copy the ruleset as text">Copy ruleset</button></div>
@@ -916,6 +981,23 @@
         </table></div></div>
       </div>
       <div id="netNotes" class="netnote" style="margin-top:10px;display:none"></div>
+    </section>
+
+    <section id="fleet">
+      <div class="sec-h"><h2>Fleet</h2><span class="hint">every host publishing to the shared fleet directory — aggregated, no central server</span></div>
+      <div class="ribbon" id="fleetHint" style="margin-bottom:14px">
+        <span class="rp" style="background:var(--info)"></span>
+        <div class="rb"><div class="rt" style="color:var(--info)">How the fleet is assembled</div>
+        <div class="rd">Each host's console writes a small summary to <span class="mono">/var/lib/unified-firewall/fleet/&lt;host&gt;.json</span>. Sync that directory across your hosts (rsync, a shared mount, or the daemon's fleet plane) and they all appear here. This host always registers itself. A host that stops updating for over two minutes is shown <b>stale</b>. <b>Integrity:</b> drop a shared secret in <span class="mono">/etc/unified-firewall/fleet-key</span> on every host and each summary is authenticated with HMAC-SHA256 — a forged or altered row shows <b>TAMPERED</b> and is excluded from the totals. A shared key proves "a fleet member wrote this", not which one; per-host signatures need the <span class="mono">tls</span> build.</div></div>
+      </div>
+      <div class="netkpis" id="fleetKpis"></div>
+      <div class="card" style="margin-top:14px">
+        <div class="ch"><h3>Hosts</h3><span class="count" id="fleetCount"></span></div>
+        <div class="pad0"><div class="scroll-y tbl-wrap"><table id="fleetTable">
+          <thead><tr><th>Host</th><th>Status</th><th>Integrity</th><th>Enforcing</th><th class="r">Attackers</th><th class="r">Denied</th><th class="r">Contained</th><th>Auto-response</th><th>Last seen</th></tr></thead>
+          <tbody><tr><td colspan="9" class="empty">Loading fleet…</td></tr></tbody>
+        </table></div></div>
+      </div>
     </section>
 
     <section id="settings">
@@ -1060,22 +1142,26 @@ function changed(k,v){ const s=JSON.stringify(v); if(_sig[k]===s) return false; 
 
 let state=null, rangeMin=store.get("range",2880), sparkHist=[], prevEventCount=null;
 
+// Process one snapshot — shared by the poller and the SSE stream so both paths
+// behave identically (throughput history, alerts, new-event toast, render).
+function applySnapshot(s, live){
+  const t=s.totals||{}; const last=sparkHist[sparkHist.length-1];
+  const dd = last ? Math.max(0, (t.denied_packets||0)-last.denied) : 0;
+  sparkHist.push({ t:s.generated_at||Date.now()/1000, denied:t.denied_packets||0, dd });
+  if(last) maybeAlert(dd);
+  if (sparkHist.length>120) sparkHist.shift();
+  if (prevEventCount!==null && (t.events||0) > prevEventCount) toastNew((t.events||0)-prevEventCount);
+  prevEventCount = t.events||0;
+  state=s; lastOk=true; failCount=0; render();
+  setLive(live||(intervalMs?"live":"paused"), live?"live · stream":undefined);
+}
 async function refresh(){
   if (busy) return; busy=true; progressStart();
   try {
     const ctl=new AbortController(); const to=setTimeout(()=>ctl.abort(),8000);
     const r=await fetch("/api/state",{cache:"no-store",signal:ctl.signal}); clearTimeout(to);
     const s=await r.json();
-    /* accumulate throughput history from totals */
-    const t=s.totals||{}; const last=sparkHist[sparkHist.length-1];
-    const dd = last ? Math.max(0, (t.denied_packets||0)-last.denied) : 0;
-    sparkHist.push({ t:s.generated_at||Date.now()/1000, denied:t.denied_packets||0, dd });
-    if(last) maybeAlert(dd);
-    if (sparkHist.length>120) sparkHist.shift();
-    /* new-event detection */
-    if (prevEventCount!==null && (t.events||0) > prevEventCount) toastNew((t.events||0)-prevEventCount);
-    prevEventCount = t.events||0;
-    state=s; lastOk=true; failCount=0; render(); setLive(intervalMs?"live":"paused");
+    applySnapshot(s);
   } catch(e){ lastOk=false; failCount++;
     // Invalidate the ribbon memo so the next good poll rebuilds it — the catch
     // writes the ribbon directly, bypassing renderRibbon's changed() guard.
@@ -1116,7 +1202,21 @@ function applyIntervalMs(v){
   intervalMs = +v||0; store.set("interval",intervalMs);
   const h=$("interval"); if(h) h.value=String(intervalMs);
   const g=$("setInterval"); if(g) g.value=String(intervalMs);
-  arm(); if(intervalMs) refresh();
+  if(intervalMs>0){ startSSE(); arm(); refresh(); }   // startSSE clears the poll timer once the stream is live
+  else { stopSSE(); arm(); }                           // paused: no stream, no polling
+}
+/* ---- live stream (Server-Sent Events), with graceful fallback --------- */
+let sse=null;
+function stopSSE(){ if(sse){ try{ sse.close(); }catch(_){} sse=null; } }
+function startSSE(){
+  if(!window.EventSource || intervalMs<=0) return;
+  stopSSE();
+  try{
+    sse=new EventSource("/api/stream?ms="+intervalMs);
+    sse.onopen=()=>{ if(timer){ clearInterval(timer); timer=null; } };   // stream authoritative → stop polling
+    sse.onmessage=(e)=>{ let s; try{ s=JSON.parse(e.data); }catch(_){ return; } busy=false; applySnapshot(s,"live"); };
+    sse.onerror=()=>{ stopSSE(); if(intervalMs>0){ arm(); } };            // dropped → resume polling
+  }catch(_){ arm(); }
 }
 function hideAlert(){ const b=$("alertBar"); if(b) b.style.display="none"; }
 /* Raise an alert when denials in one interval cross the operator's threshold.
@@ -1146,6 +1246,7 @@ function render(){
   if (changed("talkers",[s.events,s.chains])) renderTalkers(s);
   renderEvents();
   if (changed("rules",s.chains)) renderRules(s.chains||[]);
+  if (changed("lint",s.lint||[])) renderLint(s.lint||[]);
   if (changed("host",[s.listeners,s.connections])) renderHost(s);
   if (changed("exposure",s.exposure)) renderExposure(s);
   if (changed("compliance",[s.enforced,s.policy,s.exposure,(s.chains||[]).map(c=>c.rules.map(r=>[r.rate_limit,r.log_kind])),(s.events||[]).length>0])) renderCompliance(s);
@@ -1153,6 +1254,8 @@ function render(){
   updateNav(s);
   scanForAlerts(s);
   if(changed("origins",(s.attacks||[]).map(a=>[a.src,a.severity,a.count]))) renderOrigins(s);
+  if(changed("ids",s.ids||{})) renderIds(s.ids||{});
+  if(changed("beacons",s.beacons||[])) renderBeacons(s.beacons||[]);
   applyGlobalSearch();
 }
 
@@ -1376,6 +1479,7 @@ function renderAttacks(attacks){
     <div class="attack sev-${esc(a.severity)}" data-src="${esc(a.src)}" tabindex="0" role="button" aria-label="Filter events for ${esc(a.src)}">
       <div class="ah"><span class="chip sev-${esc(a.severity)}">${SEV_ICON[a.severity]||""} ${esc((a.severity||"").toUpperCase())}</span><span class="at">${esc(a.title)}</span>
         ${held?`<span class="chip held" title="blocked at the kernel">CONTAINED</span>`:""}
+        ${a.known_bad?`<span class="chip kb" title="on threat-intel feed: ${esc(a.known_bad)}">⚑ KNOWN-BAD</span>`:""}
         <button class="mini" data-investigate="${esc(a.src)}" aria-label="Investigate ${esc(a.src)}">Investigate ↗</button>
         ${real?(held?`<button class="mini" data-release="${esc(a.src)}">Release</button>`:`<button class="mini danger" data-contain="${esc(a.src)}" aria-label="Contain ${esc(a.src)}">⦸ Contain</button>`):""}</div>
       <div class="ad">${esc(a.detail)}</div>
@@ -1591,7 +1695,8 @@ function dossierData(src){
     {k:"Flagged for review", on: alerted>0},
   ];
   const recent=evs.slice().sort((a,b)=>b.ts-a.ts).slice(0,20);
-  return { src, atks, evs, g, first, last, denied, alerted, ports, rules, sev, stages, recent,
+  const knownBad=(atks.find(a=>a.known_bad)||{}).known_bad||null;
+  return { src, atks, evs, g, first, last, denied, alerted, ports, rules, sev, stages, recent, knownBad,
            held:containedSet().has(src), real:!!src && src!=="this host" };
 }
 
@@ -1622,7 +1727,7 @@ function renderInvSources(){
 function renderDossier(src){
   const d=dossierData(src); if(!d) return;
   $("invEmpty").hidden=true; const dos=$("invDossier"); dos.hidden=false;
-  const {g,first,last,denied,alerted,ports,rules,sev,stages,recent,held,real,atks,evs}=d;
+  const {g,first,last,denied,alerted,ports,rules,sev,stages,recent,held,real,atks,evs,knownBad}=d;
   const seen=evs.length||atks.reduce((n,a)=>n+(a.count||0),0);
   const ptr = real ? (invPtrCache[src]||"looking up…") : "—";
   dos.innerHTML=`
@@ -1632,6 +1737,7 @@ function renderDossier(src){
         <span class="ipname">${esc(src)}</span>
         <span class="geo ${esc(g.scope)}">${SCOPE_ICON[g.scope]||""} ${esc(g.label)}</span>
         ${held?'<span class="chip held">CONTAINED</span>':''}
+        ${knownBad?`<span class="chip kb" title="threat-intel feed">⚑ KNOWN-BAD · ${esc(knownBad)}</span>`:''}
       </div>
       <div class="sum">${seen?`${fmtN(seen)} logged packet(s) from this source — ${fmtN(denied)} denied, ${fmtN(alerted)} alerted${atks.length?` — ${atks.map(a=>esc(a.title)).join(", ")}`:""}.`:"No activity from this source in the current window."}</div>
       <div class="ptr"><b>Reverse DNS:</b> <span id="invPtr">${esc(ptr)}</span></div>
@@ -1662,6 +1768,7 @@ function renderDossier(src){
       <button data-act="src">Filter event stream</button>
       <button data-copy="${esc(src)}">Copy IP</button>
       ${real?(held?`<button data-act="release" class="danger">Release block</button>`:`<button data-act="contain" class="danger">⦸ Contain (block 1h)</button>`):""}
+      ${real?`<button data-act="pcap" title="Capture up to 200 packets to/from this source">⤓ Capture packets</button>`:""}
       ${real?`<button data-act="report">Export abuse report</button>`:""}
       ${real?`<button data-act="copydossier">Copy dossier</button>`:""}
     </div>`;
@@ -1670,6 +1777,22 @@ function renderDossier(src){
   const rbtn=dos.querySelector('[data-act="release"]'); if(rbtn) rbtn.onclick=()=>releaseIp(src);
   const rep=dos.querySelector('[data-act="report"]'); if(rep) rep.onclick=()=>exportAbuseReport(src);
   const cpd=dos.querySelector('[data-act="copydossier"]'); if(cpd) cpd.onclick=()=>copy(abuseReportText(src));
+  const pc=dos.querySelector('[data-act="pcap"]'); if(pc) pc.onclick=()=>capturePcap(src,pc);
+}
+// On-demand packet capture: fetch the bounded pcap and hand it to the browser
+// as a download. A JSON body instead of a pcap means it failed — surface why.
+function capturePcap(src,btn){
+  if(btn){ btn.disabled=true; btn.classList.add("busy"); btn.textContent="Capturing… (≤12s)"; }
+  const done=()=>{ if(btn){ btn.disabled=false; btn.classList.remove("busy"); btn.textContent="⤓ Capture packets"; } };
+  fetch("/api/pcap?ip="+encodeURIComponent(src)+"&n=200").then(async r=>{
+    const ct=r.headers.get("content-type")||"";
+    if(ct.indexOf("tcpdump")!==-1){
+      const b=await r.blob(); const url=URL.createObjectURL(b); const a=document.createElement("a");
+      a.href=url; a.download="ufw-capture-"+src.replace(/[^\w.]/g,"_")+".pcap"; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),1000); toast("Capture downloaded — open it in Wireshark");
+    } else { const j=await r.json().catch(()=>({})); toast("Capture failed: "+(j.error||"unknown error")); }
+    done();
+  }).catch(e=>{ toast("Capture failed: "+(e&&e.message||e)); done(); });
 }
 
 // PTR lookup — bounded to the system resolver on the server; cached per src.
@@ -1763,6 +1886,21 @@ qs('#rules th[data-sort="bytes"]').addEventListener("click",()=>toggleRuleSort("
 function toggleRuleSort(k){ if(ruleSort===k) ruleDesc=!ruleDesc; else { ruleSort=k; ruleDesc=true; }
   $("ar-packets").textContent=ruleSort==="packets"?(ruleDesc?"▼":"▲"):""; $("ar-bytes").textContent=ruleSort==="bytes"?(ruleDesc?"▼":"▲"):"";
   if(state) renderRules(state.chains||[]); }
+/* ---- rule health (policy linter) ------------------------------------- */
+const LINT_ICON={shadowed:"⛔",unreachable:"⛔",duplicate:"⧉","no-hits":"○"};
+function renderLint(findings){
+  const el=$("ruleHealth"); if(!el) return;
+  if(!findings.length){ el.innerHTML=`<div class="card lint-ok"><div class="body">✓ <b>Rule health: clean.</b> No shadowed, unreachable, duplicate or idle rules found in the loaded ruleset.</div></div>`; return; }
+  const warns=findings.filter(f=>f.severity==="warn").length;
+  el.innerHTML=`<div class="card"><div class="ch"><h3>Rule health</h3><span class="count">${warns?`${warns} problem(s)`:""}${warns&&findings.length>warns?" · ":""}${findings.length>warns?`${findings.length-warns} note(s)`:""}</span>
+    <span class="hint">static analysis of the loaded ruleset — sound, conservative findings only</span></div>
+    <div class="pad0">`+findings.map(f=>`
+      <div class="lintrow sev-${f.severity==="warn"?"high":"low"}">
+        <span class="lc">${LINT_ICON[f.kind]||"•"}</span>
+        <div><div class="lt"><span class="chip ${f.severity==="warn"?"deny":"plain"}">${esc(f.kind.toUpperCase())}</span> <span class="mono">${esc(f.chain)} / ${esc(f.rule)}</span></div>
+        <div class="ld">${esc(f.detail)}</div></div>
+      </div>`).join("")+`</div></div>`;
+}
 function renderRules(chains){
   let total=0,maxHits=1;
   for(const c of chains) for(const r of c.rules) maxHits=Math.max(maxHits,r.packets||0);
@@ -2020,6 +2158,24 @@ $("exportCsv").onclick=()=>{ const cols=["ts","action","dir","iface","src","spt"
   const csv=[cols.join(",")].concat(filteredEvents.map(e=>cols.map(c=>{ let v=e[c]; if(c==="ts")v=new Date((e.ts||0)*1000).toISOString(); v=v==null?"":String(v);
     return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; }).join(","))).join("\n");
   download(`ufw-events-${stamp()}.csv`, csv, "text/csv"); toast(`Exported ${filteredEvents.length} events (CSV)`); };
+// SIEM formats. NDJSON = one record per line (the common ingest shape). CEF =
+// ArcSight Common Event Format, understood by most SIEMs out of the box.
+$("exportNdjson").onclick=()=>{ const host=(state&&state.host)||"unknown";
+  const nd=filteredEvents.map(e=>JSON.stringify({host,ts:new Date((e.ts||0)*1000).toISOString(),
+    action:e.action,dir:e.dir,iface:e.iface,src:e.src,spt:e.spt,dst:e.dst,dpt:e.dpt,proto:e.proto,service:e.service,rule:e.rule,reason:e.why})).join("\n");
+  download(`ufw-events-${stamp()}.ndjson`, nd, "application/x-ndjson"); toast(`Exported ${filteredEvents.length} events (NDJSON)`); };
+$("exportCef").onclick=()=>{ const host=(state&&state.host)||"unknown";
+  const cefSev=a=>a==="deny"?7:5;
+  const ex=(k,v)=>v==null||v===""?"":` ${k}=${String(v).replace(/([\\=|])/g,"\\$1").replace(/\n/g," ")}`;
+  const lines=filteredEvents.map(e=>{
+    const name=e.action==="deny"?"Denied packet":"Alerted packet";
+    const sig=(e.rule||e.action||"event").replace(/\|/g,"/");
+    return `CEF:0|UnifiedFirewall|ufw-nft|1|${sig}|${name}|${cefSev(e.action)}|`+
+      `dvchost=${host}`+ex("rt",new Date((e.ts||0)*1000).toISOString())+ex("src",e.src)+ex("spt",e.spt)+
+      ex("dst",e.dst)+ex("dpt",e.dpt)+ex("proto",e.proto)+ex("app",e.service)+ex("deviceDirection",e.dir==="in"?0:1)+
+      ex("act",e.action)+ex("cs1Label","rule")+ex("cs1",e.rule)+ex("msg",e.why);
+  }).join("\n");
+  download(`ufw-events-${stamp()}.cef`, lines, "text/plain"); toast(`Exported ${filteredEvents.length} events (CEF)`); };
 function copy(text){ if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(()=>toast("Copied"),()=>fallbackCopy(text)); } else fallbackCopy(text); }
 function fallbackCopy(text){ const ta=document.createElement("textarea"); ta.value=text; ta.style.position="fixed"; ta.style.opacity="0"; document.body.appendChild(ta); ta.select();
   try{ document.execCommand("copy"); toast("Copied"); }catch{ toast("Copy failed"); } ta.remove(); }
@@ -2029,6 +2185,8 @@ function updateNav(s){
   const a=(s.attacks||[]).length; const nt=$("nav-threats"); nt.textContent=a; nt.parentElement.classList.toggle("hot",a>0);
   const isrc=new Set((s.attacks||[]).map(x=>x.src)).size; const ni=$("nav-investigate");
   if(ni){ ni.textContent=isrc; ni.parentElement.classList.toggle("hot",isrc>0); }
+  const ar=s.autoresponse||{}; const na=$("nav-respond");
+  if(na){ na.textContent = ar.enabled ? (ar.recent>0?String(ar.recent):"on") : "off"; na.parentElement.classList.toggle("hot", ar.enabled && ar.recent>0); }
   $("nav-events").textContent=fmtN((s.totals||{}).events||0);
   let rc=0; for(const c of (s.chains||[])) rc+=c.rules.length; $("nav-rules").textContent=rc;
   $("nav-host").textContent=(s.listeners||[]).length+(s.connections||[]).length;
@@ -2041,7 +2199,7 @@ function updateNav(s){
 const navLinks=[...document.querySelectorAll("nav.side a[data-nav]")];
 const PAGES=navLinks.map(a=>a.getAttribute("data-nav"));
 const PAGE_TITLE={overview:"Overview",threats:"Threats",investigate:"Investigation",talkers:"Top talkers",
-  events:"Events",network:"Network",exposure:"Attack surface",rules:"Rules",host:"Host surface",
+  events:"Events",network:"Network",fleet:"Fleet",respond:"Auto-response",exposure:"Attack surface",rules:"Rules",host:"Host surface",
   compliance:"Compliance",settings:"Settings",diag:"Diagnostics"};
 let currentPage=null;
 function go(id){ location.hash="#"+id; }
@@ -2057,6 +2215,8 @@ function applyRoute(id){
   // hidden — redraw the active page's charts now that it can be measured.
   if(id==="threats") scheduleChart();
   if(id==="overview") scheduleSpark();
+  if(id==="respond" && typeof loadRespond==="function") loadRespond();
+  if(id==="fleet" && typeof loadFleet==="function") loadFleet();
   if(id==="settings" && typeof refreshSettingsMeta==="function") refreshSettingsMeta();
   const g=$("gsearch"); if(g) g.value="";   // search is per-page
   applyGlobalSearch();
@@ -2084,6 +2244,8 @@ const palette = (function(){
       {ic:"▲", label:"Go to Top talkers",      key:"3", run:()=>jump("talkers")},
       {ic:"☰", label:"Go to Events",           key:"4", run:()=>jump("events")},
       {ic:"◍", label:"Go to Network manager",           run:()=>jump("network")},
+      {ic:"◔", label:"Go to Fleet",                     run:()=>jump("fleet")},
+      {ic:"⚡", label:"Go to Auto-response",             run:()=>jump("respond")},
       {ic:"🛡", label:"Go to Attack surface",           run:()=>jump("exposure")},
       {ic:"▦", label:"Go to Rules",                     run:()=>jump("rules")},
       {ic:"▥", label:"Go to Host surface",              run:()=>jump("host")},
@@ -2238,6 +2400,41 @@ $("bell").onclick=()=>toggleNtf();
 $("ntfClear").onclick=()=>{ ntf.items=[]; ntf.unread=0; renderNtf(); };
 document.addEventListener("click",e=>{ const p=$("ntfPanel"); if(p&&!p.hidden&&!p.contains(e.target)&&e.target!==$("bell")&&!$("bell").contains(e.target)) closeNtf(); });
 
+/* ---- beaconing detection (regular-interval egress) -------------------- */
+function renderBeacons(beacons){
+  const el=$("beaconPanel"); if(!el) return;
+  if(!beacons.length){ el.innerHTML=""; return; }
+  const per=(s)=>s<90?`${s}s`:s<5400?`${Math.round(s/60)}m`:`${(s/3600).toFixed(1)}h`;
+  el.innerHTML=`<div class="card"><div class="ch"><h3>Beaconing suspects</h3>
+    <span class="count">${beacons.length} destination(s)</span>
+    <span class="hint">regular-interval egress — the rhythm of a C2 callback, from logged outbound traffic</span></div>
+    <div class="pad0">`+beacons.map(b=>`
+      <div class="lintrow sev-high" data-inv="${esc(b.dst)}" style="cursor:pointer">
+        <span class="lc">⟳</span>
+        <div><div class="lt"><span class="chip sev-high">BEACON</span> <span class="mono">${esc(b.dst)}</span></div>
+        <div class="ld">${fmtN(b.samples)} callbacks, every <b>${per(b.period_secs)}</b> (jitter ${b.jitter_pct}%) · ${ago(b.last_ts)} ago</div></div>
+      </div>`).join("")+`</div></div>`;
+  el.querySelectorAll("[data-inv]").forEach(r=>r.addEventListener("click",()=>investigate(r.dataset.inv)));
+}
+
+/* ---- IDS/IPS signature engine hits ------------------------------------ */
+function renderIds(ids){
+  const el=$("idsPanel"); if(!el) return;
+  const loaded=ids.rules_loaded||0, hits=ids.hits||[];
+  if(!loaded){ el.innerHTML=""; return; }   // no signatures installed → no panel
+  el.innerHTML=`<div class="card"><div class="ch"><h3>IDS signatures</h3>
+    <span class="count">${fmtN(loaded)} rule(s) loaded${hits.length?` · ${hits.length} firing`:" · none firing"}</span>
+    <span class="hint">custom Suricata-style rules matched against the event stream — drop rules in /etc/unified-firewall/ids-rules/</span></div>`+
+    (hits.length?`<div class="pad0">`+hits.map(h=>`
+      <div class="lintrow sev-${h.severity==="critical"||h.severity==="high"?"high":"low"}">
+        <span class="lc">${h.action==="drop"||h.action==="reject"?"⛔":"⚑"}</span>
+        <div><div class="lt"><span class="chip sev-${esc(h.severity)}">${esc((h.severity||"").toUpperCase())}</span> <b>${esc(h.msg)}</b> <span class="muted mono">sid:${esc(h.sid)}</span></div>
+        <div class="ld">${fmtN(h.count)} match(es)${h.sources&&h.sources.length?` from ${h.sources.slice(0,6).map(esc).join(", ")}${h.sources.length>6?"…":""}`:""}</div></div>
+        <span class="chip plain" style="margin-left:auto">${esc(h.action)}</span>
+      </div>`).join("")+`</div>`
+    :`<div class="body muted" style="font-size:12.5px">No loaded signature has matched in the current window.</div>`)+`</div>`;
+}
+
 /* ---- threat origins: where the traffic comes from, from our data only - */
 function renderOrigins(s){
   const el=$("origins"); if(!el) return;
@@ -2302,10 +2499,114 @@ function initSettings(){
 function refreshSettingsMeta(){ if(!state) return; const v=$("setVer"); if(v) v.textContent=(state.host?("host "+state.host):""); const a=$("setAbout"); if(a) a.textContent="ufw-nft enforcement console"; }
 initSettings();
 
+/* ---- auto-response playbooks ----------------------------------------- */
+let respondCfg=null;
+async function loadRespond(){
+  try{ const r=await fetch("/api/autoresponse",{cache:"no-store"}); respondCfg=await r.json(); renderRespond(); }
+  catch(e){ /* keep last-good */ }
+}
+function renderRespond(){
+  if(!respondCfg) return;
+  const on=!!respondCfg.enabled;
+  $("arMaster").classList.toggle("on",on);
+  $("arEnabled").checked=on;
+  const chip=$("arStateChip"); chip.textContent=on?"ON":"OFF"; chip.classList.toggle("on2",on);
+  const ti=(state&&state.threatintel)||{entries:0,sources:[]}, tel=$("arThreatIntel");
+  if(tel){ tel.innerHTML = ti.entries>0
+    ? `<span class="ti-on">⚑ Threat-intel: ${fmtN(ti.entries)} blocklisted range(s) from ${(ti.sources||[]).length} feed(s)</span> — the “Known-bad source” playbook contains any hit.`
+    : `<span class="ti-off">No threat-intel feeds installed.</span> Drop IP/CIDR lists in <span class="mono">/etc/unified-firewall/threat-intel/</span> to enable the “Known-bad source” playbook.`; }
+  const sevs=["critical","high","medium","low"];
+  $("arPlaybooks").innerHTML=(respondCfg.rules||[]).map(r=>`
+    <div class="ar-pb ${r.enabled?"on":"dim-controls"}" data-id="${esc(r.id)}">
+      <div class="pbh"><span class="pbn">${esc(r.name)}</span>
+        <label class="switch"><input type="checkbox" class="pb-en" ${r.enabled?"checked":""} aria-label="Enable ${esc(r.name)}"><span class="sl"></span></label></div>
+      <div class="pbd">${esc(r.desc)}</div>
+      <div class="pbrow"><label>Min severity</label><select class="pb-sev">${sevs.map(s=>`<option value="${s}" ${s===r.min_severity?"selected":""}>${s}</option>`).join("")}</select></div>
+      <div class="pbrow"><label>Min denials</label><input type="number" min="1" step="1" class="pb-count" value="${r.min_count}"></div>
+      <div class="pbrow"><label>Min distinct ports</label><input type="number" min="0" step="1" class="pb-ports" value="${r.min_ports}"></div>
+      <div class="pbrow"><label>Block for (min)</label><input type="number" min="1" step="1" class="pb-ttl" value="${Math.round(r.base_ttl/60)}"></div>
+      <div class="pbrow"><label>Public sources only</label><label class="switch"><input type="checkbox" class="pb-pub" ${r.public_only?"checked":""}><span class="sl"></span></label></div>
+      <div class="pbrow"><label>Known-bad only</label><label class="switch"><input type="checkbox" class="pb-kb" ${r.known_bad_only?"checked":""}><span class="sl"></span></label></div>
+      <div class="pbrow"><label>Escalate repeats</label><label class="switch"><input type="checkbox" class="pb-esc" ${r.escalate?"checked":""}><span class="sl"></span></label></div>
+    </div>`).join("");
+  $("arPlaybooks").querySelectorAll(".ar-pb").forEach(card=>{
+    const id=card.dataset.id, send=(p)=>postRule(id,p);
+    card.querySelector(".pb-en").addEventListener("change",e=>send({enabled:e.target.checked?1:0}));
+    card.querySelector(".pb-sev").addEventListener("change",e=>send({min_severity:e.target.value}));
+    card.querySelector(".pb-count").addEventListener("change",e=>send({min_count:Math.max(1,+e.target.value||1)}));
+    card.querySelector(".pb-ports").addEventListener("change",e=>send({min_ports:Math.max(0,+e.target.value||0)}));
+    card.querySelector(".pb-ttl").addEventListener("change",e=>send({base_ttl:Math.max(60,(+e.target.value||1)*60)}));
+    card.querySelector(".pb-pub").addEventListener("change",e=>send({public_only:e.target.checked?1:0}));
+    card.querySelector(".pb-kb").addEventListener("change",e=>send({known_bad_only:e.target.checked?1:0}));
+    card.querySelector(".pb-esc").addEventListener("change",e=>send({escalate:e.target.checked?1:0}));
+  });
+  const rc=$("arRecent"), rec=respondCfg.recent||[];
+  rc.innerHTML=rec.length
+    ? rec.map(d=>`<div class="crow" data-inv="${esc(d.src)}"><span class="mono">${esc(d.src)}</span><span class="rl">${esc(d.rule)} · ${Math.round(d.ttl/60)}m block · ${ago(d.ts)} ago</span></div>`).join("")
+    : `<div class="empty">Nothing auto-contained yet.</div>`;
+  rc.querySelectorAll("[data-inv]").forEach(row=>row.addEventListener("click",()=>investigate(row.dataset.inv)));
+}
+async function postRule(id,params){
+  const qs=Object.entries(params).map(([k,v])=>k+"="+encodeURIComponent(v)).join("&");
+  try{ const r=await fetch(`/api/autoresponse/rule?id=${encodeURIComponent(id)}&${qs}`,{method:"POST"}); const j=await r.json();
+    if(j.ok){ toast("Playbook updated"); loadRespond(); } else toast("Update failed"); }
+  catch(e){ toast("Update failed"); }
+}
+$("arEnabled").addEventListener("change",async e=>{
+  const on=e.target.checked;
+  try{ const r=await fetch(`/api/autoresponse?enabled=${on?1:0}`,{method:"POST"}); const j=await r.json();
+    if(j.ok){ toast(on?"Auto-response ENABLED":"Auto-response disabled"); if(on && "Notification" in window && Notification.permission==="default"){ try{Notification.requestPermission();}catch(_){} } loadRespond(); }
+    else { toast("Failed to change engine"); e.target.checked=!on; } }
+  catch(_){ toast("Failed to change engine"); e.target.checked=!on; }
+});
+
+/* ---- fleet view ------------------------------------------------------- */
+async function loadFleet(){
+  try{ const r=await fetch("/api/fleet",{cache:"no-store"}); renderFleet(await r.json()); }
+  catch(e){ /* keep last-good */ }
+}
+function renderFleet(f){
+  if(!f) return;
+  const t=f.totals||{}, hosts=f.hosts||[];
+  const kpi=(lab,big,sub,cls)=>`<div class="kpi ${cls||""}"><div class="lab">${lab}</div><div class="big">${big}</div><div class="sub">${sub}</div></div>`;
+  // Fourth KPI reflects summary authentication when a fleet key is configured;
+  // otherwise it keeps showing armed auto-response hosts as before.
+  const tampered=t.tampered||0;
+  const authKpi = f.signing
+    ? kpi("Integrity", tampered?`${fmtN(tampered)} bad`:`${fmtN(t.verified||0)} ok`,
+        tampered?"summaries failed auth":"summaries signed", tampered?"bad":"ok")
+    : kpi("Auto-response",fmtN(t.autoresponse||0),"hosts armed","");
+  $("fleetKpis").innerHTML=
+    kpi("Hosts",fmtN(t.hosts||0),`${fmtN(t.live||0)} live`,"")+
+    kpi("Enforcing",fmtN(t.enforcing||0),"of live hosts",(t.live&&t.enforcing<t.live)?"warn":"ok")+
+    kpi("Attackers",fmtN(t.attackers||0),"across the fleet",t.attackers>0?"bad":"ok")+
+    authKpi;
+  $("fleetCount").textContent = hosts.length?`${hosts.length} host(s)`:"";
+  const nav=$("nav-fleet"); if(nav) nav.textContent=String(t.hosts||0);
+  const integ=iv=>{
+    if(iv==="verified") return '<span class="chip accept" title="summary authenticated with the shared fleet key">signed</span>';
+    if(iv==="tampered") return '<span class="chip deny" title="summary failed authentication — forged, corrupted, or a different key. Excluded from fleet totals.">TAMPERED</span>';
+    return '<span class="chip plain" title="no fleet key configured; summary taken as-is">unsigned</span>';
+  };
+  const tb=qs("#fleetTable tbody");
+  tb.innerHTML = hosts.length ? hosts.map(h=>`<tr${h.integrity==="tampered"?' style="background:color-mix(in srgb,var(--bad) 8%,transparent)"':''}>
+    <td class="mono">${esc(h.hostname)}</td>
+    <td>${h.stale?'<span class="chip plain">STALE</span>':'<span class="chip accept">LIVE</span>'}</td>
+    <td>${integ(h.integrity)}</td>
+    <td>${h.enforced?'<span class="chip accept">yes</span>':'<span class="chip deny">no</span>'}</td>
+    <td class="r num" style="${h.attackers>0?'color:var(--bad);font-weight:700':''}">${fmtN(h.attackers)}</td>
+    <td class="r num">${fmtN(h.denied)}</td>
+    <td class="r num">${fmtN(h.contained)}</td>
+    <td>${h.autoresponse?'<span class="chip accept">on</span>':'<span class="chip plain">off</span>'}</td>
+    <td class="muted">${h.generated_at?ago(h.generated_at)+" ago":"—"}</td>
+  </tr>`).join("") : `<tr><td colspan="9" class="empty">No hosts yet — this host registers itself within ~15s; sync the fleet directory to see others.</td></tr>`;
+}
+
 /* ---- go --------------------------------------------------------------- */
 onRoute();      // show the page named in the URL hash (or Overview); honours #investigate/<ip>
-refresh();
-arm();
+refresh();      // one immediate snapshot so the page is never blank
+arm();          // poll timer as the baseline / fallback
+startSSE();     // prefer the live stream; it clears the poll timer once connected
 loadNetwork(false);
 </script>
 </body>
