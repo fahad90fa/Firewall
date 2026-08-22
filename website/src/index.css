@@ -1,0 +1,79 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+body {
+  /* The operations-console ground: a deep tactical navy with a faint radial
+     signal glow, painted explicitly so the page never borrows a host theme. */
+  background-color: #070b14;
+  background-image:
+    radial-gradient(1100px 620px at 78% -8%, rgba(56, 189, 248, 0.1), transparent 60%),
+    radial-gradient(900px 560px at 8% 4%, rgba(52, 211, 153, 0.06), transparent 55%);
+  background-attachment: fixed;
+  color: #e6edf6;
+  font-family: Manrope, ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: rgba(56, 189, 248, 0.28);
+  color: #f4f9ff;
+}
+
+/* A hairline grid, like a radar/console backdrop. Behind everything. */
+.grid-backdrop {
+  background-image:
+    linear-gradient(rgba(56, 189, 248, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(56, 189, 248, 0.045) 1px, transparent 1px);
+  background-size: 46px 46px;
+  mask-image: radial-gradient(circle at 50% 30%, black, transparent 78%);
+}
+
+/* Scroll-reveal: content is fully visible by default; JS opts in to the
+   animated entrance by adding [data-reveal]. So if scripting or the observer
+   is unavailable, nothing is ever stranded invisible. */
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(16px);
+  transition:
+    opacity 0.7s cubic-bezier(0.2, 0.7, 0.2, 1),
+    transform 0.7s cubic-bezier(0.2, 0.7, 0.2, 1);
+  will-change: opacity, transform;
+}
+[data-reveal].is-in {
+  opacity: 1;
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-reveal] {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
+/* Focus ring for keyboard users, on the console accent. */
+:where(a, button, input, textarea, [tabindex]):focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.tick-mono {
+  font-variant-numeric: tabular-nums;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
