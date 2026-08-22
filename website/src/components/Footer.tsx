@@ -19,8 +19,8 @@ export default function Footer() {
               threat research.
             </p>
             <div className="mx-auto mt-8 flex max-w-md flex-col items-center gap-4">
-              <Button href={LINUX_DOWNLOAD_URL} className="px-7">
-                Get it for Linux — free
+              <Button href={LINUX_DOWNLOAD_URL} download className="px-7">
+                Download for Linux — free
               </Button>
               <div className="w-full">
                 <SignupForm

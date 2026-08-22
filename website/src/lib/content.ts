@@ -162,5 +162,17 @@ export const FEED_LINES: { verb: string; detail: string; verdict: "BLOCKED" | "D
   { verb: "Signed updater", detail: "apt → deb.debian.org:443", verdict: "ALLOWED" },
 ];
 
+/** The Linux package, hosted on the site itself (served from /public). */
+export const LINUX_DEB = {
+  version: "0.1.0",
+  arch: "amd64",
+  file: "unified-firewall_0.1.0_amd64.deb",
+  size: "1.3 MB",
+  sha256: "5005b250f84429a6a6f63a558115203d3541de6d419414967d81823fb5948887",
+};
+
 export const LINUX_DOWNLOAD_URL =
-  (import.meta.env.VITE_LINUX_DOWNLOAD_URL as string | undefined) ?? "https://github.com/fahad90fa/Firewall";
+  (import.meta.env.VITE_LINUX_DOWNLOAD_URL as string | undefined) ?? `/downloads/${LINUX_DEB.file}`;
+
+/** One-liner install command shown on the Linux card. */
+export const LINUX_INSTALL_CMD = `sudo apt install ./${LINUX_DEB.file}`;

@@ -59,7 +59,7 @@ export default function Pricing() {
 
               <div className="mt-7">
                 {p.name === "Community" ? (
-                  <Button href={LINUX_DOWNLOAD_URL} variant="ghost" className="w-full">
+                  <Button href={LINUX_DOWNLOAD_URL} download variant="ghost" className="w-full">
                     {p.cta}
                   </Button>
                 ) : openPlan === p.name ? (

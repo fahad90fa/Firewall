@@ -52,8 +52,8 @@ export default function Hero() {
           </p>
 
           <div className="mt-8 flex flex-wrap items-center gap-3">
-            <Button href={LINUX_DOWNLOAD_URL}>
-              <LinuxGlyph /> Get it for Linux
+            <Button href={LINUX_DOWNLOAD_URL} download>
+              <LinuxGlyph /> Download for Linux
             </Button>
             <Button href="#how" variant="ghost">
               See how it works

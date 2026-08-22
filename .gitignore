@@ -8,6 +8,13 @@ Cargo.lock.orig
 *.generated.h
 *.generated.swift
 
+# Package build output/staging (the .deb builder writes here; the shipped copy
+# lives under website/public/downloads/ and IS tracked)
+/dist/
+/build/deb/
+/build/stage/
+/build/stage-postinstall.sh
+
 # Kernel build output
 *.o
 *.ko
