@@ -36,15 +36,26 @@ export default function DownloadPage() {
 
   return (
     <div className="mx-auto max-w-content px-5 pb-24 pt-28">
-      {/* hidden real download target */}
-      <a ref={anchorRef} href={LINUX_DOWNLOAD_URL} download={LINUX_DEB.file} className="sr-only" aria-hidden="true">
+      {/* hidden real download target — only ever clicked programmatically, so
+          it stays out of the tab order (tabIndex -1) to avoid a focusable +
+          aria-hidden trap for keyboard/screen-reader users. */}
+      <a
+        ref={anchorRef}
+        href={LINUX_DOWNLOAD_URL}
+        download={LINUX_DEB.file}
+        className="sr-only"
+        aria-hidden="true"
+        tabIndex={-1}
+      >
         download
       </a>
 
       {/* --- animated status card --- */}
       <div className="relative overflow-hidden rounded-3xl border border-line bg-panel p-8 text-center shadow-panel md:p-12">
         <div className="grid-backdrop pointer-events-none absolute inset-0 opacity-50" />
-        <div className="relative mx-auto max-w-xl">
+        {/* role=status so assistive tech is told when the download is prepared
+            and when it starts (the heading + label swap on `started`). */}
+        <div className="relative mx-auto max-w-xl" role="status" aria-live="polite">
           <div className="flex justify-center">
             <Label tone={started ? "safe" : "signal"}>{started ? "DOWNLOAD STARTED" : "PREPARING DOWNLOAD"}</Label>
           </div>
@@ -70,7 +81,7 @@ export default function DownloadPage() {
           {/* progress bar (cosmetic CSS transition) */}
           <div className="mx-auto mt-6 h-1.5 w-full max-w-sm overflow-hidden rounded-full bg-line">
             <div
-              className="h-full rounded-full bg-gradient-to-r from-signal to-safe transition-[width] duration-[1500ms] ease-out"
+              className="dlbar h-full rounded-full bg-gradient-to-r from-signal to-safe transition-[width] duration-[1500ms] ease-out"
               style={{ width: barFull ? "100%" : "6%" }}
             />
           </div>
@@ -134,14 +145,14 @@ export default function DownloadPage() {
           <Step
             n="03"
             title="Open the live console"
-            body="It installs in monitor mode — observing and logging, never blocking — and starts on boot. The console is loopback-only."
-            cmd={`firewall            # or open http://127.0.0.1:8787`}
+            body="The console starts automatically at install — in monitor mode, observing and logging, never blocking — and again on every boot. It's already listening on loopback; just open it in your browser."
+            cmd={`xdg-open http://127.0.0.1:8787`}
           />
           <Step
             n="04"
             title="Enforce when you're ready"
             body="Start with default-allow (denies only never-legitimate protocols). Once you've catalogued egress, graduate to deny-by-default."
-            cmd={`sudo firewall apply base/default_allow`}
+            cmd={`sudo firewall apply default_allow`}
           />
         </ol>
       </div>
@@ -152,7 +163,7 @@ export default function DownloadPage() {
           <p className="text-[14px] leading-relaxed text-muted">
             After your allow rules are in place, switch the whole packet filter to deny-by-default:
           </p>
-          <Command cmd="sudo firewall apply base/default_deny" />
+          <Command cmd="sudo firewall apply default_deny" />
           <p className="mt-2 text-[13px] text-muted/80">
             Whatever you <span className="text-ink">apply</span> is what reloads automatically on the next boot.
           </p>
@@ -243,9 +254,9 @@ function Command({ cmd }: { cmd: string }) {
       <button
         onClick={copy}
         className="shrink-0 rounded-md border border-line px-2 py-1 font-mono text-[11px] text-muted transition-colors hover:border-signal/60 hover:text-signal"
-        aria-label={`Copy: ${cmd}`}
+        aria-label={copied ? "Copied to clipboard" : `Copy: ${cmd}`}
       >
-        {copied ? "copied ✓" : "copy"}
+        <span aria-hidden="true">{copied ? "copied ✓" : "copy"}</span>
       </button>
     </div>
   );

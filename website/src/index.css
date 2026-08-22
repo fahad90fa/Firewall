@@ -103,4 +103,8 @@ body {
   [style*="dlpulse"] {
     animation: none !important;
   }
+  /* Snap the download progress bar instead of sweeping it over 1.5s. */
+  .dlbar {
+    transition: none !important;
+  }
 }
