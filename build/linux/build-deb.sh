@@ -33,8 +33,12 @@ DEB="$OUT_DIR/unified-firewall_${VERSION}_${ARCH}.deb"
 # this avoids silently packaging a stale binary that predates a source change.
 # Set UFW_DEB_SKIP_BUILD=1 to reuse whatever is already in target/release.
 if [ "${UFW_DEB_SKIP_BUILD:-0}" != "1" ]; then
-    echo "==> building release binaries"
-    ( cd "$ROOT" && cargo build --release -p ufw-cli -p ufw-daemon )
+    # ufw-cli ships with `tls`: the packaged firewall verifies the Ed25519
+    # license signature (not just the HMAC deterrent) and the console supports
+    # mTLS. rustls/ring are already pinned in Cargo.lock, so this stays offline.
+    echo "==> building release binaries (ufw-cli +tls: Ed25519 verify + console mTLS)"
+    ( cd "$ROOT" && cargo build --release -p ufw-cli --features tls )
+    ( cd "$ROOT" && cargo build --release -p ufw-daemon )
 fi
 if [ ! -x "$BIN/ufw-nft" ] || [ ! -x "$BIN/ufwd" ]; then
     echo "error: release binaries missing under $BIN (build failed or was skipped)" >&2

@@ -8,7 +8,7 @@
 // On success it refreshes last_seen_at (so the admin dashboard shows liveness)
 // and returns a fresh signed token extending the offline grace window.
 
-import { serviceClient, json, signToken, clientIp, CORS } from "../_shared/util.ts";
+import { serviceClient, json, signToken, signBodyEd25519, clientIp, CORS } from "../_shared/util.ts";
 
 interface Body {
   license_key?: string;
@@ -95,6 +95,7 @@ Deno.serve(async (req) => {
     recheck_by_unix: recheckUnix,
     issued_at: new Date(now).toISOString(),
   });
+  const sig_ed25519 = await signBodyEd25519(token);
 
   return json({
     ok: true,
@@ -107,5 +108,6 @@ Deno.serve(async (req) => {
     recheck_by_unix: recheckUnix,
     grace_hours: GRACE_HOURS,
     token,
+    sig_ed25519,
   });
 });
