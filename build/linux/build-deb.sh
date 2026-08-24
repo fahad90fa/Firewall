@@ -12,6 +12,7 @@
 #   /lib/systemd/system/{firewall-policy,ufw-daemon,ufw-waf,ufw-nft}.service
 #   /lib/systemd/system/ufw-license-check.{service,timer}  (periodic re-check)
 #   /usr/share/unified-firewall/{policies,sig-rules}      (package-managed refs)
+#   /usr/src/unified-firewall-<version>/                  (kernel module source; DKMS)
 #   /etc/unified-firewall/daemon.toml                     (monitor-mode conffile)
 #   /etc/unified-firewall/license.conf                    (turns licensing on)
 # postinst seeds /etc, enables the services (monitor mode — observes, does not
@@ -67,6 +68,23 @@ done
 # The license re-check timer (no ExecStart to rewrite).
 cp "$ROOT/build/linux/ufw-license-check.timer" "$STAGE/lib/systemd/system/ufw-license-check.timer"
 chmod 0644 "$STAGE/lib/systemd/system/ufw-license-check.timer"
+
+# Kernel module source for DKMS. The package ships the C module source under
+# /usr/src/unified-firewall-<version>/; postinst runs `dkms` to build+install
+# it against the running kernel (and again on kernel upgrades). This is what
+# makes the identity-aware and DPI *enforcement* layers available — without it
+# the package still enforces the L3/L4 packet layer via nftables. The build is
+# best-effort: a host without kernel headers (or on an unsupported kernel) keeps
+# the packet layer and just skips the module.
+KSRC="$STAGE/usr/src/unified-firewall-$VERSION"
+install -d "$KSRC/src" "$KSRC/inc"
+install -m 0644 "$ROOT/kernel/linux/Kbuild" "$ROOT/kernel/linux/Makefile" "$KSRC/"
+install -m 0644 "$ROOT/kernel/linux/src/"*.c "$KSRC/src/"
+install -m 0644 "$ROOT/kernel/linux/inc/"*.h "$KSRC/inc/"
+# dkms.conf with its PACKAGE_VERSION pinned to this build's version.
+sed "s/^PACKAGE_VERSION=.*/PACKAGE_VERSION=\"$VERSION\"/" \
+    "$ROOT/kernel/linux/dkms.conf" > "$KSRC/dkms.conf"
+chmod 0644 "$KSRC/dkms.conf"
 
 # Reference policies + signatures (package-managed, read-only).
 cp -R "$ROOT/policies" "$STAGE/usr/share/unified-firewall/policies"
@@ -236,9 +254,21 @@ Enforce the packet policy (safe: denies only never-legitimate protocols):
 Go to real deny-by-default once you have catalogued egress:
     sudo firewall apply default_deny
 
-Turn the daemon to blocking (needs the kernel module, a separate DKMS step):
-    edit /etc/unified-firewall/daemon.toml -> mode = "enforce"
-    sudo systemctl restart ufw-daemon
+Kernel module (identity-aware + DPI enforcement):
+    The package ships the module source under /usr/src/unified-firewall-VERSION/
+    and DKMS builds it for your kernel at install (and after kernel upgrades). It
+    needs `dkms` and linux-headers-$(uname -r); without them the packet layer
+    still works and the module is simply skipped — build it later with:
+        sudo apt install dkms linux-headers-$(uname -r)
+        sudo dkms autoinstall
+    Then turn the daemon to blocking with the module:
+        edit /etc/unified-firewall/daemon.toml -> mode = "enforce"
+        and set require_kernel_module = true
+        sudo systemctl restart ufw-daemon
+
+    Secure Boot: an unsigned out-of-tree module will not load under Secure Boot.
+    Either sign ufw.ko with a MOK you enrol (mokutil --import), or disable Secure
+    Boot. The packet-layer firewall does not need the module or Secure Boot changes.
 
 Everything auto-starts on boot. Remove with: apt remove unified-firewall
 DOC
@@ -252,7 +282,7 @@ Architecture: $ARCH
 Maintainer: Unified Firewall <support@unifiedfirewall.dev>
 Installed-Size: $INSTALLED_KB
 Depends: nftables, curl
-Recommends: sudo
+Recommends: sudo, dkms, linux-headers-amd64 | linux-headers-generic
 Section: admin
 Priority: optional
 Homepage: https://github.com/fahad90fa/Firewall
@@ -299,10 +329,34 @@ if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
 else
     echo "Unified Firewall installed (no systemd detected — start services manually)."
 fi
+
+# Kernel module (identity-aware + DPI *enforcement*) via DKMS — best-effort.
+# The packet layer works without it; this only adds the ring-0 capabilities.
+PKGVER="@PKGVER@"
+if command -v dkms >/dev/null 2>&1; then
+    dkms add -m unified-firewall -v "$PKGVER" >/dev/null 2>&1 || true
+    if dkms build -m unified-firewall -v "$PKGVER" >/dev/null 2>&1 \
+       && dkms install --force -m unified-firewall -v "$PKGVER" >/dev/null 2>&1; then
+        echo "Kernel module built and installed — identity/DPI enforcement is available."
+        echo "  (to use it, set mode=\"enforce\" + require_kernel_module=true in daemon.toml)"
+        if command -v mokutil >/dev/null 2>&1 && mokutil --sb-state 2>/dev/null | grep -qi enabled; then
+            echo "  Secure Boot is ON: the module must be MOK-signed + enrolled before it will load"
+            echo "  — see /usr/share/doc/unified-firewall/README.Debian"
+        fi
+    else
+        echo "note: kernel module not built (needs linux-headers-\$(uname -r) and a supported kernel);"
+        echo "      the packet-layer firewall works without it. Build later: sudo dkms autoinstall"
+    fi
+else
+    echo "note: dkms not installed — the kernel module (identity/DPI) was not built; the packet layer works."
+    echo "      enable it with: sudo apt install dkms linux-headers-\$(uname -r) && sudo dkms autoinstall"
+fi
+
 echo "Activate this machine (required before enforcing):  sudo firewall license activate <KEY>"
 echo "Then enforce the packet policy:                     sudo firewall apply default_allow"
 exit 0
 POST
+sed -i "s/@PKGVER@/$VERSION/g" "$STAGE/DEBIAN/postinst"
 chmod 0755 "$STAGE/DEBIAN/postinst"
 
 # prerm: stop + disable services before files are removed.
@@ -318,8 +372,14 @@ if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
 fi
 # Best-effort: drop the nftables table this package loaded.
 command -v nft >/dev/null 2>&1 && nft delete table inet ufw >/dev/null 2>&1 || true
+# Remove the DKMS module for this version (best-effort).
+PKGVER="@PKGVER@"
+if command -v dkms >/dev/null 2>&1; then
+    dkms remove -m unified-firewall -v "$PKGVER" --all >/dev/null 2>&1 || true
+fi
 exit 0
 PRE
+sed -i "s/@PKGVER@/$VERSION/g" "$STAGE/DEBIAN/prerm"
 chmod 0755 "$STAGE/DEBIAN/prerm"
 
 # postrm: on purge, remove the config and state we seeded.

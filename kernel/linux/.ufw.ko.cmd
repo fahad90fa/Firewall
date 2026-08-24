@@ -1,1 +1,0 @@
-savedcmd_ufw.ko := x86_64-linux-gnu-ld -r -m elf_x86_64 -z noexecstack --no-warn-rwx-segments --build-id=sha1  -T /usr/src/linux-headers-7.0.13+parrot7-amd64/arch/x86/module.lds -o ufw.ko ufw.o ufw.mod.o .module-common.o
