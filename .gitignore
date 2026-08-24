@@ -47,3 +47,10 @@ fuzz/fuzzer
 fuzz/fuzzer-*
 fuzz/crash-*
 fuzz/*-corpus/
+
+# Kernel module build artifacts (DKMS builds these fresh on the target)
+*.cmd
+modules.order
+Module.symvers
+.tmp_versions/
+kernel/linux/**/*.mod

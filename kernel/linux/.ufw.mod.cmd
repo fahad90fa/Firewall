@@ -1,1 +1,0 @@
-savedcmd_ufw.mod := printf '%s\n'   src/module.o src/netfilter_hooks.o src/classify.o src/identity.o src/stream_reassembly.o src/dpi_engine.o src/policy_sync.o src/logging.o | awk '!x[$$0]++ { print("./"$$0) }' > ufw.mod
