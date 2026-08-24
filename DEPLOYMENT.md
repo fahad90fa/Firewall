@@ -99,6 +99,14 @@ sudo firewall apply default_allow          # enforce once activated
 A systemd timer re-checks the license periodically; on expiry / suspend / block
 it reverts the nftables table (monitor-only) and warns.
 
+**Signed distribution (recommended over a loose `.deb`):** publish via a
+GPG-signed apt repo so `apt` verifies every install — `build/linux/sign-release.sh`
++ [`docs/apt-repo.md`](docs/apt-repo.md).
+
+**Kernel module:** the package ships the module source and builds it via DKMS at
+install (identity/DPI enforcement); see [`SECURITY.md`](SECURITY.md) for the
+Secure-Boot and enforce-mode notes.
+
 ---
 
 ## 4. End-to-end smoke test
