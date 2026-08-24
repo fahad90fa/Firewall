@@ -146,6 +146,10 @@ pub struct Store {
     /// Deadline by which we must re-check online; the offline grace window.
     pub recheck_by_unix: u64,
     pub token: String,
+    /// Detached Ed25519 signature over the token's payload (base64url). Present
+    /// once the server is configured with a signing key; empty otherwise. A
+    /// `--features tls` build verifies it with the embedded public key.
+    pub sig_ed25519: String,
     pub last_check: u64,
     /// Last time an online check succeeded.
     pub last_ok: u64,
@@ -161,6 +165,7 @@ fn store_to_json(s: &Store) -> String {
     w.u64_field("expires_at_unix", s.expires_at_unix);
     w.u64_field("recheck_by_unix", s.recheck_by_unix);
     w.str_field("token", &s.token);
+    w.str_field("sig_ed25519", &s.sig_ed25519);
     w.u64_field("last_check", s.last_check);
     w.u64_field("last_ok", s.last_ok);
     w.end_object();
@@ -183,6 +188,7 @@ fn store_from_json(text: &str) -> Option<Store> {
         expires_at_unix: n("expires_at_unix"),
         recheck_by_unix: n("recheck_by_unix"),
         token: s("token"),
+        sig_ed25519: s("sig_ed25519"),
         last_check: n("last_check"),
         last_ok: n("last_ok"),
     })
@@ -205,6 +211,133 @@ fn save_store(s: &Store) -> Result<(), String> {
         let _ = std::fs::set_permissions(LICENSE_STORE, std::fs::Permissions::from_mode(0o600));
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Ed25519 token verification  (tls builds only)
+// ---------------------------------------------------------------------------
+//
+// The default build trusts its cached store (a deterrent — the HMAC token is
+// signed with a server-only secret the client cannot check). A `--features tls`
+// build additionally verifies a detached Ed25519 signature over the token's
+// payload with an EMBEDDED PUBLIC KEY: the client can confirm the server issued
+// this exact grant for this exact machine, and cannot forge one. Editing the
+// local license.json to extend an expiry then fails verification.
+
+/// The licensing public key (Ed25519, 32 raw bytes, hex). The matching private
+/// key lives only in the license server (a Supabase secret); rotate by
+/// regenerating the pair (see docs/security/licensing-keys.md).
+#[cfg(feature = "tls")]
+const LICENSE_ED25519_PUBKEY_HEX: &str =
+    "63dffcd77268afb5459412483c7b390d27a5f45d90f44f17a1f934a2e1bde346";
+
+/// base64url (no padding) → bytes. Returns None on any non-alphabet byte.
+#[cfg(feature = "tls")]
+fn b64url_decode(s: &str) -> Option<Vec<u8>> {
+    fn val(c: u8) -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => (c - b'A') as u32,
+            b'a'..=b'z' => (c - b'a' + 26) as u32,
+            b'0'..=b'9' => (c - b'0' + 52) as u32,
+            b'-' => 62,
+            b'_' => 63,
+            _ => return None,
+        })
+    }
+    let s = s.trim_end_matches('=');
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for &c in s.as_bytes() {
+        acc = (acc << 6) | val(c)?;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
+/// Verify a detached Ed25519 signature (base64url) over `body` with `pubkey`.
+#[cfg(feature = "tls")]
+fn verify_ed25519(body: &str, sig_b64url: &str, pubkey: &[u8]) -> bool {
+    let sig = match b64url_decode(sig_b64url) {
+        Some(s) => s,
+        None => return false,
+    };
+    let pk = ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, pubkey);
+    pk.verify(body.as_bytes(), &sig).is_ok()
+}
+
+/// The claims carried in a token's signed payload.
+#[cfg(feature = "tls")]
+struct SignedClaims {
+    machine_id: String,
+    status: String,
+    expires_at_unix: u64,
+    recheck_by_unix: u64,
+}
+
+/// Verify a store's Ed25519 signature and return the *signed* claims. The token
+/// is `base64url(payload).base64url(hmac)`; the Ed25519 signature covers the
+/// payload part.
+#[cfg(feature = "tls")]
+fn verified_claims(store: &Store) -> Result<SignedClaims, String> {
+    let body = store.token.split('.').next().unwrap_or("");
+    if body.is_empty() || store.sig_ed25519.is_empty() {
+        return Err("no signature".into());
+    }
+    let pubkey =
+        ufw_shared::hash::unhex(LICENSE_ED25519_PUBKEY_HEX).ok_or("bad embedded pubkey")?;
+    if !verify_ed25519(body, &store.sig_ed25519, &pubkey) {
+        return Err("signature verification failed".into());
+    }
+    let text = String::from_utf8(b64url_decode(body).ok_or("bad payload encoding")?)
+        .map_err(|_| "payload not utf8")?;
+    let v = json::parse(&text).map_err(|_| "payload not json")?;
+    let s = |k: &str| v.get(k).and_then(Json::as_str).unwrap_or("").to_string();
+    let n = |k: &str| v.get(k).and_then(Json::as_u64).unwrap_or(0);
+    let status = s("status");
+    Ok(SignedClaims {
+        machine_id: s("machine_id"),
+        status: if status.is_empty() {
+            "active".into()
+        } else {
+            status
+        },
+        expires_at_unix: n("expires_at_unix"),
+        recheck_by_unix: n("recheck_by_unix"),
+    })
+}
+
+/// The store whose fields should be trusted for the enforcement decision. On a
+/// `tls` build, a present Ed25519 signature is verified and the *signed* claims
+/// replace the cached fields (so a locally-edited license.json cannot extend a
+/// grant, and a token signed for another machine is rejected); a present-but-bad
+/// signature marks the store tampered. Without `tls`, or without a signature,
+/// the cached store is used as-is.
+fn trusted_store(raw: Option<Store>) -> Option<Store> {
+    #[allow(unused_mut)]
+    let mut s = raw?;
+    #[cfg(feature = "tls")]
+    {
+        if !s.sig_ed25519.is_empty() {
+            match verified_claims(&s) {
+                Ok(c) => {
+                    let this = machine_fingerprint().unwrap_or_default();
+                    if !this.is_empty() && c.machine_id != this {
+                        s.status = "signed_for_other_machine".into(); // → Invalid
+                    } else {
+                        s.status = c.status;
+                        s.expires_at_unix = c.expires_at_unix;
+                        s.recheck_by_unix = c.recheck_by_unix;
+                    }
+                }
+                Err(_) => s.status = "tampered".into(), // → Invalid(Unknown)
+            }
+        }
+    }
+    Some(s)
 }
 
 // ---------------------------------------------------------------------------
@@ -277,6 +410,7 @@ struct Verdict {
     expires_at_unix: u64,
     recheck_by_unix: u64,
     token: String,
+    sig_ed25519: String,
     reason: String,
 }
 
@@ -291,6 +425,7 @@ fn parse_verdict(http_code: u16, body: &Json) -> Verdict {
         expires_at_unix: n("expires_at_unix"),
         recheck_by_unix: n("recheck_by_unix"),
         token: s("token"),
+        sig_ed25519: s("sig_ed25519"),
         reason: s("reason"),
     }
 }
@@ -352,6 +487,7 @@ fn store_from_verdict(key: &str, machine_id: &str, v: &Verdict, now: u64) -> Sto
         expires_at_unix: v.expires_at_unix,
         recheck_by_unix: v.recheck_by_unix,
         token: v.token.clone(),
+        sig_ed25519: v.sig_ed25519.clone(),
         last_check: now,
         last_ok: now,
     }
@@ -441,7 +577,7 @@ fn status(args: &[String]) -> Result<(), String> {
             eprintln!("  note: online re-check failed: {e}");
         }
     }
-    let store = load_store();
+    let store = trusted_store(load_store());
     let now = state::now_unix();
     match evaluate(store.as_ref(), now) {
         Validity::NotActivated => {
@@ -558,12 +694,12 @@ pub fn gate_enforcement() -> Gate {
         return Gate::Allow;
     }
     let now = state::now_unix();
-    match evaluate(load_store().as_ref(), now) {
+    match evaluate(trusted_store(load_store()).as_ref(), now) {
         Validity::Valid => Gate::Allow,
         Validity::NeedsRecheck => {
             // Grace elapsed — confirm online. check() saves the fresh verdict.
             match check() {
-                Ok(()) => match evaluate(load_store().as_ref(), state::now_unix()) {
+                Ok(()) => match evaluate(trusted_store(load_store()).as_ref(), state::now_unix()) {
                     Validity::Valid => Gate::Allow,
                     other => Gate::Deny(deny_message(other)),
                 },
@@ -678,9 +814,67 @@ mod tests {
             expires_at_unix: expires,
             recheck_by_unix: recheck,
             token: "tok".into(),
+            sig_ed25519: String::new(),
             last_check: 0,
             last_ok: 0,
         }
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    fn b64url_roundtrip_and_reject() {
+        // "Man" → "TWFu" in base64url.
+        assert_eq!(b64url_decode("TWFu"), Some(b"Man".to_vec()));
+        assert_eq!(b64url_decode(""), Some(vec![]));
+        assert!(b64url_decode("has space").is_none());
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    fn ed25519_verify_roundtrip_tamper_and_wrong_key() {
+        use ring::signature::{Ed25519KeyPair, KeyPair};
+        // base64url-encode helper, test-only.
+        fn enc(bytes: &[u8]) -> String {
+            const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+            let mut out = String::new();
+            for chunk in bytes.chunks(3) {
+                let b = [
+                    chunk[0],
+                    *chunk.get(1).unwrap_or(&0),
+                    *chunk.get(2).unwrap_or(&0),
+                ];
+                let n = (b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32;
+                out.push(A[(n >> 18 & 63) as usize] as char);
+                out.push(A[(n >> 12 & 63) as usize] as char);
+                if chunk.len() > 1 {
+                    out.push(A[(n >> 6 & 63) as usize] as char);
+                }
+                if chunk.len() > 2 {
+                    out.push(A[(n & 63) as usize] as char);
+                }
+            }
+            out
+        }
+        let kp = Ed25519KeyPair::from_seed_unchecked(&[7u8; 32]).unwrap();
+        let pubkey = kp.public_key().as_ref().to_vec();
+        let body = "eyJrIjoiVUZXLTEyMzQifQ"; // some base64url payload string
+        let sig = enc(kp.sign(body.as_bytes()).as_ref());
+
+        assert!(
+            verify_ed25519(body, &sig, &pubkey),
+            "good signature verifies"
+        );
+        assert!(
+            !verify_ed25519("tampered-body", &sig, &pubkey),
+            "tampered body fails"
+        );
+        let mut wrong = pubkey.clone();
+        wrong[0] ^= 1;
+        assert!(!verify_ed25519(body, &sig, &wrong), "wrong key fails");
+        assert!(
+            !verify_ed25519(body, "!!not-base64!!", &pubkey),
+            "bad sig encoding fails"
+        );
     }
 
     #[test]

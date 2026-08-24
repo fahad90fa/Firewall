@@ -87,6 +87,26 @@ export async function signToken(payload: Record<string, unknown>): Promise<strin
   return body + "." + b64url(sig);
 }
 
+/**
+ * Detached Ed25519 signature (base64url) over a token's payload part — the
+ * `body` before the "." in signToken()'s output. The private key is a server
+ * secret (LICENSE_ED25519_PKCS8, PKCS8 DER base64); a `--features tls` firewall
+ * verifies this with only the PUBLIC key, so it can trust the grant offline and
+ * cannot forge one. Returns "" when no key is configured (HMAC-only fallback).
+ */
+export async function signBodyEd25519(token: string): Promise<string> {
+  const b64 = Deno.env.get("LICENSE_ED25519_PKCS8");
+  if (!b64) return "";
+  const body = token.split(".")[0] ?? "";
+  if (!body) return "";
+  const pkcs8 = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const key = await crypto.subtle.importKey("pkcs8", pkcs8, { name: "Ed25519" }, false, ["sign"]);
+  const sig = new Uint8Array(
+    await crypto.subtle.sign({ name: "Ed25519" }, key, new TextEncoder().encode(body)),
+  );
+  return b64url(sig);
+}
+
 /** Best-effort client IP for the audit log. */
 export function clientIp(req: Request): string | null {
   return (
