@@ -35,14 +35,27 @@ false positive.
 
 ## Behavioral detectors (new defence layers)
 
-Two reconnaissance/exfiltration detectors ship alongside the efficacy harnesses,
-each with its own unit tests that double as a small labeled corpus:
+Four behavioral detectors ship alongside the efficacy harnesses, each with its
+own unit tests that double as a small labeled corpus. The first three are
+live-wired into the logging pipeline (they run whenever anomaly detection is on);
+the DNS one is fed by the protocol decoder's `dns.qname`.
 
-- **Port-scan / network-sweep** (`daemon/src/logging/portscan.rs`) — live in the
-  logging pipeline. One source touching many ports on a host, or one port across
-  many hosts, inside a sliding window. Tests cover vertical scan, horizontal
-  sweep, ordinary traffic (no fire), slow-scan-below-window, and alert
-  throttling.
+- **Port-scan / network-sweep** (`daemon/src/logging/portscan.rs`) — one source
+  touching many ports on a host, or one port across many hosts, inside a sliding
+  window. Tests: vertical scan, horizontal sweep, ordinary traffic (no fire),
+  slow-scan-below-window, alert throttling, non-flow ignored.
+- **C2 beaconing** (`daemon/src/logging/beacon.rs`) — keeps the inter-arrival
+  cadence per (identity, destination) and fires when outbound callbacks are
+  numerous AND regular (low coefficient of variation, default ≤ 0.12 over ≥ 8
+  samples) in a plausible interval band. Tests: a steady 60s cadence fires;
+  jittery human traffic, too-few samples, and sub-second chatter do not. Honest
+  scope: legitimately periodic clients (NTP, update pollers) are also regular, so
+  this is a triage alert, not a block.
+- **Credential brute-force** (`daemon/src/logging/bruteforce.rs`) — counts
+  connections per (source, service, port) over a window, only on auth ports
+  (SSH/RDP/FTP/SMB/DB/mail/LDAP/VNC), and alerts on a stuffing rate. Tests: SSH
+  burst fires; non-auth ports, a few logins, a slow trickle, and distinct
+  sources (no pooling) do not.
 - **DNS tunneling / exfiltration** (`daemon/src/logging/dns_exfil.rs`) — scores
   query names for a single encoded blob or many chunked high-entropy sub-domains
   under one parent. Tests show it fires on both tunnel shapes and stays quiet on

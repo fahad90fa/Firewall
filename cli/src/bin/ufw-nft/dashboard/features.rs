@@ -227,6 +227,24 @@ pub fn features_json(mtls_client: bool) -> String {
     );
     feature(
         &mut w,
+        "beacon",
+        "C2 beaconing (periodic-callback) detection",
+        "detection",
+        "active",
+        "live behavioral layer: keeps the inter-arrival cadence per (identity, destination) and fires when outbound callbacks are numerous AND regular (low coefficient of variation) — the rhythm of a command-and-control check-in that a per-flow decision can't see. Irregular human traffic never trips it.",
+        "part of the daemon's behavioral detection (enabled with anomaly detection)",
+    );
+    feature(
+        &mut w,
+        "bruteforce",
+        "Credential brute-force detection",
+        "detection",
+        "active",
+        "live behavioral layer: counts connections per (source, service, port) over a sliding window on auth ports (SSH/RDP/FTP/SMB/DB/mail/LDAP/VNC) and alerts on a credential-stuffing rate. Direction-agnostic — catches an attacker hammering your SSH or a compromised host hammering someone else's.",
+        "part of the daemon's behavioral detection (enabled with anomaly detection)",
+    );
+    feature(
+        &mut w,
         "detection",
         "Measured detection efficacy (full pipeline)",
         "assurance",
