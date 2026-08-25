@@ -20,6 +20,8 @@
 
 pub mod anomaly;
 pub mod correlation;
+pub mod dns_exfil;
+pub mod portscan;
 pub mod sink;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -33,6 +35,7 @@ use ufw_shared::policy_types::{Decision, NetworkProfile};
 use crate::config::LoggingConfig;
 use anomaly::{AnomalyConfig, EgressBaseline};
 use correlation::{CorrelationConfig, CorrelationEngine};
+use portscan::{PortScanConfig, PortScanDetector};
 use sink::Sink;
 
 /// Runtime counters, surfaced by `ufwctl status`.
@@ -289,6 +292,12 @@ impl Logger {
                     ..Default::default()
                 })
             }),
+            // Reconnaissance detection rides the same behavioral-detection switch
+            // as the egress baseline: both watch flow shape rather than a single
+            // decision, and an operator who wants one wants the other.
+            portscan: config
+                .anomaly
+                .then(|| PortScanDetector::new(PortScanConfig::default())),
             stats: Arc::clone(&stats),
             sequence: 0,
         };
@@ -333,6 +342,7 @@ struct WorkerState {
     log_allowed: bool,
     correlation: Option<CorrelationEngine>,
     anomaly: Option<EgressBaseline>,
+    portscan: Option<PortScanDetector>,
     stats: Arc<LogStats>,
     sequence: u64,
 }
@@ -387,6 +397,17 @@ impl WorkerState {
             }
         }
 
+        // Reconnaissance: one source fanning out across ports or hosts. Like the
+        // baseline, it reads the flow stream and emits its own alert events.
+        let mut scans = Vec::new();
+        if let Some(ps) = &mut self.portscan {
+            for event in &events {
+                if let Some(s) = ps.observe(event) {
+                    scans.push(s);
+                }
+            }
+        }
+
         for c in correlations {
             self.stats.correlations.fetch_add(1, Ordering::Relaxed);
             self.sequence += 1;
@@ -397,6 +418,12 @@ impl WorkerState {
             self.stats.anomalies.fetch_add(1, Ordering::Relaxed);
             self.sequence += 1;
             events.push(a.to_event(&self.enrichment.host_id, self.sequence));
+        }
+
+        for s in scans {
+            self.stats.anomalies.fetch_add(1, Ordering::Relaxed);
+            self.sequence += 1;
+            events.push(s.to_event(&self.enrichment.host_id, self.sequence));
         }
 
         for event in &events {
