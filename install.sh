@@ -179,6 +179,7 @@ if [ "${UFW_NO_KMOD:-0}" != "1" ] && [ -d "$HERE/kernel/linux/src" ]; then
         if dkms build -m unified-firewall -v "$VERSION" >/dev/null 2>&1 \
            && dkms install --force -m unified-firewall -v "$VERSION" >/dev/null 2>&1; then
             echo "   module built — identity/DPI enforcement is available"
+            echo "   (hardened build; its C decoders are CI-gated equal to a memory-safe Rust core)"
             echo "   (to use it: set mode=\"enforce\" + require_kernel_module=true in $CONFIG)"
             if command -v mokutil >/dev/null 2>&1 && mokutil --sb-state 2>/dev/null | grep -qi enabled; then
                 echo "   Secure Boot is ON: the module must be MOK-signed + enrolled before it will load"
@@ -272,10 +273,10 @@ echo "                                (live status of the module, rate-limiting,
 echo "  sudo firewall status                the loaded rules, with live counters"
 echo
 if [ -f "$LICENSE_CONF" ]; then
-    echo "licensing is ON — enforcement needs an activated, node-locked key:"
-    echo "  sudo firewall license activate <YOUR-KEY>       activate this machine"
-    echo "  firewall license status                         show state (add --refresh to re-check)"
-    echo "  (to run ungated again: sudo rm $LICENSE_CONF)"
+    echo "licensing is ON — enforcement needs an activated key, hardware-bound to this machine:"
+    echo "  sudo firewall license activate <YOUR-KEY>       activate (binds to this host's hardware)"
+    echo "  firewall license status                         show state + hardware match (--refresh to re-check)"
+    echo "  (copying the license to other hardware is refused; to run ungated: sudo rm $LICENSE_CONF)"
     echo
 fi
 echo "when you are ready to actually BLOCK (not just observe):"
@@ -291,4 +292,9 @@ if have_systemd; then
     echo "                                    sudo systemctl disable --now firewall-policy.service   (the whole packet filter)"
     echo
 fi
+echo
+echo "prefer a cryptographically-verified package instead of a source build?"
+echo "  released .debs carry keyless build provenance (SLSA + Rekor transparency log):"
+echo "    gh attestation verify <the .deb> --repo fahad90fa/Firewall     (see docs/apt-repo.md)"
+echo
 echo "uninstall everything:  sudo ./install.sh --uninstall"

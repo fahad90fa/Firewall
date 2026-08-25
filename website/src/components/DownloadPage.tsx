@@ -221,9 +221,13 @@ function AptRepo() {
         <Step n="C" title="Install — apt verifies the signature and checksums" body="From here, updates arrive through apt like any other package, cryptographically verified." cmd={install} />
       </ol>
       <p className="mt-3 text-[13px] leading-relaxed text-muted/70">
-        Proves provenance (the bytes are the key-holder's), not behaviour — that's the job of the source, the
-        shipped SBOM, and a third-party audit. Requires the signed repository to be published at{" "}
-        <span className="font-mono text-ink">/apt/</span> on this site.
+        Every tagged release also carries <span className="text-ink">keyless build provenance</span> — a SLSA
+        attestation signed by GitHub's OIDC identity and logged to the public Rekor transparency log, with no
+        private key to manage. Verify any download with{" "}
+        <span className="font-mono text-ink">gh attestation verify &lt;file&gt; --repo fahad90fa/Firewall</span>.
+        Provenance proves who built the bytes and from what source, not behaviour — that's the job of the source,
+        the shipped SBOM, and a third-party audit. The signed apt repo above additionally needs the maintainer's
+        GPG key published at <span className="font-mono text-ink">/apt/</span>.
       </p>
     </div>
   );

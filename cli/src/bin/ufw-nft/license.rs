@@ -130,6 +130,62 @@ fn hostname() -> String {
         .unwrap_or_else(|| "linux".to_string())
 }
 
+/// A hardware anchor for the activated license: a salted SHA-256 over whatever
+/// *stable, hardware-rooted* identifiers this host exposes, so that copying
+/// `license.json` (and even a forged `/etc/machine-id`) to a different machine
+/// or a cloned VM produces a different anchor and enforcement is refused there.
+///
+/// Every source is best-effort and read-only. The DMI identifiers live in
+/// firmware and are root-only to read (which the enforcement path already is);
+/// a board without them (some VMs, containers) simply contributes fewer sources
+/// and the anchor degrades toward the machine-id — never an error, never a
+/// crash. This raises the cost of cloning a license from "copy a file" to
+/// "spoof the firmware identity"; it is a deterrent layer, not an unbreakable
+/// bind (see the server-gated-value note in docs/security/licensing-keys.md).
+fn compose_hardware_binding(sources: &[(&str, String)]) -> String {
+    let mut buf = b"ufw-license-hw-v1\0".to_vec();
+    for (label, val) in sources {
+        let v = val.trim();
+        if v.is_empty() {
+            continue;
+        }
+        buf.extend_from_slice(label.as_bytes());
+        buf.push(b'=');
+        buf.extend_from_slice(v.as_bytes());
+        buf.push(0);
+    }
+    hex(&sha256(&buf))
+}
+
+fn read_trimmed(path: &str) -> String {
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn hardware_binding() -> String {
+    // Order is fixed so the anchor is stable across runs. `product_uuid` is a
+    // per-machine SMBIOS UUID; the serials pin the board/chassis; machine-id is
+    // the always-present floor.
+    let sources = [
+        (
+            "product_uuid",
+            read_trimmed("/sys/class/dmi/id/product_uuid"),
+        ),
+        (
+            "board_serial",
+            read_trimmed("/sys/class/dmi/id/board_serial"),
+        ),
+        (
+            "product_serial",
+            read_trimmed("/sys/class/dmi/id/product_serial"),
+        ),
+        ("machine_id", read_trimmed("/etc/machine-id")),
+    ];
+    compose_hardware_binding(&sources)
+}
+
 // ---------------------------------------------------------------------------
 // local store
 // ---------------------------------------------------------------------------
@@ -150,6 +206,12 @@ pub struct Store {
     /// once the server is configured with a signing key; empty otherwise. A
     /// `--features tls` build verifies it with the embedded public key.
     pub sig_ed25519: String,
+    /// A local hardware anchor computed at activation (salted hash of the host's
+    /// stable hardware identifiers — DMI UUID/serial + machine-id, best-effort).
+    /// If this stops matching the machine, the license file has been copied to
+    /// different hardware and enforcement is refused. Empty for stores written by
+    /// an older client (the check is then skipped — backward compatible).
+    pub hw_binding: String,
     pub last_check: u64,
     /// Last time an online check succeeded.
     pub last_ok: u64,
@@ -166,6 +228,7 @@ fn store_to_json(s: &Store) -> String {
     w.u64_field("recheck_by_unix", s.recheck_by_unix);
     w.str_field("token", &s.token);
     w.str_field("sig_ed25519", &s.sig_ed25519);
+    w.str_field("hw_binding", &s.hw_binding);
     w.u64_field("last_check", s.last_check);
     w.u64_field("last_ok", s.last_ok);
     w.end_object();
@@ -189,6 +252,7 @@ fn store_from_json(text: &str) -> Option<Store> {
         recheck_by_unix: n("recheck_by_unix"),
         token: s("token"),
         sig_ed25519: s("sig_ed25519"),
+        hw_binding: s("hw_binding"),
         last_check: n("last_check"),
         last_ok: n("last_ok"),
     })
@@ -337,6 +401,17 @@ fn trusted_store(raw: Option<Store>) -> Option<Store> {
             }
         }
     }
+    // Hardware anchor check (both builds): a license activated here carries a
+    // hash of this host's hardware identity. If it no longer matches, the file
+    // was copied to different hardware — refuse, even if the attacker also
+    // forged /etc/machine-id. Skipped when absent (older activation) so we stay
+    // backward compatible, and when the current anchor can't be computed.
+    if !s.hw_binding.is_empty() {
+        let this = hardware_binding();
+        if !this.is_empty() && this != s.hw_binding {
+            s.status = "moved_hardware".into(); // → Invalid(MovedHardware)
+        }
+    }
     Some(s)
 }
 
@@ -349,6 +424,7 @@ pub enum Reason {
     Blocked,
     Suspended,
     Expired,
+    MovedHardware,
     Unknown,
 }
 
@@ -358,6 +434,9 @@ impl Reason {
             Reason::Blocked => "blocked by the vendor",
             Reason::Suspended => "suspended by the vendor",
             Reason::Expired => "expired",
+            Reason::MovedHardware => {
+                "activated on different hardware (the license file was copied to another machine)"
+            }
             Reason::Unknown => "in an unknown state",
         }
     }
@@ -386,6 +465,7 @@ pub fn evaluate(store: Option<&Store>, now: u64) -> Validity {
         "suspended" => return Validity::Invalid(Reason::Suspended),
         "active" => {}
         "expired" => return Validity::Invalid(Reason::Expired),
+        "moved_hardware" => return Validity::Invalid(Reason::MovedHardware),
         _ => return Validity::Invalid(Reason::Unknown),
     }
     if s.expires_at_unix != 0 && now >= s.expires_at_unix {
@@ -488,6 +568,7 @@ fn store_from_verdict(key: &str, machine_id: &str, v: &Verdict, now: u64) -> Sto
         recheck_by_unix: v.recheck_by_unix,
         token: v.token.clone(),
         sig_ed25519: v.sig_ed25519.clone(),
+        hw_binding: hardware_binding(),
         last_check: now,
         last_ok: now,
     }
@@ -599,6 +680,17 @@ fn status(args: &[String]) -> Result<(), String> {
             }
             if s.last_ok != 0 {
                 println!("  last ok:  {} (unix {})", fmt_unix(s.last_ok), s.last_ok);
+            }
+            if !s.hw_binding.is_empty() {
+                // Show a short prefix of the hardware anchor so an operator can
+                // confirm the license is bound to THIS machine's hardware.
+                let anchor = &s.hw_binding[..s.hw_binding.len().min(12)];
+                let bound = if hardware_binding() == s.hw_binding {
+                    "matches this hardware"
+                } else {
+                    "DOES NOT match — license moved to different hardware"
+                };
+                println!("  hardware: {anchor}… ({bound})");
             }
         }
     }
@@ -815,9 +907,62 @@ mod tests {
             recheck_by_unix: recheck,
             token: "tok".into(),
             sig_ed25519: String::new(),
+            hw_binding: String::new(),
             last_check: 0,
             last_ok: 0,
         }
+    }
+
+    #[test]
+    fn hardware_binding_is_stable_order_independent_of_empty_sources() {
+        // Same present sources → same anchor; empty sources are skipped, so a
+        // host that can't read the DMI serials still gets a stable value.
+        let full = compose_hardware_binding(&[
+            ("product_uuid", "abc-123".into()),
+            ("board_serial", "SN-9".into()),
+            ("machine_id", "mid".into()),
+        ]);
+        let with_gaps = compose_hardware_binding(&[
+            ("product_uuid", "abc-123".into()),
+            ("board_serial", "  ".into()), // whitespace → treated as empty
+            ("machine_id", "mid".into()),
+        ]);
+        // board_serial present vs blank must differ (it's a real input)...
+        assert_ne!(full, with_gaps);
+        // ...but a blank source contributes nothing, so dropping it entirely and
+        // blanking it produce the SAME anchor.
+        let dropped = compose_hardware_binding(&[
+            ("product_uuid", "abc-123".into()),
+            ("machine_id", "mid".into()),
+        ]);
+        assert_eq!(with_gaps, dropped);
+        assert_eq!(full.len(), 64); // hex SHA-256
+    }
+
+    #[test]
+    fn hardware_binding_distinguishes_machines() {
+        let a = compose_hardware_binding(&[("product_uuid", "uuid-A".into())]);
+        let b = compose_hardware_binding(&[("product_uuid", "uuid-B".into())]);
+        assert_ne!(a, b, "different hardware must yield different anchors");
+    }
+
+    #[test]
+    fn moved_hardware_status_is_invalid() {
+        // A store whose recorded hardware anchor no longer matches is refused.
+        let mut s = store("moved_hardware", 0, 0);
+        s.hw_binding = "some-old-anchor".into();
+        assert_eq!(
+            evaluate(Some(&s), 1000),
+            Validity::Invalid(Reason::MovedHardware)
+        );
+    }
+
+    #[test]
+    fn empty_hw_binding_is_backward_compatible() {
+        // An older store (no hw_binding) is never rejected for hardware reasons.
+        let s = store("active", 0, 0);
+        assert!(s.hw_binding.is_empty());
+        assert_eq!(evaluate(Some(&s), 1000), Validity::Valid);
     }
 
     #[cfg(feature = "tls")]

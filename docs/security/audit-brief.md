@@ -32,7 +32,7 @@ host. Suggested order:
 | 1 | nftables emission — can a policy compile to a ruleset that allows what it names as denied, or vice-versa? | `cli/` packet compiler; tests in `cli/tests/` | This is the layer that actually enforces today. A miscompile is a silent policy bypass. |
 | 2 | Ring-0 hostile-byte parsers (packet decoders, stream reassembly, DPI automaton) | `kernel/linux/src/`, `kernel/linux/inc/`; Rust reimpl in `kernel/linux/rust/ufw_kcore` | Attacker-controlled input in ring 0. Memory-safety bugs here are remote kernel compromise. |
 | 3 | Daemon request-path / IPC and the console's one mutating action | `daemon/`, `cli/src/bin/ufw-nft/dashboard/` | Local privilege boundary; the "contain" action mutates nftables. |
-| 4 | Licensing client node-lock + Ed25519 verification | `cli/src/bin/ufw-nft/license.rs`; backend in `website/supabase/functions/` | Trust decision made on the client; verify the deterrent can't be trivially forged into enforcement-on. |
+| 4 | Licensing client node-lock + Ed25519 verification + hardware binding | `cli/src/bin/ufw-nft/license.rs`; backend in `website/supabase/functions/` | Trust decision made on the client; verify the deterrent can't be trivially forged into enforcement-on, and that the paid value is server-gated (see below), not just a client boolean. |
 
 ## 3. What we already claim, and how we measured it
 
@@ -42,7 +42,7 @@ them is that each is reproducible and each has a documented scope.
 | Claim | Evidence | Honest scope |
 | --- | --- | --- |
 | Ring-0 parsers are fuzzed | `.github/workflows/fuzz.yml` — sanitizer-instrumented, coverage-guided fuzzing in CI + nightly | Fuzzing finds crashes; it is not a proof of correctness. |
-| A memory-safe core exists and matches the C | `kernel/linux/rust/ufw_kcore`, differential-tested against the C parsers | The Rust core is the reference; the C is what ships in `ufw.ko`. |
+| A memory-safe core exists and is **gated** to match the C byte-for-byte | `kernel/linux/rust/ufw_kcore`; the named `differential` CI job (`UFW_DIFF_REQUIRE=1`, full corpus + 40k mutations) | The Rust core (`no_std`, no `unsafe`) is the reference; the C is what ships in `ufw.ko`. The gate can't pass vacuously. In the **default build the C never sees hostile bytes** — the module is opt-in. |
 | Detection efficacy is a measured number, not a slogan | `daemon/tests/detection_efficacy.rs`, [`detection-efficacy.md`](../design/detection-efficacy.md) | Measures **correctness + regression** on a labeled corpus, **not** novel-attack coverage. The signature figure is **pre-filter recall**, not end-to-end precision. Read the scope note before quoting a number. |
 | The live path survives sustained real traffic | `scripts/soak.sh`, [`soak-results-latest.md`](../design/soak-results-latest.md) | The published run is smoke-scale (seconds), not a 7-day soak; the harness runs the full duration when you give it one. |
 | Every change is gated | `.github/workflows/ci.yml` — `cargo test`, `clippy -D warnings`, `fmt`, `--features tls` build, SBOM | Standard hygiene, not a security proof. |
@@ -61,9 +61,13 @@ them is that each is reproducible and each has a documented scope.
   fuzzed and differential-tested against a Rust reference; that lowers risk, it
   does not eliminate it. If you do not need identity/DPI enforcement, leave the
   module off and the ring-0 surface disappears.
-- **Licensing is a deterrent, not DRM.** A determined customer with root on their
-  own machine can bypass activation; the node-lock and Ed25519 verification raise
-  the effort, they do not make it impossible. See `website/LICENSING.md`.
+- **Client-side licensing is a deterrent, not DRM.** A determined customer with
+  root on their own machine can patch the binary and bypass the local gate; the
+  node-lock, Ed25519 verification, and hardware binding raise the effort, they do
+  not make it impossible. The **durable** control is that the recurring value
+  (fleet plane, threat-intel feed, managed telemetry) is **server-gated** behind
+  the license — a cracked client forfeits it. See `docs/security/licensing-keys.md`
+  ("server-gated value") and `website/LICENSING.md`.
 
 ## 5. Trust boundaries and adversaries
 
