@@ -1,10 +1,34 @@
-# Signed apt repository
+# Release provenance & signed apt repository
+
+There are two independent ways to verify a Unified Firewall build. The first is
+**live on every release with no key for us to manage**; the second is the
+traditional apt trust path.
+
+## 1. Keyless build provenance (recommended, no key required)
+
+Every tagged release runs `.github/workflows/release.yml`, which builds the
+`.deb` and produces a **SLSA build-provenance attestation** signed by GitHub's
+OIDC identity and recorded in the public **Rekor transparency log**. No private
+key lives on anyone's laptop — nothing to leak, rotate, or forget to publish —
+and it happens automatically. Anyone can verify that a given `.deb` was built
+from a specific commit by our workflow:
+
+```sh
+gh attestation verify unified-firewall_0.1.0_amd64.deb --repo fahad90fa/Firewall
+```
+
+This proves *provenance* (who built it, from what source, in what workflow),
+which is exactly the "is this the real artifact?" question. It pairs with the
+shipped SBOM (`sbom.cdx.json`) for the "what's inside?" question.
+
+## 2. Signed apt repository (traditional apt trust)
 
 A bare `.deb` has no cryptographic provenance — which is why a software centre
 labels it "unsigned / untrusted third party." The fix is to serve it from an
 **apt repository whose `Release` file is GPG-signed** by a key the user has
 explicitly trusted. Then `apt update` / `apt install` verify the package chain
-automatically.
+automatically. Unlike the keyless attestation above, this path needs a
+maintainer-held GPG key (below).
 
 ## Maintainer: sign & publish
 

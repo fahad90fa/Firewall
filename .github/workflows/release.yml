@@ -1,0 +1,76 @@
+# Cryptographic provenance for every release — with no key to manage.
+#
+# The problem this fixes: a signed apt repo needs a maintainer to hold and guard
+# a GPG private key, so provenance stays "not live" until someone does that by
+# hand. This workflow instead produces **keyless** build provenance: GitHub's
+# OIDC identity signs a SLSA provenance attestation for the built `.deb`, and the
+# signature is recorded in the public Rekor transparency log. Anyone can then
+# verify — offline of our infrastructure — that this exact artifact was built
+# from this exact commit by this workflow, with:
+#
+#   gh attestation verify unified-firewall_<ver>_amd64.deb --repo fahad90fa/Firewall
+#
+# There is no private key on a laptop, no key to leak or rotate, and it happens
+# automatically on every tagged release. This is the modern supply-chain answer
+# (SLSA build provenance); the GPG apt repo remains an optional traditional path.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (no leading v), e.g. 0.1.0"
+        required: true
+        default: "0.1.0"
+
+permissions:
+  contents: write # create the GitHub Release and upload assets
+  id-token: write # OIDC — this is what makes the signing keyless
+  attestations: write # record the provenance attestation
+
+jobs:
+  build-and-attest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version (from the tag, or the manual input)
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "Build the .deb (ufw-cli +tls: Ed25519 verify + console mTLS)"
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: sh build/linux/build-deb.sh
+
+      - name: Generate the CycloneDX SBOM (from the committed lockfile)
+        run: sh scripts/gen-sbom.sh > dist/sbom.cdx.json
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum *.deb sbom.cdx.json > SHA256SUMS
+
+      # Keyless SLSA build provenance for the .deb. Signed by this workflow's
+      # OIDC identity and logged to Rekor — no private key anywhere.
+      - name: Attest build provenance for the .deb
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: dist/*.deb
+
+      - name: Publish the GitHub Release with the artifacts
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "Unified Firewall ${GITHUB_REF_NAME}" \
+            --notes "Signed build provenance is attached to this release and recorded in the public Rekor transparency log. Verify with:
+          \`gh attestation verify <the .deb> --repo ${GITHUB_REPOSITORY}\`" \
+            dist/*.deb dist/sbom.cdx.json dist/SHA256SUMS
