@@ -52,7 +52,10 @@ jobs:
   # is proven on every push, not merely "tested when convenient". A divergence
   # here is exactly a place where the C could read out of bounds where the Rust
   # returns None; failing the build is the point.
-  differential:
+  #
+  # Named distinctly from fuzz.yml's scheduled `differential` campaign so the two
+  # checks are never confused: this one is the fast, always-on equivalence gate.
+  kcore-equivalence:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
