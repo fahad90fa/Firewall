@@ -75,7 +75,10 @@ module."
 
 Start with the [**audit brief**](docs/security/audit-brief.md): what to review and
 in what order, every claim we make with its evidence and honest scope, and what
-we explicitly do **not** claim.
+we explicitly do **not** claim. To **commission** an audit, see the
+[**audit RFP / outreach packet**](docs/security/audit-rfp.md) — scope of work, a
+shortlist of real firms, a ready-to-send request, a readiness checklist, and the
+(grant-funded) engagement model.
 
 ## Threat model & attack surface
 
