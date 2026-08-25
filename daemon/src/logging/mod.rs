@@ -19,6 +19,8 @@
 //! happening now.
 
 pub mod anomaly;
+pub mod beacon;
+pub mod bruteforce;
 pub mod correlation;
 pub mod dns_exfil;
 pub mod portscan;
@@ -34,6 +36,8 @@ use ufw_shared::policy_types::{Decision, NetworkProfile};
 
 use crate::config::LoggingConfig;
 use anomaly::{AnomalyConfig, EgressBaseline};
+use beacon::{BeaconConfig, BeaconDetector};
+use bruteforce::{BruteForceConfig, BruteForceDetector};
 use correlation::{CorrelationConfig, CorrelationEngine};
 use portscan::{PortScanConfig, PortScanDetector};
 use sink::Sink;
@@ -298,6 +302,12 @@ impl Logger {
             portscan: config
                 .anomaly
                 .then(|| PortScanDetector::new(PortScanConfig::default())),
+            beacon: config
+                .anomaly
+                .then(|| BeaconDetector::new(BeaconConfig::default())),
+            bruteforce: config
+                .anomaly
+                .then(|| BruteForceDetector::new(BruteForceConfig::default())),
             stats: Arc::clone(&stats),
             sequence: 0,
         };
@@ -343,6 +353,8 @@ struct WorkerState {
     correlation: Option<CorrelationEngine>,
     anomaly: Option<EgressBaseline>,
     portscan: Option<PortScanDetector>,
+    beacon: Option<BeaconDetector>,
+    bruteforce: Option<BruteForceDetector>,
     stats: Arc<LogStats>,
     sequence: u64,
 }
@@ -408,6 +420,26 @@ impl WorkerState {
             }
         }
 
+        // Beaconing: a regular outbound callback cadence (C2 check-in).
+        let mut beacons = Vec::new();
+        if let Some(b) = &mut self.beacon {
+            for event in &events {
+                if let Some(a) = b.observe(event) {
+                    beacons.push(a);
+                }
+            }
+        }
+
+        // Brute-force: a burst of connections to one auth service.
+        let mut brute = Vec::new();
+        if let Some(bf) = &mut self.bruteforce {
+            for event in &events {
+                if let Some(a) = bf.observe(event) {
+                    brute.push(a);
+                }
+            }
+        }
+
         for c in correlations {
             self.stats.correlations.fetch_add(1, Ordering::Relaxed);
             self.sequence += 1;
@@ -424,6 +456,18 @@ impl WorkerState {
             self.stats.anomalies.fetch_add(1, Ordering::Relaxed);
             self.sequence += 1;
             events.push(s.to_event(&self.enrichment.host_id, self.sequence));
+        }
+
+        for b in beacons {
+            self.stats.anomalies.fetch_add(1, Ordering::Relaxed);
+            self.sequence += 1;
+            events.push(b.to_event(&self.enrichment.host_id, self.sequence));
+        }
+
+        for a in brute {
+            self.stats.anomalies.fetch_add(1, Ordering::Relaxed);
+            self.sequence += 1;
+            events.push(a.to_event(&self.enrichment.host_id, self.sequence));
         }
 
         for event in &events {
