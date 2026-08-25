@@ -12,9 +12,11 @@
 #      for the pure zero-dependency, fully-offline build instead.
 #   2. installs ufw-nft, ufwctl, firewall, ufw-daemon and ufw-waf to PREFIX/bin
 #   3. installs the policies and the DPI/WAF signatures under /etc/unified-firewall
-#   4. writes a monitor-mode daemon config and installs systemd units for the
-#      firewall policy, the daemon, the WAF and the dashboard, then enables and
-#      starts them — so everything comes back automatically on every boot
+#   4. writes a monitor-mode daemon config (with the behavioral-detection suite
+#      on: egress-anomaly, port-scan/sweep, C2-beaconing, credential brute-force,
+#      DNS-tunnel — all alert-only) and installs systemd units for the firewall
+#      policy, the daemon, the WAF and the dashboard, then enables and starts
+#      them — so everything comes back automatically on every boot
 #   5. loads a safe activation policy (default-ALLOW with a rate cap), so the
 #      packet-filter, rate-limiting and attack-surface layers are live too. The
 #      policy is reloaded at boot by firewall-policy.service (nftables rules do
@@ -147,6 +149,11 @@ hot_reload = true
 [logging]
 stdout = false
 level = "info"
+# `anomaly = true` turns on the whole behavioral-detection suite that reads the
+# flow stream: the egress baseline (novel-destination / exfil shape), the
+# port-scan & network-sweep detector, the C2-beaconing (periodic-callback)
+# detector, and the credential brute-force detector. Each emits alert events
+# through the same sinks; none of them blocks (they are triage alerts).
 anomaly = true
 correlation = true
 
@@ -253,7 +260,7 @@ sleep 4
 echo
 echo "installed and running. Layer status:"
 if nft list table inet ufw >/dev/null 2>&1; then echo "  [live]  packet filter (nftables table inet ufw)"; else echo "  [down]  packet filter — is nftables installed?"; fi
-for f in "$STATE_DIR/ufw-daemon-status.json:daemon (DPI, egress anomaly, correlation, fleet)" \
+for f in "$STATE_DIR/ufw-daemon-status.json:daemon (DPI, egress anomaly, port-scan, C2 beaconing, brute-force, DNS-tunnel, correlation, fleet)" \
          "$STATE_DIR/ufw-waf-status.json:WAF"; do
     path="${f%%:*}"; label="${f#*:}"
     if [ -f "$path" ]; then echo "  [live]  $label"; else echo "  [down]  $label — check its service logs"; fi

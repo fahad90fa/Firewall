@@ -209,12 +209,48 @@ pub fn features_json(mtls_client: bool) -> String {
     );
     feature(
         &mut w,
+        "portscan",
+        "Port-scan & network-sweep detection",
         "detection",
-        "Measured detection efficacy",
+        "active",
+        "live behavioral layer in the daemon: one source fanning out across many ports on a host (port scan) or one port across many hosts (sweep) raises an alert — the reconnaissance move a per-flow allow/deny can't see. Bounded, sliding-window, feeds the same alert path as egress anomaly.",
+        "part of the daemon's behavioral detection (enabled with anomaly detection)",
+    );
+    feature(
+        &mut w,
+        "dnsexfil",
+        "DNS tunneling / exfiltration detection",
+        "detection",
+        "shipped",
+        "scores DNS query names for the two tunnel shapes — a single high-entropy encoded blob, or many distinct encoded sub-domains chunked under one parent. Conservative by design: CDN shards and long readable names score clean (0 false positives in-test).",
+        "cargo test -p ufw-daemon --lib logging::dns_exfil",
+    );
+    feature(
+        &mut w,
+        "beacon",
+        "C2 beaconing (periodic-callback) detection",
+        "detection",
+        "active",
+        "live behavioral layer: keeps the inter-arrival cadence per (identity, destination) and fires when outbound callbacks are numerous AND regular (low coefficient of variation) — the rhythm of a command-and-control check-in that a per-flow decision can't see. Irregular human traffic never trips it.",
+        "part of the daemon's behavioral detection (enabled with anomaly detection)",
+    );
+    feature(
+        &mut w,
+        "bruteforce",
+        "Credential brute-force detection",
+        "detection",
+        "active",
+        "live behavioral layer: counts connections per (source, service, port) over a sliding window on auth ports (SSH/RDP/FTP/SMB/DB/mail/LDAP/VNC) and alerts on a credential-stuffing rate. Direction-agnostic — catches an attacker hammering your SSH or a compromised host hammering someone else's.",
+        "part of the daemon's behavioral detection (enabled with anomaly detection)",
+    );
+    feature(
+        &mut w,
+        "detection",
+        "Measured detection efficacy (full pipeline)",
         "assurance",
         "shipped",
-        "CI harness with a labeled corpus: egress-anomaly 100% catch / 0% FP; signature pre-filter 100% recall. Honest-scope: correctness + regression, not novel-attack coverage.",
-        "cargo test -p ufw-daemon --test detection_efficacy -- --nocapture",
+        "labeled-corpus CI harnesses: WAF full pipeline 89.7% catch / 0% FP on an INDEPENDENT web-attack corpus (all evasion variants caught); egress-anomaly 100% catch / 0% FP; signature pre-filter 100% recall. Honest-scope: measured against known corpora, not a claim of novel-attack coverage.",
+        "cargo test -p ufw-daemon --test waf_efficacy -- --nocapture",
     );
     feature(
         &mut w,

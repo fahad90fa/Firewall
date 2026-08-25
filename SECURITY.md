@@ -28,7 +28,7 @@ blocks is a vulnerability in the operator.
 | --- | --- | --- |
 | **L3/L4 packet policy** | one `nftables` table (`inet ufw`), compiled from your policy | **Enforces today.** No kernel module required. |
 | **Identity-aware / DPI** | ring-0 kernel module (`ufw.ko`) + eBPF, policy over netlink | **Available via the shipped DKMS module**, off by default (`mode=monitor`). Not externally audited — see below. |
-| **Detection** (IDS/IPS sigs, beaconing, JA3/JA4, egress anomaly) | user-space daemon | Detects and logs; enforcement of a detection is a separate, opt-in response. |
+| **Detection** (IDS/IPS sigs, WAF, egress anomaly, port-scan, C2 beaconing, brute-force, DNS-tunnel, JA3/JA4) | user-space daemon | Detects and logs; enforcement of a detection is a separate, opt-in response. WAF full-pipeline efficacy is **measured** (89.7% catch / 0% FP on an independent corpus) — see `docs/design/detection-efficacy.md`. |
 | **Licensing / activation** | Supabase edge functions + a client node-lock | A **deterrent**, not DRM (see `website/LICENSING.md`). |
 
 The packet layer is real enforcement: after `firewall apply`, the kernel filters
@@ -75,7 +75,10 @@ module."
 
 Start with the [**audit brief**](docs/security/audit-brief.md): what to review and
 in what order, every claim we make with its evidence and honest scope, and what
-we explicitly do **not** claim.
+we explicitly do **not** claim. To **commission** an audit, see the
+[**audit RFP / outreach packet**](docs/security/audit-rfp.md) — scope of work, a
+shortlist of real firms, a ready-to-send request, a readiness checklist, and the
+(grant-funded) engagement model.
 
 ## Threat model & attack surface
 
