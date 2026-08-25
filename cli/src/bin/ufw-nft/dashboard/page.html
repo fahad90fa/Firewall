@@ -721,6 +721,19 @@
   @media (prefers-reduced-motion: reduce) {
     body::before, body::after, .core-scene, .ring, .core-orb { animation: none !important; }
   }
+  /* ---- What's-new / features page ---- */
+  .feat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+  .feat { border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+  .feat .ft { display: flex; align-items: center; gap: 8px; }
+  .feat .ft b { font-size: 13.5px; }
+  .feat .cat { margin-left: auto; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-mute); }
+  .feat .fd { font-size: 12.5px; color: var(--text-dim); line-height: 1.55; }
+  .feat .fa { font-family: var(--mono); font-size: 11px; background: var(--surface-3); color: var(--text-dim); padding: 6px 8px; border-radius: 6px; overflow-x: auto; white-space: pre; }
+  .pill { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: .04em; }
+  .pill.active { background: var(--good-weak); color: var(--good); }
+  .pill.available { background: var(--accent-weak); color: var(--accent); }
+  .pill.shipped { background: var(--surface-3); color: var(--text-dim); }
+  .pill.off { background: var(--bad-weak); color: var(--bad); }
 </style>
 </head>
 <body>
@@ -775,6 +788,7 @@
     <a href="#rules" data-nav="rules"><span class="ic">&#9636;</span>Rules<span class="badge" id="nav-rules">0</span></a>
     <a href="#host" data-nav="host"><span class="ic">&#9635;</span>Host surface<span class="badge" id="nav-host">0</span></a>
     <a href="#compliance" data-nav="compliance"><span class="ic">&#10003;</span>Compliance<span class="badge" id="nav-compliance">0</span></a>
+    <a href="#features" data-nav="features"><span class="ic">&#10022;</span>What's new<span class="badge" id="nav-features">new</span></a>
     <div class="grp">System</div>
     <a href="#settings" data-nav="settings"><span class="ic">&#9881;</span>Settings</a>
     <a href="#diag" data-nav="diag"><span class="ic">&#9432;</span>Diagnostics</a>
@@ -1045,6 +1059,18 @@
           <div class="set-row"><div class="set-l"><b>About</b><span id="setAbout">ufw-nft console</span></div><span class="mono muted" id="setVer"></span></div>
         </div></div>
       </div>
+    </section>
+
+    <section id="features">
+      <div class="sec-h"><h2>What's new — security features</h2><span class="hint">recently added capabilities and their live status on this host</span></div>
+      <div class="card"><div class="body">
+        <div id="featSummary" class="muted" style="margin-bottom:12px">Loading features…</div>
+        <div class="feat-grid" id="featGrid"></div>
+        <p class="muted" style="margin-top:14px;font-size:12px;line-height:1.7">
+          <b>Active</b> = live on this host now · <b>Available</b> = built in, one step to turn on · <b>Shipped</b> = part of this build / CI.
+          Honest note: the kernel module adds ring-0 attack surface and is not yet externally audited — see <code>SECURITY.md</code>.
+        </p>
+      </div></div>
     </section>
 
     <section id="diag">
@@ -2198,9 +2224,24 @@ function updateNav(s){
    `onRoute` does the rest. `#investigate/<ip>` is a deep-link into a dossier. */
 const navLinks=[...document.querySelectorAll("nav.side a[data-nav]")];
 const PAGES=navLinks.map(a=>a.getAttribute("data-nav"));
+async function loadFeatures(){
+  const grid=$("featGrid"), sum=$("featSummary"); if(!grid) return;
+  const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  try{
+    const r=await fetch("/api/features"); const j=await r.json(); const fs=j.features||[];
+    const c=fs.reduce((a,f)=>{a[f.status]=(a[f.status]||0)+1;return a;},{});
+    sum.textContent=`${fs.length} features · ${c.active||0} active · ${c.available||0} available · ${c.shipped||0} shipped`;
+    grid.innerHTML=fs.map(f=>`<div class="feat">
+      <div class="ft"><b>${esc(f.title)}</b><span class="cat">${esc(f.category)}</span></div>
+      <div><span class="pill ${esc(f.status)}">${esc(f.status)}</span></div>
+      <div class="fd">${esc(f.detail)}</div>
+      ${f.activate?`<div class="fa">${esc(f.activate)}</div>`:""}
+    </div>`).join("");
+  }catch(e){ sum.textContent="Could not load features."; grid.innerHTML=""; }
+}
 const PAGE_TITLE={overview:"Overview",threats:"Threats",investigate:"Investigation",talkers:"Top talkers",
   events:"Events",network:"Network",fleet:"Fleet",respond:"Auto-response",exposure:"Attack surface",rules:"Rules",host:"Host surface",
-  compliance:"Compliance",settings:"Settings",diag:"Diagnostics"};
+  compliance:"Compliance",features:"What's new",settings:"Settings",diag:"Diagnostics"};
 let currentPage=null;
 function go(id){ location.hash="#"+id; }
 function applyRoute(id){
@@ -2218,6 +2259,7 @@ function applyRoute(id){
   if(id==="respond" && typeof loadRespond==="function") loadRespond();
   if(id==="fleet" && typeof loadFleet==="function") loadFleet();
   if(id==="settings" && typeof refreshSettingsMeta==="function") refreshSettingsMeta();
+  if(id==="features" && typeof loadFeatures==="function") loadFeatures();
   const g=$("gsearch"); if(g) g.value="";   // search is per-page
   applyGlobalSearch();
 }
