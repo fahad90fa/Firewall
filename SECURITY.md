@@ -39,17 +39,37 @@ is silently added — untranslatable rules are dropped, not weakened.
 
 - **Not yet externally audited.** No third-party security review has been
   performed. The claims below are from our own tests, not an outside party.
+- **The default build puts no out-of-tree C on the hostile-byte path.** The
+  kernel module is off by default; the packet layer is in-kernel `nftables`
+  (upstream, widely audited) and the daemon's own protocol parsing is the
+  memory-safe Rust core. The ring-0 C decoders only ever see attacker bytes if
+  *you* build and load `ufw.ko` and switch to enforce — an opt-in, not the
+  baseline.
+- **When the module IS built, its decoders are proven equivalent to a
+  memory-safe core.** `kernel/linux/rust/ufw_kcore` is a `no_std`, no-`unsafe`
+  Rust reimplementation of the ring-0 decoders; the `differential` CI job
+  compiles the C and runs both over the whole fuzz corpus plus tens of thousands
+  of mutations, asserting they extract every field **byte-for-byte identically**.
+  `UFW_DIFF_REQUIRE=1` makes a missing toolchain a hard failure, so the gate
+  cannot pass vacuously. A place where the C would read out of bounds is exactly
+  a place the Rust returns `None` — and the gate turns that divergence red.
 - **Continuously fuzzed:** the ring-0 C parsers (decoders, stream reassembly,
   DPI automaton) run under sanitizer-instrumented, coverage-guided fuzzing in CI
   (`.github/workflows/fuzz.yml`), plus a nightly campaign.
-- **A memory-safe core exists:** `kernel/linux/rust/ufw_kcore` reimplements the
-  hostile-byte parsers in Rust and is differential-tested against the C.
-- **CI gates every change** on `cargo test`, `clippy -D warnings`, `fmt`, and the
-  fuzz smoke campaigns.
+- **Hardened code generation:** `ufw.ko` is built with `-Werror`,
+  `-Wframe-larger-than`, `-Wvla`, and (via `cc-option`) stack-protector plus the
+  no-strict-overflow / no-null-check-deletion flags, on top of the host kernel's
+  own hardening — so a bounds check written for defence is never optimised away.
+- **CI gates every change** on `cargo test`, `clippy -D warnings`, `fmt`, the
+  fuzz smoke campaigns, and the named `differential` equivalence gate.
 
-The single highest-value next step for this project's security posture is a
-**third-party audit of the ring-0 code and the nftables emission**; self-tests
-do not substitute for it.
+None of this is a substitute for a **third-party audit of the ring-0 code and
+the nftables emission** — that remains the single highest-value next step, and
+the equivalence gate is designed to make that audit cheaper, not to replace it.
+It does, however, change the honest one-line summary from "unaudited C in the
+kernel" to "the hostile-byte path is memory-safe by construction in the default
+build, and equivalence-gated against a memory-safe core when you opt into the
+module."
 
 ## For an external reviewer
 

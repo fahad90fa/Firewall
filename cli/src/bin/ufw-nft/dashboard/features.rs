@@ -64,7 +64,15 @@ fn license_status() -> (&'static str, String) {
             } else {
                 "HMAC deterrent (build with --features tls for Ed25519)"
             };
-            ("active", format!("{} · {} · {build}", s.plan, s.status))
+            let hw = if s.hw_binding.is_empty() {
+                "software node-lock"
+            } else {
+                "hardware-bound"
+            };
+            (
+                "active",
+                format!("{} · {} · {build} · {hw}", s.plan, s.status),
+            )
         }
         None => (
             "available",
@@ -127,9 +135,9 @@ pub fn features_json(mtls_client: bool) -> String {
         "enforcement",
         module_status,
         match module_status {
-            "active" => "ufw.ko is loaded; identity-aware and DPI verdicts can enforce.",
-            "available" => "module source is installed; build it with: sudo dkms autoinstall (needs linux-headers). Adds ring-0 surface — not yet externally audited.",
-            _ => "not installed on this host; the packet layer works without it.",
+            "active" => "ufw.ko is loaded; identity-aware and DPI verdicts can enforce. Its decoders are hardened (stack-protector, no-strict-overflow) and CI-gated equal to a memory-safe Rust core.",
+            "available" => "module source is installed; build it with: sudo dkms autoinstall (needs linux-headers). Ring-0 surface, but hardened + equivalence-gated against a memory-safe core (see 'Memory-safe-verified ring-0'). Not yet externally audited.",
+            _ => "not installed on this host; the packet layer works without it, and no out-of-tree C parses hostile bytes in this default posture.",
         },
         "sudo dkms autoinstall  &&  edit /etc/unified-firewall/daemon.toml → mode=\"enforce\", require_kernel_module=true",
     );
@@ -148,8 +156,21 @@ pub fn features_json(mtls_client: bool) -> String {
     );
     feature(
         &mut w,
+        "ring0",
+        "Memory-safe-verified ring-0 decoders",
+        "assurance",
+        if module_loaded() { "active" } else { "shipped" },
+        if module_loaded() {
+            "the C kernel decoders are live — and gated in CI to match a no_std/no-unsafe Rust core byte-for-byte over the whole fuzz corpus."
+        } else {
+            "default build: no out-of-tree C parses hostile bytes — the memory-safe Rust core + in-kernel nftables do. When you load the module, its C decoders are equivalence-gated against that Rust core."
+        },
+        "cargo test -p ufw-kcore --test differential  (UFW_DIFF_REQUIRE=1 in CI)",
+    );
+    feature(
+        &mut w,
         "licensing",
-        "Node-locked licensing + Ed25519 verification",
+        "Hardware-bound licensing + Ed25519 + server-gated value",
         "licensing",
         lic_status,
         &lic_detail,
@@ -170,11 +191,20 @@ pub fn features_json(mtls_client: bool) -> String {
     );
     feature(
         &mut w,
+        "provenance",
+        "Keyless build provenance (SLSA + Rekor)",
+        "supply-chain",
+        "shipped",
+        "every tagged release is signed by GitHub's OIDC identity and logged to the public Rekor transparency log — no private key to manage. Verify: gh attestation verify <deb> --repo fahad90fa/Firewall.",
+        "see .github/workflows/release.yml and docs/apt-repo.md",
+    );
+    feature(
+        &mut w,
         "signed",
-        "Signed releases (signed apt repo)",
+        "Signed apt repository (traditional trust path)",
         "supply-chain",
         "available",
-        "build/linux/sign-release.sh produces a GPG-signed apt repo so apt verifies every install.",
+        "build/linux/sign-release.sh produces a GPG-signed apt repo so apt verifies every install; needs a maintainer GPG key. The keyless provenance above needs no key.",
         "GPG_KEY=you build/linux/sign-release.sh  (see docs/apt-repo.md)",
     );
     feature(
