@@ -67,7 +67,13 @@ the DNS one is fed by the protocol decoder's `dns.qname`.
   anomaly corpus is built to the detector's documented model; the signature
   corpus is built from the engine's **own shipped patterns**. A real efficacy
   figure needs fresh, independent adversary captures (a labeled pcap corpus from
-  the wild) — a larger effort this harness does not claim to be.
+  the wild). The **pcap harness for that now ships** — `daemon/tests/pcap_efficacy.rs`
+  ingests real `.pcap` captures (Ethernet → IPv4 → TCP reassembly → HTTP → the
+  live `WafEngine`) and prints a confusion matrix; point it at a labeled corpus
+  with `UFW_PCAP_DIR=/path` (files named `mal_*.pcap` / `ben_*.pcap`, e.g. the
+  web-attack captures from CIC-IDS2017 or malware-traffic-analysis.net). Its CI
+  self-test proves the pcap→WAF pipeline works on real wire bytes; the wild
+  number is one `UFW_PCAP_DIR` run away, needing only the dataset.
 - **The signature engine has two stages.** `scan_content` is a fast
   Aho-Corasick **pre-filter** over every pattern; a hit only makes a flow a
   *candidate*. The precise verdict comes from evaluating the matched signature's
@@ -84,7 +90,8 @@ the DNS one is fed by the protocol decoder's `dns.qname`.
 
 1. A labeled real-traffic pcap corpus (benign + known-malicious families) driven
    through the full pipeline — the honest "we catch X% with Y% false positives"
-   figure.
+   figure. **The harness for this now exists** (`daemon/tests/pcap_efficacy.rs`,
+   `UFW_PCAP_DIR`); what remains is dropping in a real labeled dataset.
 2. Extending this harness to the **full** signature evaluation (condition tree +
    field context), so signature *precision* is measured, not just pre-filter
    recall.
