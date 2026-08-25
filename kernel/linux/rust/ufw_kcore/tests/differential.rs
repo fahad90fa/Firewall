@@ -276,12 +276,24 @@ fn rust_line(index: usize, l7: u8, payload: &[u8]) -> String {
 
 #[test]
 fn the_rust_port_agrees_with_the_c_it_replaces() {
+    // In CI this gate must actually RUN, not vacuously pass. `UFW_DIFF_REQUIRE=1`
+    // turns the "no toolchain, skip" escape hatch into a hard failure, so a
+    // misconfigured runner can never hide a divergence behind a green check.
+    let require = std::env::var("UFW_DIFF_REQUIRE").is_ok();
     let Some(cc) = c_compiler() else {
+        if require {
+            panic!(
+                "UFW_DIFF_REQUIRE=1 but no C compiler is present — the equivalence gate cannot run"
+            );
+        }
         eprintln!("no C compiler; skipping the differential check");
         return;
     };
     let inc = repo_root().join("kernel/linux/inc");
     if !inc.join("dpi_decoders.h").exists() {
+        if require {
+            panic!("UFW_DIFF_REQUIRE=1 but kernel/linux/inc/dpi_decoders.h is missing — cannot run the gate");
+        }
         eprintln!("dpi_decoders.h not present; skipping");
         return;
     }

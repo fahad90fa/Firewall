@@ -41,6 +41,30 @@ jobs:
           name: sbom
           path: sbom.cdx.json
 
+  # The ring-0 safety argument, made a first-class, visible gate.
+  #
+  # The Linux kernel module's hostile-byte decoders (C, in `kernel/linux/inc/
+  # dpi_decoders.h`) are reimplemented in a memory-safe, no_std, no-unsafe Rust
+  # core (`ufw_kcore`). This job compiles the C and runs both over the whole
+  # accumulated fuzz corpus plus a large mutation budget, asserting they extract
+  # every field byte-for-byte identically. UFW_DIFF_REQUIRE=1 makes a missing
+  # toolchain a hard failure, so this can never pass vacuously — the equivalence
+  # is proven on every push, not merely "tested when convenient". A divergence
+  # here is exactly a place where the C could read out of bounds where the Rust
+  # returns None; failing the build is the point.
+  differential:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure a C compiler is present (the gate needs it)
+        run: cc --version
+      - name: C decoders must equal the memory-safe Rust core, byte for byte
+        env:
+          UFW_DIFF_REQUIRE: "1"
+          UFW_DIFF_CORPUS_ALL: "1"
+          UFW_DIFF_ITERS: "40000"
+        run: cargo test -p ufw-kcore --test differential -- --nocapture
+
   # The macOS backend, brought to parity with the other two: not just
   # type-checked, but a decoder that actually runs. `RuleEngine.swift` imports
   # only Foundation, so its decision core — address parsing, CIDR containment,

@@ -36,3 +36,19 @@ ccflags-y += -Wvla -Wframe-larger-than=512
 # Fail the build on a warning. A kernel module that compiles with warnings is
 # a kernel module nobody reads the warnings of.
 ccflags-y += -Werror
+
+# Defence-in-depth code generation, on top of whatever the host kernel already
+# builds modules with. Each is added through `cc-option` so a toolchain that
+# does not understand a flag simply drops it — never a broken build — and none
+# of these introduce new -Werror warnings, so they cannot turn an otherwise
+# clean module red.
+#
+#   -fstack-protector-strong: a canary on any frame with a local array or a
+#     taken address — the frames that parse attacker bytes. A stack-smash then
+#     traps instead of returning into overwritten memory.
+#   -fno-strict-overflow / -fno-delete-null-pointer-checks: forbid the compiler
+#     from optimising away a check on the grounds that the UB "cannot happen".
+#     In hostile-input code those checks are the defence, not dead code.
+ccflags-y += $(call cc-option,-fstack-protector-strong)
+ccflags-y += $(call cc-option,-fno-strict-overflow)
+ccflags-y += $(call cc-option,-fno-delete-null-pointer-checks)
