@@ -7,7 +7,9 @@
 #   sudo firewall           # ← the whole project, running, every layer live
 #
 # What it does:
-#   1. builds the CLI and the daemon (cargo, release profile, offline)
+#   1. builds the CLI (with the `tls` feature: Ed25519 license verification +
+#      console mTLS) and the daemon (cargo, release profile). Set UFW_NO_TLS=1
+#      for the pure zero-dependency, fully-offline build instead.
 #   2. installs ufw-nft, ufwctl, firewall, ufw-daemon and ufw-waf to PREFIX/bin
 #   3. installs the policies and the DPI/WAF signatures under /etc/unified-firewall
 #   4. writes a monitor-mode daemon config and installs systemd units for the
@@ -17,6 +19,14 @@
 #      packet-filter, rate-limiting and attack-surface layers are live too. The
 #      policy is reloaded at boot by firewall-policy.service (nftables rules do
 #      not survive a reboot on their own), and it tracks whatever you last apply.
+#   6. best-effort builds the DKMS kernel module (identity-aware + DPI ENFORCEMENT)
+#      when dkms + kernel headers are present — the packet layer works without it.
+#   7. licensing is OFF by default (frictionless from-source install). Turn it on
+#      with UFW_ENABLE_LICENSING=1: installs license.conf + the periodic re-check
+#      timer so enforcement then requires an activated, node-locked key.
+#
+# The dashboard carries a "What's new" page (http://127.0.0.1:8787/#features)
+# that lists every one of these capabilities and its LIVE status on this host.
 #
 # Safety: the daemon starts in MONITOR mode (it observes and logs, it does not
 # block), the WAF binds LOOPBACK only, and the loaded policy permits by default
@@ -28,6 +38,7 @@
 
 set -eu
 
+VERSION="${VERSION:-0.1.0}"
 PREFIX="${PREFIX:-/usr/local}"
 BIN="$PREFIX/bin"
 ETC="/etc/unified-firewall"
@@ -35,22 +46,31 @@ POLICY_DST="$ETC/policies"
 SIG_DST="$ETC/sig-rules"
 DAEMON_POLICY="$ETC/daemon-policy"
 CONFIG="$ETC/daemon.toml"
+LICENSE_CONF="$ETC/license.conf"
 UNIT_DIR="/etc/systemd/system"
 STATE_DIR="/var/lib/unified-firewall"
+KSRC="/usr/src/unified-firewall-$VERSION"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 have_systemd() { [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; }
 
 if [ "${1:-}" = "--uninstall" ]; then
     if have_systemd; then
+        systemctl disable --now ufw-license-check.timer 2>/dev/null || true
         systemctl disable --now ufw-daemon.service ufw-waf.service ufw-nft.service firewall-policy.service 2>/dev/null || true
         rm -f "$UNIT_DIR/ufw-daemon.service" "$UNIT_DIR/ufw-waf.service" \
-              "$UNIT_DIR/ufw-nft.service" "$UNIT_DIR/firewall-policy.service"
+              "$UNIT_DIR/ufw-nft.service" "$UNIT_DIR/firewall-policy.service" \
+              "$UNIT_DIR/ufw-license-check.service" "$UNIT_DIR/ufw-license-check.timer"
         systemctl daemon-reload 2>/dev/null || true
     fi
+    # Best-effort: remove the DKMS kernel module and its staged source.
+    if command -v dkms >/dev/null 2>&1; then
+        dkms remove -m unified-firewall -v "$VERSION" --all >/dev/null 2>&1 || true
+    fi
+    rm -rf "$KSRC"
     rm -f "$BIN/firewall" "$BIN/ufw-nft" "$BIN/ufwctl" "$BIN/ufw-daemon" "$BIN/ufw-waf"
-    echo "removed binaries and systemd units."
-    echo "left $ETC and $STATE_DIR in place (they may hold config/policy you edited)."
+    echo "removed binaries, systemd units and the DKMS module."
+    echo "left $ETC and $STATE_DIR in place (they may hold config/policy/license you edited)."
     echo "if rules are still loaded: sudo nft delete table inet ufw"
     exit 0
 fi
@@ -69,9 +89,21 @@ command -v nft >/dev/null 2>&1 || {
 }
 
 echo "==> building CLI and daemon (cargo build --release; first build takes a minute)"
-# Build offline and without the optional tls feature, keeping the project's
-# zero-dependency guarantee. Build as the invoking user so ~/.cargo stays theirs.
-BUILD="cd '$HERE' && cargo build --release -p ufw-cli && cargo build --release -p ufw-daemon"
+# The CLI ships with the `tls` feature so the installed firewall VERIFIES the
+# Ed25519 license signature (not just the HMAC deterrent) and the console
+# supports mTLS. rustls/ring are pinned in Cargo.lock, so once fetched this
+# builds offline; on a first build they are pulled from crates.io. Set
+# UFW_NO_TLS=1 for the pure zero-dependency, hand-rolled-only offline build
+# (Ed25519 verify + console mTLS are then unavailable). Build as the invoking
+# user so ~/.cargo stays theirs.
+if [ "${UFW_NO_TLS:-0}" = "1" ]; then
+    CLI_FEATURES=""
+    echo "    (UFW_NO_TLS=1 — zero-dependency build; Ed25519 verify + mTLS disabled)"
+else
+    CLI_FEATURES="--features tls"
+    echo "    (ufw-cli +tls: Ed25519 license verify + console mTLS)"
+fi
+BUILD="cd '$HERE' && cargo build --release -p ufw-cli $CLI_FEATURES && cargo build --release -p ufw-daemon"
 if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
     su - "$SUDO_USER" -c "$BUILD"
 else
@@ -100,10 +132,10 @@ cat > "$CONFIG" <<EOF
 # enforce only after reading the logs and writing your allow rules.
 [daemon]
 mode = "monitor"
-# No ufw kernel module is built here (that is a separate DKMS step), so the
-# daemon runs in user space: it still classifies, logs, detects egress
-# anomalies, correlates and publishes telemetry — it just cannot block until
-# the module is installed and mode is switched to "enforce".
+# The daemon starts in user space regardless of the kernel module: it classifies,
+# logs, detects egress anomalies, correlates and publishes telemetry. Even if the
+# DKMS module built during install, blocking stays off until you switch mode to
+# "enforce" (and, for identity/DPI enforcement, set require_kernel_module = true).
 require_kernel_module = false
 
 [policy]
@@ -126,12 +158,65 @@ fleet_secret = "CHANGE-ME-before-fleet-use-0000000000000000"
 EOF
 chmod 0600 "$CONFIG"
 
+# --- Kernel module (identity-aware + DPI ENFORCEMENT) via DKMS -------------
+# The packet layer (nftables) works without this; the module only adds the
+# ring-0 identity/DPI enforcement path. Best-effort: it needs dkms and the
+# kernel headers, and a host without them keeps the packet layer and just skips
+# the module. Never fails the install. Set UFW_NO_KMOD=1 to skip staging it.
+if [ "${UFW_NO_KMOD:-0}" != "1" ] && [ -d "$HERE/kernel/linux/src" ]; then
+    echo "==> staging kernel module source to $KSRC (for DKMS)"
+    install -d "$KSRC/src" "$KSRC/inc"
+    install -m 0644 "$HERE/kernel/linux/Kbuild" "$HERE/kernel/linux/Makefile" "$KSRC/"
+    install -m 0644 "$HERE/kernel/linux/src/"*.c "$KSRC/src/"
+    install -m 0644 "$HERE/kernel/linux/inc/"*.h "$KSRC/inc/"
+    # dkms.conf with PACKAGE_VERSION pinned to this build's version.
+    sed "s/^PACKAGE_VERSION=.*/PACKAGE_VERSION=\"$VERSION\"/" \
+        "$HERE/kernel/linux/dkms.conf" > "$KSRC/dkms.conf"
+    chmod 0644 "$KSRC/dkms.conf"
+    if command -v dkms >/dev/null 2>&1; then
+        echo "==> building the kernel module with DKMS (best-effort)"
+        dkms add -m unified-firewall -v "$VERSION" >/dev/null 2>&1 || true
+        if dkms build -m unified-firewall -v "$VERSION" >/dev/null 2>&1 \
+           && dkms install --force -m unified-firewall -v "$VERSION" >/dev/null 2>&1; then
+            echo "   module built — identity/DPI enforcement is available"
+            echo "   (to use it: set mode=\"enforce\" + require_kernel_module=true in $CONFIG)"
+            if command -v mokutil >/dev/null 2>&1 && mokutil --sb-state 2>/dev/null | grep -qi enabled; then
+                echo "   Secure Boot is ON: the module must be MOK-signed + enrolled before it will load"
+            fi
+        else
+            echo "   (module not built — needs linux-headers-\$(uname -r); packet layer works without it)"
+            echo "    build it later:  sudo dkms autoinstall"
+        fi
+    else
+        echo "   (dkms not installed — module source staged but not built; the packet layer works)"
+        echo "    enable it later:  sudo apt install dkms linux-headers-\$(uname -r) && sudo dkms autoinstall"
+    fi
+fi
+
+# --- Licensing (opt-in) ----------------------------------------------------
+# Installing license.conf turns licensing ON: `firewall apply` (enforcement)
+# then requires an activated, node-locked key. Monitor mode still runs unlicensed.
+# Kept OFF by default so a from-source install stays frictionless and can never
+# lock you out. Enable with UFW_ENABLE_LICENSING=1.
+if [ "${UFW_ENABLE_LICENSING:-0}" = "1" ]; then
+    echo "==> enabling licensing (installing $LICENSE_CONF)"
+    install -m 0644 "$HERE/build/linux/license.conf" "$LICENSE_CONF"
+    echo "   licensing is ON — activate this machine before enforcing:"
+    echo "     sudo firewall license activate <YOUR-KEY>"
+else
+    echo "==> licensing left OFF (run with UFW_ENABLE_LICENSING=1 to require a key for enforcement)"
+fi
+
 if have_systemd; then
     echo "==> installing systemd services (firewall policy, daemon, WAF, dashboard)"
     install -m 0644 "$HERE/build/linux/firewall-policy.service" "$UNIT_DIR/firewall-policy.service"
     install -m 0644 "$HERE/build/linux/ufw-daemon.service"      "$UNIT_DIR/ufw-daemon.service"
     install -m 0644 "$HERE/build/linux/ufw-waf.service"         "$UNIT_DIR/ufw-waf.service"
     install -m 0644 "$HERE/build/linux/ufw-nft.service"         "$UNIT_DIR/ufw-nft.service"
+    # License re-check unit + timer (inert until licensing is enabled; the timer
+    # is only armed below when $LICENSE_CONF exists).
+    install -m 0644 "$HERE/build/linux/ufw-license-check.service" "$UNIT_DIR/ufw-license-check.service"
+    install -m 0644 "$HERE/build/linux/ufw-license-check.timer"   "$UNIT_DIR/ufw-license-check.timer"
     systemctl daemon-reload || true
     # Order matters: load the ruleset first (records state for the dashboard and
     # for future boots), then the observers, then the console. `enable --now`
@@ -141,6 +226,13 @@ if have_systemd; then
     systemctl enable --now ufw-daemon.service      || echo "   (ufw-daemon did not start — check: journalctl -u ufw-daemon)"
     systemctl enable --now ufw-waf.service         || echo "   (ufw-waf did not start — check: journalctl -u ufw-waf)"
     systemctl enable --now ufw-nft.service         || echo "   (dashboard did not start — check: journalctl -u ufw-nft)"
+    # Arm the periodic license re-check only when licensing is enabled. It caches
+    # a signed verdict with an offline grace window and reverts enforcement if the
+    # key lapses — pointless (and noisy) when there is no license to check.
+    if [ -f "$LICENSE_CONF" ]; then
+        systemctl enable --now ufw-license-check.timer || echo "   (license-check timer did not start — check: journalctl -u ufw-license-check)"
+        echo "   licensing re-check armed (every 6h; reverts enforcement if the key lapses)"
+    fi
     echo "   on every boot from now on: the firewall policy reloads and the daemon, WAF and dashboard start automatically"
 else
     echo "==> no systemd detected — starting daemon + WAF in the background"
@@ -175,12 +267,24 @@ if have_systemd; then
 else
     echo "  sudo firewall                       open the dashboard — every layer should read ACTIVE"
 fi
+echo "  what's new / feature status:  http://127.0.0.1:8787/#features"
+echo "                                (live status of the module, rate-limiting, licensing, mTLS, …)"
 echo "  sudo firewall status                the loaded rules, with live counters"
 echo
+if [ -f "$LICENSE_CONF" ]; then
+    echo "licensing is ON — enforcement needs an activated, node-locked key:"
+    echo "  sudo firewall license activate <YOUR-KEY>       activate this machine"
+    echo "  firewall license status                         show state (add --refresh to re-check)"
+    echo "  (to run ungated again: sudo rm $LICENSE_CONF)"
+    echo
+fi
 echo "when you are ready to actually BLOCK (not just observe):"
 echo "  edit $CONFIG  → set  mode = \"enforce\"   then  sudo systemctl restart ufw-daemon"
 echo "  and graduate the policy:  sudo firewall apply default_deny"
 echo "  (whatever you 'apply' becomes what reloads on the next boot)"
+if [ -d "$KSRC" ]; then
+    echo "  for identity/DPI enforcement also set require_kernel_module = true (needs the DKMS module)"
+fi
 echo
 if have_systemd; then
     echo "turn auto-start off for one piece:  sudo systemctl disable --now ufw-nft.service   (the dashboard)"

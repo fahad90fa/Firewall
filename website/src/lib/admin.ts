@@ -65,19 +65,38 @@ export async function signOut(): Promise<void> {
 /** Invoke the admin edge function with the signed-in user's JWT. */
 async function call<T = unknown>(action: string, args: Record<string, unknown> = {}): Promise<T> {
   const sb = ensure();
-  const { data, error } = await sb.functions.invoke("admin", { body: { action, ...args } });
+  // Attach the signed-in user's access token explicitly. Without this, a stale
+  // or unset functions-client auth header could send the anon key, which the
+  // admin function rejects as "not an admin" (403).
+  const {
+    data: { session },
+  } = await sb.auth.getSession();
+  if (!session) throw new Error("You are signed out — please sign in again.");
+
+  const { data, error } = await sb.functions.invoke("admin", {
+    body: { action, ...args },
+    headers: { Authorization: `Bearer ${session.access_token}` },
+  });
   if (error) {
     // supabase-js wraps non-2xx as FunctionsHttpError; surface the JSON reason.
     const ctx = (error as { context?: Response }).context;
+    const status = ctx?.status;
+    let reason = error.message;
     if (ctx && typeof ctx.json === "function") {
       try {
         const j = await ctx.json();
-        throw new Error(j.error ?? j.reason ?? error.message);
+        reason = j.error ?? j.reason ?? reason;
       } catch {
-        /* fall through */
+        /* keep the default message */
       }
     }
-    throw new Error(error.message);
+    if (status === 403 || reason === "forbidden") {
+      const who = session.user.email ?? "this account";
+      throw new Error(
+        `${who} is not an admin. Add its exact email to the admin_users table in Supabase, then retry.`,
+      );
+    }
+    throw new Error(reason);
   }
   return data as T;
 }

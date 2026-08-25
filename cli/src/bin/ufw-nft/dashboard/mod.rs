@@ -16,6 +16,7 @@ mod contain;
 mod daemon;
 mod events;
 mod exposure;
+mod features;
 mod fleet;
 mod ids;
 mod lint;
@@ -212,6 +213,12 @@ fn handle(mut stream: tls::Stream) -> std::io::Result<()> {
         }
         (_, "/api/state") => {
             let body = state_json();
+            respond(&mut stream, 200, "application/json", &body)
+        }
+        ("GET", "/api/features") => {
+            // The "what's new" page: recently-added capabilities and, where the
+            // host can tell, their live status. Read-only, so not gated.
+            let body = features::features_json(cert_fp.is_some());
             respond(&mut stream, 200, "application/json", &body)
         }
         ("GET", "/api/whoami") => {
