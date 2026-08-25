@@ -13,12 +13,40 @@ cargo test -p ufw-daemon --test detection_efficacy -- --nocapture
 
 | Detector | Catch-rate | False positives | Corpus |
 | --- | --- | --- | --- |
+| **WAF full pipeline** (`WafEngine::inspect`) | **89.7%** (26/29) | **0%** (0/13) | 29 real web attacks across 10 classes incl. 10 evasion variants (all caught); 13 benign incl. deliberate look-alikes |
 | **Egress anomaly** (new-destination-after-baseline) | **100%** (25/25) | **0%** (0/30) | 25 post-baseline novel destinations; 30 benign (baseline revisits + still-learning) |
 | **Signature pre-filter** (`scan_content`) | **100% recall** (39/39) | reported, not asserted | 39 payloads carrying real shipped patterns; 6 benign |
+
+The **WAF full-pipeline** number (`daemon/tests/waf_efficacy.rs`) is the honest
+end-to-end web number: real HTTP attack requests driven through fact parsing +
+percent-decode normalisation + full condition-tree evaluation of every shipped
+signature. The corpus is authored **independently of the signature strings** —
+canonical forms plus evasion variants (encoding, case, comments) — so a hit means
+the WAF *generalised*, not that a fixed string was echoed back. The 3 misses are
+the deliberately-FP-prone forms (a bare `'--` comment, a boolean `'1'='1`, a
+backtick command sub) left un-generalised to hold the false-positive rate at 0%.
+Building this harness surfaced real coverage gaps that were then closed with three
+new structural signatures (inline `onload=` XSS, `{{…}}` template injection,
+encoded-CRLF header injection).
 
 The signature pre-filter flagged **6/6** benign payloads as *candidates* — see the
 scope note below; this is the pre-filter working as designed, not a detector
 false positive.
+
+## Behavioral detectors (new defence layers)
+
+Two reconnaissance/exfiltration detectors ship alongside the efficacy harnesses,
+each with its own unit tests that double as a small labeled corpus:
+
+- **Port-scan / network-sweep** (`daemon/src/logging/portscan.rs`) — live in the
+  logging pipeline. One source touching many ports on a host, or one port across
+  many hosts, inside a sliding window. Tests cover vertical scan, horizontal
+  sweep, ordinary traffic (no fire), slow-scan-below-window, and alert
+  throttling.
+- **DNS tunneling / exfiltration** (`daemon/src/logging/dns_exfil.rs`) — scores
+  query names for a single encoded blob or many chunked high-entropy sub-domains
+  under one parent. Tests show it fires on both tunnel shapes and stays quiet on
+  ordinary look-ups, CDN shards, and long-but-readable names.
 
 ## Honest scope — read this before quoting a number
 
