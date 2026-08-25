@@ -157,6 +157,9 @@ export default function DownloadPage() {
         </ol>
       </div>
 
+      {/* --- verified install via signed apt repo --- */}
+      <AptRepo />
+
       {/* --- extras --- */}
       <div className="mt-10 grid gap-4 sm:grid-cols-2">
         <InfoCard title="Go to deny-by-default" tone="signal">
@@ -182,6 +185,45 @@ export default function DownloadPage() {
       <p className="mt-10 text-center font-mono text-xs text-muted/70">
         On first install the daemon runs in monitor mode. Nothing here can take you off the network until you
         deliberately enforce a policy.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * The cryptographically-verified install path: add the project's GPG-signed apt
+ * repository so `apt` verifies every package and every update automatically. The
+ * commands are built from the site's own origin at render time, so they always
+ * point at wherever this page is deployed. This becomes live once the maintainer
+ * publishes the signed repo at `/apt/` (build/linux/sign-release.sh → public/apt).
+ */
+function AptRepo() {
+  const origin =
+    typeof window !== "undefined" && window.location?.origin ? window.location.origin : "https://<your-site>";
+  const trust = `curl -fsSL ${origin}/apt/unified-firewall-archive-keyring.asc | sudo gpg --dearmor -o /usr/share/keyrings/unified-firewall.gpg`;
+  const add = `echo "deb [signed-by=/usr/share/keyrings/unified-firewall.gpg] ${origin}/apt ./" | sudo tee /etc/apt/sources.list.d/unified-firewall.list`;
+  const install = `sudo apt update && sudo apt install unified-firewall`;
+  return (
+    <div className="mt-12">
+      <Label tone="safe">VERIFIED INSTALL — RECOMMENDED</Label>
+      <h2 className="mt-4 font-display text-3xl font-bold tracking-tight text-ink text-balance">
+        Signed repository, verified updates.
+      </h2>
+      <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-muted">
+        A loose <span className="font-mono text-ink">.deb</span> has no provenance. Add our GPG-signed apt
+        repository instead and every install — and every future{" "}
+        <span className="font-mono text-ink">apt upgrade</span> — is checked against a key you explicitly trust,
+        so a tampered or man-in-the-middled package is rejected before it lands.
+      </p>
+      <ol className="mt-8 space-y-4">
+        <Step n="A" title="Trust the publisher's key (once)" body="Fetch the archive key and install it into apt's keyring." cmd={trust} />
+        <Step n="B" title="Add the repository, pinned to that key" body="signed-by ties the repo to that one key — no other key can push you a package." cmd={add} />
+        <Step n="C" title="Install — apt verifies the signature and checksums" body="From here, updates arrive through apt like any other package, cryptographically verified." cmd={install} />
+      </ol>
+      <p className="mt-3 text-[13px] leading-relaxed text-muted/70">
+        Proves provenance (the bytes are the key-holder's), not behaviour — that's the job of the source, the
+        shipped SBOM, and a third-party audit. Requires the signed repository to be published at{" "}
+        <span className="font-mono text-ink">/apt/</span> on this site.
       </p>
     </div>
   );

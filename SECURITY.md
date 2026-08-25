@@ -51,6 +51,12 @@ The single highest-value next step for this project's security posture is a
 **third-party audit of the ring-0 code and the nftables emission**; self-tests
 do not substitute for it.
 
+## For an external reviewer
+
+Start with the [**audit brief**](docs/security/audit-brief.md): what to review and
+in what order, every claim we make with its evidence and honest scope, and what
+we explicitly do **not** claim.
+
 ## Threat model & attack surface
 
 See [`docs/security/threat-model.md`](docs/security/threat-model.md) and
