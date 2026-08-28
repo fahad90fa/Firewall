@@ -243,6 +243,21 @@ pub fn features_json(mtls_client: bool) -> String {
         "live behavioral layer: counts connections per (source, service, port) over a sliding window on auth ports (SSH/RDP/FTP/SMB/DB/mail/LDAP/VNC) and alerts on a credential-stuffing rate. Direction-agnostic — catches an attacker hammering your SSH or a compromised host hammering someone else's.",
         "part of the daemon's behavioral detection (enabled with anomaly detection)",
     );
+    {
+        let (hp_total, _hp_recent) = super::honeypot::summary();
+        let hp_status = if hp_total > 0 { "active" } else { "shipped" };
+        feature(
+            &mut w,
+            "honeypot",
+            "Honeypot / deception traps",
+            "detection",
+            hp_status,
+            &format!(
+                "console decoy routes (/.git/config, /.env, /admin, …) + a per-install canary honeytoken: any hit is an intruder, near-zero false positives. {hp_total} trap hit(s) so far. Passive net-decoy ports (policy action: alert) complement it. Opt-in, spoof-proof auto-contain. See the Traps page.",
+            ),
+            "open the dashboard → Traps (http://127.0.0.1:8787/#traps)",
+        );
+    }
     feature(
         &mut w,
         "detection",

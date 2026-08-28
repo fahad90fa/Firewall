@@ -788,6 +788,7 @@
     <a href="#rules" data-nav="rules"><span class="ic">&#9636;</span>Rules<span class="badge" id="nav-rules">0</span></a>
     <a href="#host" data-nav="host"><span class="ic">&#9635;</span>Host surface<span class="badge" id="nav-host">0</span></a>
     <a href="#compliance" data-nav="compliance"><span class="ic">&#10003;</span>Compliance<span class="badge" id="nav-compliance">0</span></a>
+    <a href="#traps" data-nav="traps"><span class="ic">&#127855;</span>Traps<span class="badge" id="nav-traps">0</span></a>
     <a href="#features" data-nav="features"><span class="ic">&#10022;</span>What's new<span class="badge" id="nav-features">new</span></a>
     <div class="grp">System</div>
     <a href="#settings" data-nav="settings"><span class="ic">&#9881;</span>Settings</a>
@@ -1059,6 +1060,25 @@
           <div class="set-row"><div class="set-l"><b>About</b><span id="setAbout">ufw-nft console</span></div><span class="mono muted" id="setVer"></span></div>
         </div></div>
       </div>
+    </section>
+
+    <section id="traps">
+      <div class="sec-h"><h2>Traps — honeypot &amp; deception</h2><span class="hint">decoy routes and honeytokens no legitimate user touches — a hit is an intruder</span></div>
+      <div class="card"><div class="body">
+        <div id="trapSummary" class="muted" style="margin-bottom:12px">Loading traps…</div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px">
+            <input type="checkbox" id="trapAutoContain" onchange="setTrapContain(this.checked)">
+            Auto-contain a decoy hit's source
+          </label>
+          <span class="muted" style="font-size:12px">opt-in · public sources only · rate-limited · established-handshake only (spoof-proof)</span>
+        </div>
+        <table class="tbl"><thead><tr><th>Time</th><th>Kind</th><th>Source</th><th>Decoy path</th><th>User-Agent</th><th>Contained</th></tr></thead>
+          <tbody id="trapRows"><tr><td colspan="6" class="muted">No trap hits — quiet is good.</td></tr></tbody></table>
+        <p class="muted" style="margin-top:14px;font-size:12px;line-height:1.7">
+          Near-zero false positives by construction. <b>Passive net-decoy ports</b> (Tier 1, policy <code>action: alert</code>) are single-SYN and spoofable, so they alert but never auto-contain. Only these handshake-proven console hits can. Honest scope: static decoys catch untargeted scanning + credential-replay, not a targeted adversary who fingerprints them. Behind a reverse proxy, <code>peer_addr</code> is the proxy — keep auto-contain off unless you allowlist your infra.
+        </p>
+      </div></div>
     </section>
 
     <section id="features">
@@ -2224,6 +2244,29 @@ function updateNav(s){
    `onRoute` does the rest. `#investigate/<ip>` is a deep-link into a dossier. */
 const navLinks=[...document.querySelectorAll("nav.side a[data-nav]")];
 const PAGES=navLinks.map(a=>a.getAttribute("data-nav"));
+async function loadTraps(){
+  const sum=$("trapSummary"), rows=$("trapRows"); if(!rows) return;
+  const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  try{
+    const j=await (await fetch("/api/honeypot")).json();
+    const hits=j.hits||[];
+    sum.innerHTML=`${j.total||0} total trap hits · ${j.decoy_count||0} decoy paths armed · auto-contain <b>${j.auto_contain?"ON":"off"}</b>`;
+    const ac=$("trapAutoContain"); if(ac) ac.checked=!!j.auto_contain;
+    const nb=$("nav-traps"); if(nb) nb.textContent=String(j.total||0);
+    rows.innerHTML = hits.length ? hits.map(h=>`<tr>
+      <td>${esc(new Date((h.ts||0)*1000).toLocaleString())}</td>
+      <td>${h.kind==="canary-replay"?'<span style="color:var(--bad,#e5484d)">canary-replay</span>':esc(h.kind)}</td>
+      <td class="mono">${esc(h.src)}${h.mtls?` · cert ${esc(h.mtls).slice(0,10)}`:""}</td>
+      <td class="mono">${esc(h.path)}</td>
+      <td class="muted" style="max-width:220px;overflow:hidden;text-overflow:ellipsis">${esc(h.ua)}</td>
+      <td>${h.contained?"✔ contained":"—"}</td></tr>`).join("")
+      : '<tr><td colspan="6" class="muted">No trap hits — quiet is good.</td></tr>';
+  }catch(e){ sum.textContent="Could not load traps."; }
+}
+async function setTrapContain(on){
+  try{ await fetch("/api/honeypot/contain?enabled="+(on?1:0),{method:"POST"}); }catch(e){}
+  loadTraps();
+}
 async function loadFeatures(){
   const grid=$("featGrid"), sum=$("featSummary"); if(!grid) return;
   const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -2241,7 +2284,7 @@ async function loadFeatures(){
 }
 const PAGE_TITLE={overview:"Overview",threats:"Threats",investigate:"Investigation",talkers:"Top talkers",
   events:"Events",network:"Network",fleet:"Fleet",respond:"Auto-response",exposure:"Attack surface",rules:"Rules",host:"Host surface",
-  compliance:"Compliance",features:"What's new",settings:"Settings",diag:"Diagnostics"};
+  compliance:"Compliance",traps:"Traps",features:"What's new",settings:"Settings",diag:"Diagnostics"};
 let currentPage=null;
 function go(id){ location.hash="#"+id; }
 function applyRoute(id){
@@ -2259,6 +2302,7 @@ function applyRoute(id){
   if(id==="respond" && typeof loadRespond==="function") loadRespond();
   if(id==="fleet" && typeof loadFleet==="function") loadFleet();
   if(id==="settings" && typeof refreshSettingsMeta==="function") refreshSettingsMeta();
+  if(id==="traps" && typeof loadTraps==="function") loadTraps();
   if(id==="features" && typeof loadFeatures==="function") loadFeatures();
   const g=$("gsearch"); if(g) g.value="";   // search is per-page
   applyGlobalSearch();

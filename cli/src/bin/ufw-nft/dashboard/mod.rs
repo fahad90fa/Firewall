@@ -18,6 +18,7 @@ mod events;
 mod exposure;
 mod features;
 mod fleet;
+mod honeypot;
 mod ids;
 mod lint;
 mod network;
@@ -154,10 +155,11 @@ fn handle(mut stream: tls::Stream) -> std::io::Result<()> {
     let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(10)));
     // Who is calling — the mutating actions are gated by role, of which loopback
     // is the weakest source.
-    let from_loopback = stream
-        .peer_addr()
-        .map(|p| p.ip().is_loopback())
-        .unwrap_or(false);
+    // The completed-handshake source address. `from_loopback` gates the mutating
+    // actions; `peer_ip` is also the (non-spoofable, post-accept) source a
+    // honeypot decoy hit records and may auto-contain.
+    let peer_ip = stream.peer_addr().ok().map(|p| p.ip());
+    let from_loopback = peer_ip.map(|ip| ip.is_loopback()).unwrap_or(false);
     let mut buf = [0u8; 4096];
     let mut head = Vec::new();
     // Read until the end of the request head; the request has no body we care
@@ -206,6 +208,36 @@ fn handle(mut stream: tls::Stream) -> std::io::Result<()> {
     let method = line0.next().unwrap_or("GET");
     let target = line0.next().unwrap_or("/");
     let (route, query) = target.split_once('?').unwrap_or((target, ""));
+    let user_agent = request
+        .lines()
+        .find_map(|l| {
+            l.strip_prefix("User-Agent:")
+                .or_else(|| l.strip_prefix("user-agent:"))
+        })
+        .map(str::trim)
+        .unwrap_or("");
+
+    // Canary honeytoken replay: this token only ever lived in a FAKE decoy page,
+    // so its arrival as a real bearer credential proves the decoy was scraped and
+    // the "secret" exfiltrated. Record it (highest-signal event) and reject —
+    // never let it authenticate, whatever route it is presented to.
+    if let Some(t) = token.as_deref() {
+        if honeypot::is_canary(t) {
+            honeypot::record_hit(
+                peer_ip,
+                cert_fp.as_deref(),
+                route,
+                user_agent,
+                "canary-replay",
+            );
+            return respond(
+                &mut stream,
+                401,
+                "application/json",
+                "{\"error\":\"invalid token\"}",
+            );
+        }
+    }
 
     match (method, route) {
         (_, "/") | (_, "/index.html") => {
@@ -385,6 +417,52 @@ fn handle(mut stream: tls::Stream) -> std::io::Result<()> {
             };
             let body = format!("{{\"ok\":{ok}}}");
             respond(&mut stream, 200, "application/json", &body)
+        }
+        ("GET", "/api/honeypot") => {
+            // Read-only trap log for the "Traps" page; not gated.
+            let body = honeypot::honeypot_json();
+            respond(&mut stream, 200, "application/json", &body)
+        }
+        ("POST", "/api/honeypot/contain") => {
+            // Toggling opt-in honeypot auto-contain is admin-only.
+            if !rbac::authorize(
+                from_loopback,
+                token.as_deref(),
+                cert_fp.as_deref(),
+                rbac::Action::Configure,
+            ) {
+                return respond(
+                    &mut stream,
+                    403,
+                    "application/json",
+                    "{\"ok\":false,\"error\":\"changing honeypot auto-contain requires admin (loopback, or an admin bearer token)\"}",
+                );
+            }
+            let ok = match qget(query, "enabled") {
+                Some(v) => honeypot::set_contain_enabled(is_truthy(&v)).is_ok(),
+                None => false,
+            };
+            respond(
+                &mut stream,
+                200,
+                "application/json",
+                &format!("{{\"ok\":{ok}}}"),
+            )
+        }
+        // Decoy routes ("dashboard traps"): any hit is an intruder. Matched last,
+        // just before 404, so a real route always wins. Ungated by design — the
+        // point is to answer an unauthenticated prober with a convincing fake
+        // while recording (and, if opted in, containing) the handshake-proven source.
+        _ if honeypot::is_decoy(route) => {
+            honeypot::record_hit(
+                peer_ip,
+                cert_fp.as_deref(),
+                route,
+                user_agent,
+                "decoy-route",
+            );
+            let (ctype, body) = honeypot::fake_body(route);
+            respond(&mut stream, 200, ctype, &body)
         }
         _ => respond(&mut stream, 404, "text/plain", "not found\n"),
     }
@@ -648,6 +726,14 @@ fn state_json() -> String {
         w.end_object();
     }
     w.end_array();
+    w.end_object();
+
+    // Honeypot / deception summary (decoy-route + canary-replay traps).
+    let (hp_total, hp_recent) = honeypot::summary();
+    w.begin_object_field("honeypot");
+    w.u64_field("total", hp_total);
+    w.u64_field("recent", hp_recent as u64);
+    w.bool_field("auto_contain", honeypot::contain_enabled());
     w.end_object();
 
     // --- exposure (inbound attack surface) --------------------------------
