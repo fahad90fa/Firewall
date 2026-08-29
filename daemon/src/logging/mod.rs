@@ -453,6 +453,12 @@ impl WorkerState {
         let mut exfils = Vec::new();
         if let Some(de) = &mut self.dns_exfil {
             for event in &events {
+                // Only genuine flow observations feed the detector — never the
+                // detectors' own alert/enrichment events (which never carry a
+                // dpi today, but gate explicitly like every sibling detector).
+                if event.kind != EventKind::FlowDecision {
+                    continue;
+                }
                 if let Some(dpi) = &event.dpi {
                     if dpi.l7 == ufw_shared::policy_types::L7Protocol::Dns {
                         if let Some(qname) = &dpi.dns_qname {
