@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button, Label, ShieldMark } from "./ui";
-import { LINUX_DEB, LINUX_DOWNLOAD_URL } from "../lib/content";
+import { LINUX_DEB, LINUX_DOWNLOAD_URL, GITHUB_REPO, SOURCE_INSTALL_CMD } from "../lib/content";
 
 /**
  * The dedicated download page (route `#download`). It plays a short download
@@ -160,6 +160,9 @@ export default function DownloadPage() {
       {/* --- verified install via signed apt repo --- */}
       <AptRepo />
 
+      {/* --- build from source (freshest) --- */}
+      <SourceInstall />
+
       {/* --- extras --- */}
       <div className="mt-10 grid gap-4 sm:grid-cols-2">
         <InfoCard title="Go to deny-by-default" tone="signal">
@@ -228,6 +231,45 @@ function AptRepo() {
         Provenance proves who built the bytes and from what source, not behaviour — that's the job of the source,
         the shipped SBOM, and a third-party audit. The signed apt repo above additionally needs the maintainer's
         GPG key published at <span className="font-mono text-ink">/apt/</span>.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Build from source — the freshest path. The site-hosted .deb is cut per
+ * release; source on `main` carries the latest hardening the moment it lands.
+ * One command clones and runs install.sh, which builds the CLI + daemon, wires
+ * the systemd units, and comes up in monitor mode (blocking nothing).
+ */
+function SourceInstall() {
+  return (
+    <div className="mt-12">
+      <Label tone="signal">BUILD FROM SOURCE — LATEST</Label>
+      <h2 className="mt-4 font-display text-3xl font-bold tracking-tight text-ink text-balance">
+        Prefer the source? One command.
+      </h2>
+      <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-muted">
+        The released <span className="font-mono text-ink">.deb</span> is cut per version; the source on{" "}
+        <span className="font-mono text-ink">main</span> carries every fix the moment it merges — including the
+        latest security hardening. Needs <span className="font-mono text-ink">cargo</span> (rustup) and{" "}
+        <span className="font-mono text-ink">nftables</span>; the installer handles the rest and starts in
+        monitor mode, blocking nothing until you deliberately enforce.
+      </p>
+      <div className="mt-6">
+        <Command cmd={SOURCE_INSTALL_CMD} />
+      </div>
+      <p className="mt-3 text-[13px] leading-relaxed text-muted/70">
+        Every layer and its live status is listed on the console's{" "}
+        <span className="font-mono text-ink">/#features</span> page, and the security scope — what enforces, what
+        detects, and what is <span className="text-ink">not</span> yet third-party audited — is written down in{" "}
+        <a className="text-signal hover:underline" href={`${GITHUB_REPO}/blob/main/SECURITY.md`} target="_blank" rel="noreferrer">
+          SECURITY.md
+        </a>{" "}
+        and the{" "}
+        <a className="text-signal hover:underline" href={`${GITHUB_REPO}/blob/main/docs/security/audit-brief.md`} target="_blank" rel="noreferrer">
+          audit brief
+        </a>.
       </p>
     </div>
   );

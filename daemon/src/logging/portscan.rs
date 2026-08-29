@@ -34,6 +34,11 @@ pub struct PortScanConfig {
     pub distinct_hosts: usize,
     /// Sources tracked. Beyond this, the least-recently-seen is dropped.
     pub max_sources: usize,
+    /// Distinct (host, port) probes retained per source. A hard ceiling so one
+    /// source sweeping a huge address range (e.g. a whole /8 on one port) cannot
+    /// grow its window without bound — age-out alone is paced by the attacker.
+    /// Far above any detection threshold, so it never affects a verdict.
+    pub max_probes_per_source: usize,
     /// Minimum gap between alerts for the same source.
     pub realert_interval_secs: u64,
 }
@@ -45,6 +50,7 @@ impl Default for PortScanConfig {
             distinct_ports: 20,
             distinct_hosts: 15,
             max_sources: 4096,
+            max_probes_per_source: 1024,
             realert_interval_secs: 120,
         }
     }
@@ -164,6 +170,16 @@ impl PortScanDetector {
         self.alerts_raised
     }
 
+    /// The largest per-source probe window currently retained. Bounded by
+    /// `max_probes_per_source`; exposed so the cap can be asserted and metered.
+    pub fn max_probes_held(&self) -> usize {
+        self.sources
+            .values()
+            .map(|s| s.probes.len())
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Feed an event. Returns a [`ScanAlert`] when a source's fan-out crosses a
     /// threshold. Only connection observations (flow decisions) count — the
     /// detector's own alerts and enrichment events never feed back into it.
@@ -182,6 +198,10 @@ impl PortScanDetector {
 
         let distinct_ports = self.config.distinct_ports;
         let distinct_hosts = self.config.distinct_hosts;
+        let max_probes = self
+            .config
+            .max_probes_per_source
+            .max(distinct_ports.max(distinct_hosts));
 
         let state = self.sources.entry(src).or_default();
         state.last_seen_us = now;
@@ -207,6 +227,17 @@ impl PortScanDetector {
             dst_ip,
             dst_port,
         });
+        // Hard per-source cap: drop the oldest probes (and their `seen` entries)
+        // so a single high-fan-out source can never grow this window past the
+        // ceiling. Each (host, port) is unique in `probes`, so removing the
+        // popped pair from `seen` keeps the two in step.
+        while state.probes.len() > max_probes {
+            if let Some(old) = state.probes.pop_front() {
+                state.seen.remove(&(old.dst_ip, old.dst_port));
+            } else {
+                break;
+            }
+        }
 
         // Throttle: one alert per source per realert interval.
         if state.last_alert_us != 0 && now.saturating_sub(state.last_alert_us) < realert_us {
@@ -319,6 +350,7 @@ mod tests {
             distinct_ports: 20,
             distinct_hosts: 15,
             max_sources: 1024,
+            max_probes_per_source: 1024,
             realert_interval_secs: 120,
         })
     }
@@ -390,6 +422,31 @@ mod tests {
             "a second alert must wait out the realert interval"
         );
         assert_eq!(d.alerts_raised(), 1);
+    }
+
+    #[test]
+    fn per_source_state_is_bounded_under_a_huge_sweep() {
+        // One source sweeping thousands of distinct hosts on one port, all
+        // inside the window, must not grow its per-source window past the cap —
+        // the OOM this fix prevents. Detection still fires (it did long ago).
+        let mut d = PortScanDetector::new(PortScanConfig {
+            window_secs: 3600,
+            distinct_ports: 20,
+            distinct_hosts: 15,
+            max_sources: 16,
+            max_probes_per_source: 64,
+            realert_interval_secs: 1,
+        });
+        for h in 0..5000u32 {
+            let dst = std::net::Ipv4Addr::from(0x0a00_0000 | (h & 0x00ff_ffff)).to_string();
+            let _ = d.observe(&probe("203.0.113.9", &dst, 22, 10));
+        }
+        assert!(
+            d.max_probes_held() <= 64,
+            "per-source window exceeded the cap: {}",
+            d.max_probes_held()
+        );
+        assert!(d.alerts_raised() >= 1, "a 5000-host sweep is still a sweep");
     }
 
     #[test]

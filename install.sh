@@ -277,6 +277,9 @@ else
 fi
 echo "  what's new / feature status:  http://127.0.0.1:8787/#features"
 echo "                                (live status of the module, rate-limiting, licensing, mTLS, …)"
+echo "  honeypot / deception traps:   http://127.0.0.1:8787/#traps"
+echo "                                (decoy routes + canary; add passive net decoys with:"
+echo "                                 sudo firewall apply policies/base/honeypot_decoys.yaml)"
 echo "  sudo firewall status                the loaded rules, with live counters"
 echo
 if [ -f "$LICENSE_CONF" ]; then
@@ -303,5 +306,8 @@ echo
 echo "prefer a cryptographically-verified package instead of a source build?"
 echo "  released .debs carry keyless build provenance (SLSA + Rekor transparency log):"
 echo "    gh attestation verify <the .deb> --repo fahad90fa/Firewall     (see docs/apt-repo.md)"
+echo
+echo "security scope (what enforces, what detects, what is NOT yet third-party audited):"
+echo "  SECURITY.md  and  docs/security/audit-brief.md"
 echo
 echo "uninstall everything:  sudo ./install.sh --uninstall"

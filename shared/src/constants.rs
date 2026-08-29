@@ -164,7 +164,7 @@ pub const LOG_BATCH_MAX_EVENTS: usize = 256;
 pub const LOG_BATCH_LINGER_MS: u64 = 50;
 
 /// Schema version stamped on every emitted log event.
-pub const LOG_SCHEMA_VERSION: u16 = 1;
+pub const LOG_SCHEMA_VERSION: u16 = 2;
 
 // ---------------------------------------------------------------------------
 // Platform endpoints

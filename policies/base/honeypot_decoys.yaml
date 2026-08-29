@@ -1,0 +1,47 @@
+# Passive network honeypot — decoy ports (Tier 1).
+#
+# A deception overlay: it permits by default (like default_allow) but ALERTS on
+# any inbound connection to a set of "juicy" ports this host does not actually
+# serve. A decoy has no legitimate use, so a hit is near-zero-false-positive
+# evidence of a scanner or an intruder — and it needs NO listening service:
+# `action: alert` lowers to an nftables `log` (see policy-lang Action::Alert),
+# the connection is not accepted, and the source shows up on the console.
+#
+#   sudo firewall apply policies/base/honeypot_decoys.yaml
+#
+# Honest scope: the single SYN that trips a decoy port is UNVERIFIED and
+# spoofable, so these alerts are for visibility only — they are never eligible
+# for auto-contain (only the handshake-proven console decoy routes are). A
+# targeted attacker who fingerprints the host will avoid static decoys; the real
+# catch is untargeted mass scanning.
+
+version: 1
+
+metadata:
+  name: honeypot-decoys
+  description: "Deception overlay: alert on inbound connections to decoy ports (no service, spoof-safe)"
+  revision: 1
+  author: security-engineering
+
+defaults:
+  action: allow
+  log: true
+  priority: 1000
+  stateful: true
+
+port_groups:
+  # Ports attackers probe first and a normal workstation/server never exposes on
+  # purpose. Telnet/RDP/VNC/SMB/DB + classic implant/backdoor listeners.
+  decoy_services: [23, 2323, 21, 445, 3389, 5900, 1433, 3306, 6379, 9200, 2375, 4444, 5555, 1337, 31337]
+
+rules:
+  - id: honeypot-decoy-ports
+    description: "Inbound connection to a decoy port — no legitimate use, so a hit is recon/intrusion"
+    priority: 50
+    layer: packet
+    direction: inbound
+    action: alert
+    protocol: tcp
+    destination:
+      ports: decoy_services
+    tags: [honeypot, deception, decoy]

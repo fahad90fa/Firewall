@@ -481,7 +481,15 @@ impl Analyzer {
         let interfaces: Vec<String> = rule.interfaces.iter().map(|i| i.value.clone()).collect();
         let tags: Vec<String> = rule.tags.iter().map(|t| t.value.clone()).collect();
 
-        self.lint_rule(rule, action, layer, &dest, &dest_ports, protocol);
+        self.lint_rule(
+            rule,
+            action,
+            layer,
+            &dest,
+            &dest_ports,
+            &source_ports,
+            protocol,
+        );
 
         let multi = app_variants.len() > 1;
         if multi {
@@ -748,6 +756,10 @@ impl Analyzer {
         explicit
     }
 
+    // Every one of these is a distinct fact the lints need (the two port sides,
+    // the address, the resolved action/layer/protocol); bundling them into a
+    // struct just to satisfy the arg-count lint would obscure, not clarify.
+    #[allow(clippy::too_many_arguments)]
     fn lint_rule(
         &mut self,
         rule: &ast::Rule,
@@ -755,9 +767,15 @@ impl Analyzer {
         layer: Layer,
         dest: &AddressMatch,
         dest_ports: &PortMatch,
+        source_ports: &PortMatch,
         protocol: Protocol,
     ) {
-        if !protocol.has_ports() && protocol != Protocol::Any && !dest_ports.is_any() {
+        // A port constraint on a protocol that has no ports can never match in
+        // the reference model — and the nftables backend would drop the port
+        // keyword and match *every* packet of that protocol, so a `deny` would
+        // over-block and an `allow` would be a bypass. Reject it, on either side.
+        let portless = !protocol.has_ports() && protocol != Protocol::Any;
+        if portless && !dest_ports.is_any() {
             let span = rule
                 .destination
                 .as_ref()
@@ -769,11 +787,30 @@ impl Analyzer {
                     codes::PORTS_ON_PORTLESS_PROTOCOL,
                     span,
                     format!(
-                        "protocol `{}` has no ports, so this port constraint can never match",
+                        "protocol `{}` has no ports, so this destination port constraint can never match",
                         protocol.as_str()
                     ),
                 )
                 .with_help("remove the `ports:` list, or change the protocol to tcp/udp"),
+            );
+        }
+        if portless && !source_ports.is_any() {
+            let span = rule
+                .source
+                .as_ref()
+                .and_then(|s| s.ports.first())
+                .map(|p| p.span)
+                .unwrap_or(rule.span);
+            self.diags.push(
+                Diagnostic::error(
+                    codes::PORTS_ON_PORTLESS_PROTOCOL,
+                    span,
+                    format!(
+                        "protocol `{}` has no ports, so this source port constraint can never match",
+                        protocol.as_str()
+                    ),
+                )
+                .with_help("remove the source `ports:` list, or change the protocol to tcp/udp"),
             );
         }
 
@@ -2027,6 +2064,27 @@ mod tests {
             ));
             assert!(!d.has_code(codes::LAYER_MISMATCH), "rejected {proto}");
         }
+    }
+
+    #[test]
+    fn source_ports_on_a_portless_protocol_are_rejected() {
+        // The mirror of the destination-port check: a portless protocol carrying
+        // SOURCE ports can never match in the model, and the nftables backend
+        // would drop the port keyword and match every packet of that protocol —
+        // a silent over-block (deny) or bypass (allow). It must be an error.
+        let d = diags_of(&format!(
+            "{BASE}rules:\n  - id: r\n    action: deny\n    protocol: icmp\n    source:\n      ports: [20]\n"
+        ));
+        assert!(
+            d.has_code(codes::PORTS_ON_PORTLESS_PROTOCOL),
+            "source ports on icmp must be rejected, got {:?}",
+            d.codes()
+        );
+        // tcp source ports are perfectly fine.
+        let d = diags_of(&format!(
+            "{BASE}rules:\n  - id: r\n    action: deny\n    protocol: tcp\n    source:\n      ports: [20]\n"
+        ));
+        assert!(!d.has_code(codes::PORTS_ON_PORTLESS_PROTOCOL));
     }
 
     #[test]

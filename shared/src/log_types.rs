@@ -231,6 +231,10 @@ pub struct DpiHit {
     /// Bounded excerpt of the matched bytes, hex-encoded. Bounded because a
     /// log sink is not a packet capture and because payload can be sensitive.
     pub excerpt_hex: String,
+    /// Decoded DNS query name, when `l7 == Dns` and the decoder extracted one.
+    /// This is what the DNS-tunnel/exfiltration detector consumes; `None` for a
+    /// non-DNS hit or a build whose DPI path does not surface the qname.
+    pub dns_qname: Option<String>,
 }
 
 /// Compact identity summary carried on a flow event.
@@ -408,6 +412,7 @@ impl LogEvent {
                 w.str_field("l7", d.l7.as_str());
                 w.u64_field("offset", d.stream_offset);
                 w.str_field("excerpt", &d.excerpt_hex);
+                w.opt_str_field("dns_qname", d.dns_qname.as_deref());
                 w.end_object();
             }
             None => w.null_field("dpi"),
@@ -562,6 +567,7 @@ impl LogEvent {
                 w.u8(d.l7 as u8);
                 w.u64(d.stream_offset);
                 w.string(&d.excerpt_hex);
+                w.opt_string(d.dns_qname.as_deref());
             }
             None => w.u8(0),
         }
@@ -614,6 +620,7 @@ impl LogEvent {
                 l7: L7Protocol::from_u8(r.u8()?).ok_or(ProtoError::Malformed("bad l7"))?,
                 stream_offset: r.u64()?,
                 excerpt_hex: r.string()?,
+                dns_qname: r.opt_string()?,
             })
         } else {
             None
@@ -726,6 +733,7 @@ mod tests {
             l7: L7Protocol::Http,
             stream_offset: 128,
             excerpt_hex: "504f5354".into(),
+            dns_qname: None,
         });
         e.tags = vec!["hardening".into()];
         e.latency_ns = 12_345;

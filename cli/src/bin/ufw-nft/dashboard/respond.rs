@@ -160,7 +160,9 @@ fn sev_rank(s: &str) -> u8 {
 /// (100.64/10) and 0.0.0.0/8 are handled by hand. A source that fails to parse
 /// is treated as non-public (never auto-contained under public_only).
 fn is_public(ip: &str) -> bool {
-    match ip.parse::<IpAddr>() {
+    // Fold an IPv4-mapped IPv6 literal to its v4 form first, or a mapped
+    // private/loopback source would slip past the v6 arm as "public".
+    match ip.parse::<IpAddr>().map(super::canonical_ip) {
         Ok(IpAddr::V4(a)) => {
             let o = a.octets();
             let cgnat = o[0] == 100 && (o[1] & 0xc0) == 0x40; // 100.64.0.0/10

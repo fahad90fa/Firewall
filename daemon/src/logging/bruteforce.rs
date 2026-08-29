@@ -146,6 +146,11 @@ impl BruteForceDetector {
         self.evict_if_needed(now);
 
         let threshold = self.config.attempt_threshold;
+        // Hard ceiling on retained timestamps per (source, dest, port), so a
+        // sustained flood to one auth port cannot grow this deque without bound
+        // (age-out is paced by the attacker). Well above the threshold, so the
+        // alert still fires; the reported count simply saturates here.
+        let cap = threshold.saturating_mul(4).max(64);
         let state = self.targets.entry((src, dst, dst_port)).or_default();
         state.last_seen_us = now;
 
@@ -158,6 +163,9 @@ impl BruteForceDetector {
             }
         }
         state.times.push_back(now);
+        while state.times.len() > cap {
+            state.times.pop_front();
+        }
 
         if state.times.len() >= threshold
             && (state.last_alert_us == 0 || now.saturating_sub(state.last_alert_us) >= realert_us)

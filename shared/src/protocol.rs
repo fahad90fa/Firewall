@@ -176,10 +176,30 @@ impl Writer {
     }
 
     pub fn string_list<S: AsRef<str>>(&mut self, v: &[S]) {
-        self.u16(v.len() as u16);
-        for s in v {
+        // Clamp so the count prefix and the number of elements written can never
+        // disagree: a bare `len as u16` that wrapped would leave the decoder
+        // reading the wrong element count and desync the entire stream. Trusted
+        // producers never approach 65535 entries; the clamp turns an impossible
+        // case into a loud debug assert / a consistent (shorter) frame rather
+        // than a silently corrupt one.
+        let n = v.len().min(u16::MAX as usize);
+        debug_assert_eq!(n, v.len(), "string_list truncated {} of {}", n, v.len());
+        self.u16(n as u16);
+        for s in v.iter().take(n) {
             self.string(s.as_ref());
         }
+    }
+
+    /// Write a `u8` length prefix, clamped so the count can never exceed what a
+    /// `u8` holds — and so it can never disagree with the number of elements the
+    /// caller then writes (slice with `.take(k)`). A bare `len as u8` silently
+    /// wraps at 256, desyncing the stream; this makes that a loud debug assert
+    /// and, in release, a consistent shorter frame. Returns the count to write.
+    pub fn len_u8(&mut self, n: usize) -> usize {
+        let k = n.min(u8::MAX as usize);
+        debug_assert_eq!(k, n, "u8 length prefix truncated {} of {}", k, n);
+        self.u8(k as u8);
+        k
     }
 
     /// Reserve space for a `u32` that will be back-patched with
