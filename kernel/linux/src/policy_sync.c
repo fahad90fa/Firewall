@@ -270,7 +270,11 @@ static int ufw_cmd_install_policy(struct sk_buff *skb, struct genl_info *info)
 
 	if (info->attrs[UFW_ATTR_REVISION])
 		table->revision = nla_get_u64(info->attrs[UFW_ATTR_REVISION]);
-	if (info->attrs[UFW_ATTR_RULESET_HASH])
+	/* NLA_BINARY .len is a maximum, so a short attribute still validates;
+	 * require the full 32 bytes before copying them, or the memcpy reads
+	 * past the attribute payload. */
+	if (info->attrs[UFW_ATTR_RULESET_HASH] &&
+	    nla_len(info->attrs[UFW_ATTR_RULESET_HASH]) >= 32)
 		memcpy(table->ruleset_hash,
 		       nla_data(info->attrs[UFW_ATTR_RULESET_HASH]), 32);
 	table->default_verdict = info->attrs[UFW_ATTR_DEFAULT_VERDICT]
@@ -394,7 +398,10 @@ static int ufw_cmd_identity_response(struct sk_buff *skb,
 		path = nla_data(info->attrs[UFW_ATTR_PATH]);
 	if (info->attrs[UFW_ATTR_SIGNER])
 		signer = nla_data(info->attrs[UFW_ATTR_SIGNER]);
-	if (info->attrs[UFW_ATTR_SHA256])
+	/* Consumed as a fixed 32-byte digest downstream; require the full
+	 * length before handing on the pointer (NLA_BINARY .len is a maximum). */
+	if (info->attrs[UFW_ATTR_SHA256] &&
+	    nla_len(info->attrs[UFW_ATTR_SHA256]) >= 32)
 		sha256 = nla_data(info->attrs[UFW_ATTR_SHA256]);
 
 	ufw_identity_deliver(pid, cookie,

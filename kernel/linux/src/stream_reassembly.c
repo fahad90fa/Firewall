@@ -219,6 +219,12 @@ int ufw_stream_observe(const struct sk_buff *skb,
 
 		if (!th)
 			return 0;
+		/* The fixed TCP header (through the data-offset field at byte 12)
+		 * must be within the captured frame before we read th->doff — a
+		 * packet truncated to just the IP header would otherwise read out
+		 * of bounds here. */
+		if (skb->len < skb_transport_offset(skb) + sizeof(*th))
+			return 0;
 		hlen = th->doff * 4u;
 		if (hlen < sizeof(*th))
 			return 0;
@@ -234,8 +240,13 @@ int ufw_stream_observe(const struct sk_buff *skb,
 		offset = ntohl(th->seq);
 	} else if (facts->protocol == IPPROTO_UDP) {
 		const struct udphdr *uh = udp_hdr(skb);
+		unsigned int avail;
 
 		if (!uh)
+			return 0;
+		/* The UDP header itself must be within the captured frame before
+		 * we read uh->len (bytes 4-5). */
+		if (skb->len < skb_transport_offset(skb) + sizeof(*uh))
 			return 0;
 		/* uh->len is attacker-chosen. A value below the 8-byte UDP
 		 * header would underflow payload_len; reject it before the
@@ -245,6 +256,16 @@ int ufw_stream_observe(const struct sk_buff *skb,
 			return 0;
 		payload = (const __u8 *)uh + sizeof(*uh);
 		payload_len = (unsigned int)ntohs(uh->len) - (unsigned int)sizeof(*uh);
+		/* uh->len describes the datagram the *sender* built, which can be
+		 * larger than the bytes actually captured in this skb (a lying or
+		 * truncated datagram). Bound the payload to the captured frame,
+		 * exactly as the TCP branch does — otherwise the DPI scan below
+		 * reads past the packet data. This is the difference between
+		 * `payload_len > skb->len` (loose by transport_offset + 8) and the
+		 * real captured length. */
+		avail = skb->len - skb_transport_offset(skb) - (unsigned int)sizeof(*uh);
+		if (payload_len > avail)
+			payload_len = avail;
 		/* A datagram is self-contained: there is no sequence space,
 		 * so each one is scanned on its own. Accumulating datagrams
 		 * into a stream would fabricate boundaries that the receiving

@@ -45,8 +45,20 @@ bool ufw_cidr_contains(const struct ufw_cidr *cidr, const __u8 *addr, int is_v6)
 	if (!!cidr->is_v6 != !!is_v6)
 		return false;
 
-	full_bytes = cidr->prefix_len / 8;
-	rest_bits = cidr->prefix_len % 8;
+	/* Clamp the prefix to the address width before it indexes the 16-byte
+	 * addr arrays. prefix_len arrives from the installed policy (privileged,
+	 * but not necessarily well-formed); an out-of-range value (up to 255)
+	 * would make full_bytes walk past addr[]. A v4 address occupies the
+	 * low 4 bytes, a v6 the full 16. */
+	{
+		__u32 max_bits = is_v6 ? 128u : 32u;
+		__u32 prefix = cidr->prefix_len;
+
+		if (prefix > max_bits)
+			prefix = max_bits;
+		full_bytes = prefix / 8;
+		rest_bits = prefix % 8;
+	}
 
 	if (full_bytes && memcmp(cidr->addr, addr, full_bytes) != 0)
 		return false;
@@ -121,6 +133,15 @@ bool ufw_path_match(const char *pattern, const char *path, int case_insensitive)
 {
 	const char *p = pattern, *s = path;
 	const char *star = NULL, *star_s = NULL;
+	/*
+	 * pattern and path arrive from fixed UFW_MAX_PATH_LEN fields that a
+	 * malformed (privileged) policy might not NUL-terminate. Bound both
+	 * walks to the field width so a missing terminator can never read past
+	 * the array; strnlen stops at the bound. For a well-formed, terminated
+	 * input p_end/s_end point at the NUL, so behaviour is unchanged.
+	 */
+	const char *p_end = pattern + strnlen(pattern, UFW_MAX_PATH_LEN);
+	const char *s_end = path + strnlen(path, UFW_MAX_PATH_LEN);
 
 	/*
 	 * Iterative glob with one backtrack point. The classic recursive
@@ -130,8 +151,9 @@ bool ufw_path_match(const char *pattern, const char *path, int case_insensitive)
 	 * worst case with no stack growth, which is what softirq context
 	 * requires.
 	 */
-	while (*s) {
-		char pc = *p, sc = *s;
+	while (s < s_end) {
+		char pc = (p < p_end) ? *p : '\0';
+		char sc = *s;
 
 		if (case_insensitive) {
 			if (pc >= 'A' && pc <= 'Z')
@@ -140,10 +162,10 @@ bool ufw_path_match(const char *pattern, const char *path, int case_insensitive)
 				sc = (char)(sc + 32);
 		}
 
-		if (*p == '?' || (*p && pc == sc)) {
+		if (pc == '?' || (pc && pc == sc)) {
 			p++;
 			s++;
-		} else if (*p == '*') {
+		} else if (pc == '*') {
 			star = p++;
 			star_s = s;
 		} else if (star) {
@@ -153,9 +175,9 @@ bool ufw_path_match(const char *pattern, const char *path, int case_insensitive)
 			return false;
 		}
 	}
-	while (*p == '*')
+	while (p < p_end && *p == '*')
 		p++;
-	return *p == '\0';
+	return p == p_end;
 }
 
 static bool ufw_match_fingerprint(const struct ufw_fingerprint *fp,
@@ -558,14 +580,16 @@ int ufw_facts_from_skb(const struct sk_buff *skb, int hooknum,
 		if (ip->protocol == IPPROTO_TCP) {
 			const struct tcphdr *th = tcp_hdr(skb);
 
-			if (!th)
+			if (!th ||
+			    skb->len < skb_transport_offset(skb) + sizeof(*th))
 				return -EINVAL;
 			facts->src_port = ntohs(th->source);
 			facts->dst_port = ntohs(th->dest);
 		} else if (ip->protocol == IPPROTO_UDP) {
 			const struct udphdr *uh = udp_hdr(skb);
 
-			if (!uh)
+			if (!uh ||
+			    skb->len < skb_transport_offset(skb) + sizeof(*uh))
 				return -EINVAL;
 			facts->src_port = ntohs(uh->source);
 			facts->dst_port = ntohs(uh->dest);
@@ -586,14 +610,16 @@ int ufw_facts_from_skb(const struct sk_buff *skb, int hooknum,
 		if (ip6->nexthdr == IPPROTO_TCP) {
 			const struct tcphdr *th = tcp_hdr(skb);
 
-			if (!th)
+			if (!th ||
+			    skb->len < skb_transport_offset(skb) + sizeof(*th))
 				return -EINVAL;
 			facts->src_port = ntohs(th->source);
 			facts->dst_port = ntohs(th->dest);
 		} else if (ip6->nexthdr == IPPROTO_UDP) {
 			const struct udphdr *uh = udp_hdr(skb);
 
-			if (!uh)
+			if (!uh ||
+			    skb->len < skb_transport_offset(skb) + sizeof(*uh))
 				return -EINVAL;
 			facts->src_port = ntohs(uh->source);
 			facts->dst_port = ntohs(uh->dest);
