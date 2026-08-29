@@ -124,7 +124,7 @@ export const PLANS: Plan[] = [
   },
   {
     name: "Pro",
-    price: "$12",
+    price: "$100",
     cadence: "per host / month",
     blurb: "Detection, response and fleet rollout for teams running Linux in production.",
     featured: true,
