@@ -223,7 +223,11 @@ fn sanitize(s: &str, cap: usize) -> String {
 /// Is `ip` a public, internet-routable address — the ONLY class eligible for
 /// auto-contain (never loopback, LAN, CGNAT, link-local)?
 fn is_public(ip: &IpAddr) -> bool {
-    match ip {
+    // Classify the canonical address: on a dual-stack bind a private/loopback
+    // source can arrive as `::ffff:<v4>`, which the v6 arm below would wrongly
+    // wave through as public.
+    let ip = super::canonical_ip(*ip);
+    match &ip {
         IpAddr::V4(a) => {
             let o = a.octets();
             let cgnat = o[0] == 100 && (o[1] & 0xc0) == 0x40;
@@ -244,12 +248,14 @@ fn is_public(ip: &IpAddr) -> bool {
     }
 }
 
-/// PURE decision: should a decoy hit from `src` be auto-contained right now?
-/// `enabled` = the opt-in flag, `under_cap` = the rate limiter has room. Kept
-/// side-effect-free so the anti-spoof / public-only / opt-in logic is unit-tested
-/// without touching nftables or the clock.
-pub fn contain_decision(enabled: bool, src: Option<IpAddr>, under_cap: bool) -> bool {
-    enabled && under_cap && src.map(|ip| is_public(&ip)).unwrap_or(false)
+/// PURE eligibility decision: may a decoy hit from `src` be auto-contained at
+/// all? Opt-in must be on (`enabled`) and the source must be a public,
+/// internet-routable address (never loopback/LAN/CGNAT/unknown). The hourly rate
+/// cap is enforced separately and atomically at the reserve step, so this stays
+/// side-effect-free and the anti-spoof / public-only / opt-in logic is
+/// unit-tested without touching nftables or the clock.
+pub fn contain_decision(enabled: bool, src: Option<IpAddr>) -> bool {
+    enabled && src.map(|ip| is_public(&ip)).unwrap_or(false)
 }
 
 /// Record a decoy hit or a canary replay: bounded ring + sanitised audit line,
@@ -263,17 +269,20 @@ pub fn record_hit(src: Option<IpAddr>, cert_fp: Option<&str>, path: &str, ua: &s
         .map(|i| i.to_string())
         .unwrap_or_else(|| "unknown".into());
 
-    // Auto-contain gate (all side effects below the pure decision).
+    // Auto-contain gate. Public sources only (the pure `contain_decision`
+    // rule), and the rate slot is reserved ATOMICALLY under a single lock so
+    // concurrent decoy hits cannot overshoot the hourly cap — the old
+    // rate_ok()/bump_rate() pair was a check-then-act race across two locks.
     let mut contained = false;
-    if contain_enabled() {
-        let under_cap = rate_ok(ts);
-        if contain_decision(true, src, under_cap) {
-            if let Some(ip) = src {
+    if contain_decision(contain_enabled(), src) {
+        if let Some(ip) = src {
+            if try_reserve_contain(ts) {
                 if contain::contain_note(&ip.to_string(), CONTAIN_TTL, &format!("honeypot:{path}"))
                     .is_ok()
                 {
                     contained = true;
-                    bump_rate(ts);
+                } else {
+                    unreserve_contain(ts); // hand the reserved slot back
                 }
             }
         }
@@ -311,22 +320,30 @@ pub fn record_hit(src: Option<IpAddr>, cert_fp: Option<&str>, path: &str, ua: &s
 
 // --- rate limiter ----------------------------------------------------------
 
-fn rate_ok(now: u64) -> bool {
-    if let Ok(log) = hp_log().lock() {
+/// Atomically reserve one auto-contain slot for the current rolling hour.
+/// Returns true iff a slot was available and has now been consumed. Check and
+/// increment happen under one lock, so N concurrent decoy hits can never each
+/// see room and collectively exceed [`CONTAIN_MAX_PER_HOUR`].
+fn try_reserve_contain(now: u64) -> bool {
+    if let Ok(mut log) = hp_log().lock() {
         let hour = now / 3600;
-        let (h, n) = log.contain_window;
-        return h != hour || n < CONTAIN_MAX_PER_HOUR;
+        if log.contain_window.0 != hour {
+            log.contain_window = (hour, 0); // new hour resets the count
+        }
+        if log.contain_window.1 < CONTAIN_MAX_PER_HOUR {
+            log.contain_window.1 += 1;
+            return true;
+        }
     }
     false
 }
 
-fn bump_rate(now: u64) {
+/// Return a reserved slot when the contain it was taken for did not happen.
+fn unreserve_contain(now: u64) {
     if let Ok(mut log) = hp_log().lock() {
         let hour = now / 3600;
-        if log.contain_window.0 == hour {
-            log.contain_window.1 += 1;
-        } else {
-            log.contain_window = (hour, 1);
+        if log.contain_window.0 == hour && log.contain_window.1 > 0 {
+            log.contain_window.1 -= 1;
         }
     }
 }
@@ -448,39 +465,53 @@ mod tests {
         // Opt-in OFF → never contain.
         assert!(!contain_decision(
             false,
-            Some("203.0.113.9".parse().unwrap()),
-            true
+            Some("203.0.113.9".parse().unwrap())
         ));
-        // ON + public + under-cap → contain.
-        assert!(contain_decision(
-            true,
-            Some("203.0.113.9".parse().unwrap()),
-            true
-        ));
+        // ON + public → eligible.
+        assert!(contain_decision(true, Some("203.0.113.9".parse().unwrap())));
         // ON but private/loopback/cgnat → never (anti-lockout).
         assert!(!contain_decision(
             true,
-            Some("192.168.1.10".parse().unwrap()),
-            true
+            Some("192.168.1.10".parse().unwrap())
         ));
-        assert!(!contain_decision(
-            true,
-            Some("127.0.0.1".parse().unwrap()),
-            true
-        ));
-        assert!(!contain_decision(
-            true,
-            Some("100.64.0.1".parse().unwrap()),
-            true
-        ));
-        // ON + public but over the rate cap → held.
-        assert!(!contain_decision(
-            true,
-            Some("8.8.8.8".parse().unwrap()),
-            false
-        ));
+        assert!(!contain_decision(true, Some("127.0.0.1".parse().unwrap())));
+        assert!(!contain_decision(true, Some("100.64.0.1".parse().unwrap())));
         // Unknown source (no handshake addr) → never.
-        assert!(!contain_decision(true, None, true));
+        assert!(!contain_decision(true, None));
+    }
+
+    #[test]
+    fn rate_reserve_caps_the_hour_atomically() {
+        // The reserve step is what enforces the cap: exactly CONTAIN_MAX_PER_HOUR
+        // slots in an hour, then it refuses until the hour rolls over. A returned
+        // slot is available again.
+        let hour = 100 * 3600; // some fixed hour boundary, in seconds
+        for _ in 0..CONTAIN_MAX_PER_HOUR {
+            assert!(try_reserve_contain(hour));
+        }
+        assert!(!try_reserve_contain(hour), "cap reached → no more slots");
+        unreserve_contain(hour);
+        assert!(try_reserve_contain(hour), "a returned slot frees room");
+        assert!(
+            try_reserve_contain(hour + 3600),
+            "next hour resets the count"
+        );
+    }
+
+    #[test]
+    fn ipv4_mapped_ipv6_is_classified_by_its_v4_form() {
+        // On a dual-stack bind a v4 client arrives as ::ffff:<v4>. A mapped
+        // private/loopback source must NOT count as public (anti-lockout), and a
+        // mapped public source still must.
+        assert!(!is_public(&"::ffff:192.168.1.10".parse().unwrap()));
+        assert!(!is_public(&"::ffff:127.0.0.1".parse().unwrap()));
+        assert!(!is_public(&"::ffff:100.64.0.1".parse().unwrap()));
+        assert!(is_public(&"::ffff:8.8.8.8".parse().unwrap()));
+        // And the contain decision follows suit.
+        assert!(!contain_decision(
+            true,
+            Some("::ffff:10.0.0.5".parse().unwrap())
+        ));
     }
 
     #[test]

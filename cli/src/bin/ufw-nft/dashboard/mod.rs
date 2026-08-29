@@ -158,7 +158,12 @@ fn handle(mut stream: tls::Stream) -> std::io::Result<()> {
     // The completed-handshake source address. `from_loopback` gates the mutating
     // actions; `peer_ip` is also the (non-spoofable, post-accept) source a
     // honeypot decoy hit records and may auto-contain.
-    let peer_ip = stream.peer_addr().ok().map(|p| p.ip());
+    // Canonicalize an IPv4-mapped IPv6 peer (`::ffff:127.0.0.1`) to its IPv4
+    // form before any loopback/public classification. On a dual-stack bind a
+    // v4 client is reported in mapped form, and `Ipv6Addr::is_loopback()` is
+    // true only for `::1` — so without this a genuine loopback caller would be
+    // demoted below admin, and a LAN source would look public to the honeypot.
+    let peer_ip = stream.peer_addr().ok().map(|p| canonical_ip(p.ip()));
     let from_loopback = peer_ip.map(|ip| ip.is_loopback()).unwrap_or(false);
     let mut buf = [0u8; 4096];
     let mut head = Vec::new();
@@ -484,21 +489,46 @@ fn qget(query: &str, key: &str) -> Option<String> {
 }
 
 fn percent_decode(s: &str) -> String {
+    // Decode over bytes, never by slicing the &str: `s` comes from
+    // `String::from_utf8_lossy`, so it can carry multi-byte characters, and
+    // `&s[i+1..i+3]` on a boundary that falls inside one panics — which, under
+    // `panic = "abort"`, would take the whole dashboard down from one crafted
+    // request. Building a byte buffer and decoding it back with
+    // `from_utf8_lossy` cannot panic on any input.
     let b = s.as_bytes();
-    let mut out = String::with_capacity(b.len());
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'%' && i + 3 <= b.len() {
-            if let Ok(byte) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(byte as char);
+            let hi = (b[i + 1] as char).to_digit(16);
+            let lo = (b[i + 2] as char).to_digit(16);
+            if let (Some(h), Some(l)) = (hi, lo) {
+                out.push((h * 16 + l) as u8);
                 i += 3;
                 continue;
             }
         }
-        out.push(if b[i] == b'+' { ' ' } else { b[i] as char });
+        out.push(if b[i] == b'+' { b' ' } else { b[i] });
         i += 1;
     }
-    out
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Fold an IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) down to its IPv4 form.
+///
+/// A dual-stack listener reports an IPv4 client as `::ffff:<v4>`, which is not
+/// `is_loopback()`/`is_private()` under the v6 rules — so loopback and
+/// LAN/CGNAT classification must be done on the canonical address, or a local
+/// caller looks remote and a private source looks public. (Kept here rather
+/// than using the still-unstable `IpAddr::to_canonical` so the MSRV holds.)
+pub fn canonical_ip(ip: std::net::IpAddr) -> std::net::IpAddr {
+    match ip {
+        std::net::IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => std::net::IpAddr::V4(v4),
+            None => std::net::IpAddr::V6(v6),
+        },
+        v4 => v4,
+    }
 }
 
 /// Server-Sent Events stream of state snapshots. Runs until the client goes
@@ -980,4 +1010,34 @@ fn hostname() -> String {
     std::fs::read_to_string("/proc/sys/kernel/hostname")
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|_| "this host".into())
+}
+
+#[cfg(test)]
+mod router_tests {
+    use super::*;
+
+    #[test]
+    fn percent_decode_never_panics_on_bad_utf8() {
+        // The regression: a '%' right before a multi-byte char sliced the &str
+        // mid-codepoint and panicked (fatal under panic="abort").
+        let _ = percent_decode("%é");
+        let _ = percent_decode("%\u{fffd}x");
+        let _ = percent_decode("%");
+        let _ = percent_decode("%a");
+        let _ = percent_decode("ip=%ff%ff");
+        // Ordinary decoding still works.
+        assert_eq!(percent_decode("a%20b+c"), "a b c");
+        assert_eq!(percent_decode("%41%42"), "AB");
+        assert_eq!(percent_decode("allow%2Ddns"), "allow-dns");
+    }
+
+    #[test]
+    fn canonical_ip_unwraps_v4_mapped() {
+        use std::net::IpAddr;
+        let mapped: IpAddr = "::ffff:127.0.0.1".parse().unwrap();
+        assert_eq!(canonical_ip(mapped), "127.0.0.1".parse::<IpAddr>().unwrap());
+        assert!(canonical_ip(mapped).is_loopback());
+        let v6: IpAddr = "2001:db8::1".parse().unwrap();
+        assert_eq!(canonical_ip(v6), v6);
+    }
 }

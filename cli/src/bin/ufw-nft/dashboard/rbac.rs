@@ -153,7 +153,17 @@ pub fn role_for(from_loopback: bool, token: Option<&str>, cert_fp: Option<&str>)
         }
     }
     if let Some(t) = token {
-        if let Some(&r) = cfg.tokens.get(t) {
+        // Constant-time comparison against every configured token, with no
+        // early exit on a match, so response timing does not reveal how many
+        // leading bytes of a guessed token were right (a `BTreeMap::get` does an
+        // ordered, short-circuiting compare, which is exactly that leak).
+        let mut matched: Option<Role> = None;
+        for (stored, role) in &cfg.tokens {
+            if ufw_shared::hash::constant_time_eq(t.as_bytes(), stored.as_bytes()) {
+                matched = Some(*role);
+            }
+        }
+        if let Some(r) = matched {
             return r;
         }
     }
