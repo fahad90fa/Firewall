@@ -260,9 +260,9 @@ fn emit_ebpf_header(
                 .map(|n| n.to_string())
                 .unwrap_or_else(|| "UFW_PROTO_ANY".into()),
             cidr_list(&r.source.cidrs),
-            r.source.cidrs.len(),
+            v4_count(&r.source.cidrs),
             cidr_list(&r.dest.cidrs),
-            r.dest.cidrs.len(),
+            v4_count(&r.dest.cidrs),
             port_list(&r.source_ports.ranges),
             r.source_ports.ranges.len(),
             port_list(&r.dest_ports.ranges),
@@ -304,6 +304,18 @@ fn cidr_list(cidrs: &[Cidr]) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Count the IPv4 CIDRs in a set — exactly the ones [`cidr_list`] emits, so the
+/// eBPF struct's `.src_n`/`.dst_n` can never claim more elements than the
+/// initializer holds (an IPv6 prefix is skipped by `cidr_list` but was still
+/// counted by a bare `.len()`). Guarded today by the optimizer refusing to make
+/// an IPv6-bearing rule eBPF-eligible, but the count must match the array.
+fn v4_count(cidrs: &[Cidr]) -> usize {
+    cidrs
+        .iter()
+        .filter(|c| matches!(c.addr(), std::net::IpAddr::V4(_)))
+        .count()
 }
 
 fn port_list(ranges: &[PortRange]) -> String {
@@ -420,8 +432,38 @@ fn module_flags(r: &CompiledRule) -> String {
     }
 }
 
+/// Escape a string for a C string literal. Beyond `\` and `"`, control
+/// characters must be escaped too — a raw newline in a rule name would split
+/// the generated `.name = "..."` across two lines and fail the build. Control
+/// bytes use a three-digit octal escape (`\ooo`) rather than `\x`, because C's
+/// `\x` is greedy and would swallow a following hex letter.
 fn escape_c(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+    let mut out = String::with_capacity(s.len() + 2);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => {
+                let _ = write!(out, "\\{:03o}", c as u32 & 0xff);
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Neutralise a string for an nftables quoted token (a `comment "…"` or an
+/// interface name): drop control characters — a newline would break the rule
+/// line the loader parses — and turn an embedded double quote into a single one
+/// so it cannot close the token early.
+fn nft_quoted(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_control())
+        .map(|c| if c == '"' { '\'' } else { c })
+        .collect()
 }
 
 // ===========================================================================
@@ -640,6 +682,21 @@ fn nft_rule(policy: &CompiledPolicy, r: &CompiledRule, chain_dir: Direction) -> 
     if r.schedule.is_some() {
         return Lowering::Kernel("is active only on a schedule".into());
     }
+    // `allow-inspect` is provisional in the reference model: it permits the flow
+    // *so far* but keeps evaluating deeper stages, which may still deny. nftables
+    // has only terminal verdicts, so lowering it to `accept` here would skip a
+    // deeper header-only `deny` that the model would honour — a silent bypass on
+    // the module-off path. It cannot be expressed as a non-terminal permit, so it
+    // belongs to the kernel module (which does the inspection it names); emitting
+    // it as a comment lets the flow fall through to the deeper rules and the
+    // default policy, which is fail-closed rather than fail-open.
+    if r.effective_action() == Action::AllowInspect {
+        return Lowering::Kernel(
+            "is `allow-inspect`, a provisional permit nftables cannot express \
+             without skipping the deeper stages it asks to keep inspecting"
+                .into(),
+        );
+    }
     for (side, m) in [("source", &r.source), ("destination", &r.dest)] {
         if m.negate && m.cidrs.is_empty() && m.zones.is_empty() {
             return Lowering::Unmatchable(format!("negates the wildcard {side} address"));
@@ -682,7 +739,7 @@ fn nft_rule(policy: &CompiledPolicy, r: &CompiledRule, chain_dir: Direction) -> 
             let names = r
                 .interfaces
                 .iter()
-                .map(|i| format!("\"{}\"", i.replace('"', "'")))
+                .map(|i| format!("\"{}\"", nft_quoted(i)))
                 .collect::<Vec<_>>()
                 .join(", ");
             parts.push(format!("{key} {{ {names} }}"));
@@ -766,7 +823,7 @@ fn nft_rule(policy: &CompiledPolicy, r: &CompiledRule, chain_dir: Direction) -> 
         if let Some(v) = verdict {
             parts.push(v.to_string());
         }
-        parts.push(format!("comment \"{}\"", r.name.replace('"', "'")));
+        parts.push(format!("comment \"{}\"", nft_quoted(&r.name)));
         lines.push(parts.join(" ").trim().to_string());
     }
 
@@ -1243,6 +1300,32 @@ mod tests {
             .unwrap()
             .contents
             .clone()
+    }
+
+    #[test]
+    fn allow_inspect_is_not_lowered_to_a_terminal_accept() {
+        // `allow-inspect` is provisional: a deeper deny may still win. Lowering it
+        // to a terminal nft `accept` would skip that deny — a silent bypass. It
+        // must become a kernel-only comment, never an `accept` line.
+        let mut ai = header_rule(1, "inspect-web", 10, Direction::Outbound);
+        ai.action = Action::AllowInspect;
+        ai.dest_ports = PortMatch::default();
+        let nft = nft_artifact(&build(vec![ai]));
+        assert!(nft.contains("`inspect-web`"), "{nft}");
+        assert!(nft.contains("allow-inspect"), "{nft}");
+        // No terminal accept carrying this rule's verdict.
+        assert!(
+            !nft.contains("accept comment \"inspect-web\""),
+            "allow-inspect must not emit a terminal accept:\n{nft}"
+        );
+        for line in nft.lines() {
+            if line.contains("inspect-web") {
+                assert!(
+                    line.trim_start().starts_with('#'),
+                    "the allow-inspect rule must be a comment, got: {line}"
+                );
+            }
+        }
     }
 
     #[test]
