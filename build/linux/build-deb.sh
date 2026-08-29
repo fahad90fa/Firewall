@@ -5,7 +5,7 @@
 # Debian-family host with dpkg.
 #
 #   sh build/linux/build-deb.sh            # -> dist/unified-firewall_<ver>_<arch>.deb
-#   VERSION=0.1.0 sh build/linux/build-deb.sh
+#   VERSION=0.1.1 sh build/linux/build-deb.sh
 #
 # What it installs on the target (mirrors install.sh, adapted to /usr):
 #   /usr/bin/{ufw-nft,ufwctl,ufw-daemon,ufw-waf,firewall}
