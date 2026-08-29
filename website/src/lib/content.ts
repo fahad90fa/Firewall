@@ -171,11 +171,11 @@ export const FEED_LINES: { verb: string; detail: string; verdict: "BLOCKED" | "D
 
 /** The Linux package, hosted on the site itself (served from /public). */
 export const LINUX_DEB = {
-  version: "0.1.0",
+  version: "0.1.1",
   arch: "amd64",
-  file: "unified-firewall_0.1.0_amd64.deb",
-  size: "1.3 MB",
-  sha256: "2b52a877746a89a8e1cc2d0bb05c8aa0ab6bf2397b0bcb1be20a3ed2d4e9f2fc",
+  file: "unified-firewall_0.1.1_amd64.deb",
+  size: "1.9 MB",
+  sha256: "c5095ffcb5a9fdc75284597531166a415f1364d4257e7c3333dff0374cd8ba80",
 };
 
 export const LINUX_DOWNLOAD_URL =

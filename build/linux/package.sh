@@ -21,7 +21,7 @@
 set -eu
 
 FORMAT="${1:-}"
-VERSION="${VERSION:-0.1.0}"
+VERSION="${VERSION:-0.1.1}"
 ARCH="$(uname -m)"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 STAGE="${ROOT}/build/stage"
