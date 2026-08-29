@@ -277,6 +277,9 @@ else
 fi
 echo "  what's new / feature status:  http://127.0.0.1:8787/#features"
 echo "                                (live status of the module, rate-limiting, licensing, mTLS, …)"
+echo "  honeypot / deception traps:   http://127.0.0.1:8787/#traps"
+echo "                                (decoy routes + canary; add passive net decoys with:"
+echo "                                 sudo firewall apply policies/base/honeypot_decoys.yaml)"
 echo "  sudo firewall status                the loaded rules, with live counters"
 echo
 if [ -f "$LICENSE_CONF" ]; then
