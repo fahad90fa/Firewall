@@ -46,7 +46,7 @@ export default function Footer() {
             <a className="hover:text-ink" href="#features">Features</a>
             <a className="hover:text-ink" href="#how">How it works</a>
             <a className="hover:text-ink" href="#pricing">Pricing</a>
-            <a className="hover:text-ink" href="https://github.com/fahad90fa/" target="_blank" rel="noreferrer">
+            <a className="hover:text-ink" href="https://github.com/fahad90fa/Firewall" target="_blank" rel="noreferrer">
               GitHub ↗
             </a>
           </nav>

@@ -43,6 +43,12 @@ export const FEATURES: Feature[] = [
     tone: "threat",
   },
   {
+    tag: "DECEPTION",
+    title: "Honeypot traps & canary tokens",
+    body: "The console serves decoy routes no real client requests (/.env, /.git/config, /admin) and seeds a per-install canary token into the fakes. Any hit is an intruder — near-zero false positives. Opt-in auto-contain fires only from a completed handshake, so a spoofed packet can't reach it.",
+    tone: "threat",
+  },
+  {
     tag: "FLEET",
     title: "Signed rollout that can't outage you",
     body: "HMAC-signed policy bundles widen through gated canary waves (1% → 10% → 50% → 100%), advancing only on a wave’s health and aborting within the cohort on any regression. A bad policy reaches the canary, never the fleet.",
@@ -159,6 +165,7 @@ export const FEED_LINES: { verb: string; detail: string; verdict: "BLOCKED" | "D
   { verb: "RDP break-in", detail: "185.220.101.5 → :3389", verdict: "BLOCKED" },
   { verb: "Unsigned egress", detail: "/tmp/.x9 → 91.219.236.18:8080", verdict: "CONTAINED" },
   { verb: "DNS exfil pattern", detail: "long-label bursts → :53", verdict: "DROPPED" },
+  { verb: "Honeypot decoy hit", detail: "89.248.165.2 → /.git/config (canary seeded)", verdict: "CONTAINED" },
   { verb: "Signed updater", detail: "apt → deb.debian.org:443", verdict: "ALLOWED" },
 ];
 
@@ -176,3 +183,14 @@ export const LINUX_DOWNLOAD_URL =
 
 /** One-liner install command shown on the Linux card. */
 export const LINUX_INSTALL_CMD = `sudo apt install ./${LINUX_DEB.file}`;
+
+/** The project's source of truth. Overridable at build time for a fork. */
+export const GITHUB_REPO =
+  (import.meta.env.VITE_GITHUB_REPO as string | undefined) ?? "https://github.com/fahad90fa/Firewall";
+
+/**
+ * Build-from-source install: the freshest path, and the one that carries the
+ * latest security hardening the moment it lands on main — before a new .deb is
+ * cut. One command from clone to a running, monitor-mode host.
+ */
+export const SOURCE_INSTALL_CMD = `git clone ${GITHUB_REPO} && cd Firewall && sudo ./install.sh`;
