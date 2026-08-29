@@ -19,8 +19,8 @@
 # block) and starts them. Nothing here can lock you out of your own machine.
 set -eu
 
-VERSION="${VERSION:-0.1.0}"
-RELEASE_DATE="${RELEASE_DATE:-2026-08-22}"
+VERSION="${VERSION:-0.1.1}"
+RELEASE_DATE="${RELEASE_DATE:-2026-08-29}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
 BIN="$ROOT/target/release"
