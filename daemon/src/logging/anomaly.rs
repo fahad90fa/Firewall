@@ -93,6 +93,9 @@ pub struct Anomaly {
     pub baseline_size: usize,
     /// How long the baseline had been building when this fired.
     pub span_secs: u64,
+    /// Wall-clock timestamp (µs since epoch) of the triggering flow. Carried so
+    /// the emitted alert is stamped with the real time, not the baseline span.
+    ts_us: u64,
 }
 
 impl Anomaly {
@@ -102,7 +105,7 @@ impl Anomaly {
         // permitted; the anomaly is *that it was novel*. It is an `Alert`, not
         // a `FlowDecision`, so the allow-suppression filter never touches it.
         let mut event = LogEvent::new(
-            self.span_end_us(),
+            self.ts_us,
             host_id,
             Decision::Allow,
             ufw_shared::constants::RULE_ID_DEFAULT,
@@ -122,12 +125,6 @@ impl Anomaly {
         ));
         event.tags = vec!["anomaly".into(), "egress-baseline".into()];
         event
-    }
-
-    // Only used to stamp the event timestamp; the caller has the real `now`,
-    // but keeping the event self-describing avoids threading it through.
-    fn span_end_us(&self) -> u64 {
-        self.span_secs.saturating_mul(1_000_000)
     }
 }
 
@@ -240,6 +237,7 @@ impl EgressBaseline {
             dst_port,
             baseline_size: state.known.len().saturating_sub(1),
             span_secs: now.saturating_sub(state.first_seen_us) / 1_000_000,
+            ts_us: now,
         })
     }
 
@@ -439,6 +437,9 @@ mod tests {
         establish(&mut e, "/opt/app");
         let a = e.observe(&allow("/opt/app", "203.0.113.9", 200)).unwrap();
         let event = a.to_event("host-a", 1);
+        // The alert is stamped with the triggering flow's real time, not the
+        // baseline span (which used to land it in 1970 and break SIEM ordering).
+        assert_eq!(event.timestamp_us, 200 * SECOND);
         // Feeding the alert back must not itself be treated as egress.
         assert!(e.observe(&event).is_none());
     }

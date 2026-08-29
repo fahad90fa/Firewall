@@ -251,6 +251,10 @@ impl DnsExfilDetector {
 
         self.evict_if_needed(now_us);
         let chunk_threshold = self.config.chunk_threshold;
+        // Hard ceiling on distinct chunks retained per (source, parent) so a
+        // tunnel streaming endless distinct labels cannot grow the window
+        // without bound. Well above the alert threshold.
+        let chunk_cap = chunk_threshold.saturating_mul(4).max(64);
         let key = (src, parent.clone());
         let state = self.endpoints.entry(key).or_default();
         state.last_seen_us = now_us;
@@ -271,6 +275,13 @@ impl DnsExfilDetector {
         let h = hash_bytes(&payload);
         if state.seen.insert(h) {
             state.chunks.push_back((now_us, h));
+            while state.chunks.len() > chunk_cap {
+                if let Some((_, old)) = state.chunks.pop_front() {
+                    state.seen.remove(&old);
+                } else {
+                    break;
+                }
+            }
         } else {
             return None; // a repeated chunk adds no new fan-out
         }

@@ -39,6 +39,7 @@ use anomaly::{AnomalyConfig, EgressBaseline};
 use beacon::{BeaconConfig, BeaconDetector};
 use bruteforce::{BruteForceConfig, BruteForceDetector};
 use correlation::{CorrelationConfig, CorrelationEngine};
+use dns_exfil::{DnsExfilConfig, DnsExfilDetector};
 use portscan::{PortScanConfig, PortScanDetector};
 use sink::Sink;
 
@@ -308,6 +309,11 @@ impl Logger {
             bruteforce: config
                 .anomaly
                 .then(|| BruteForceDetector::new(BruteForceConfig::default())),
+            // DNS tunnelling/exfiltration, fed the decoded query names the DPI
+            // path surfaces (dpi.dns_qname). Same behavioral-detection switch.
+            dns_exfil: config
+                .anomaly
+                .then(|| DnsExfilDetector::new(DnsExfilConfig::default())),
             stats: Arc::clone(&stats),
             sequence: 0,
         };
@@ -355,6 +361,7 @@ struct WorkerState {
     portscan: Option<PortScanDetector>,
     beacon: Option<BeaconDetector>,
     bruteforce: Option<BruteForceDetector>,
+    dns_exfil: Option<DnsExfilDetector>,
     stats: Arc<LogStats>,
     sequence: u64,
 }
@@ -440,6 +447,26 @@ impl WorkerState {
             }
         }
 
+        // DNS tunnelling / exfiltration: score the decoded query names the DPI
+        // path surfaces (dpi.dns_qname) for the encoded-blob and chunked-tunnel
+        // shapes. Dormant until DNS DPI is active; then it runs like the rest.
+        let mut exfils = Vec::new();
+        if let Some(de) = &mut self.dns_exfil {
+            for event in &events {
+                if let Some(dpi) = &event.dpi {
+                    if dpi.l7 == ufw_shared::policy_types::L7Protocol::Dns {
+                        if let Some(qname) = &dpi.dns_qname {
+                            if let Some(a) =
+                                de.observe_query(event.five_tuple.src_ip, qname, event.timestamp_us)
+                            {
+                                exfils.push(a);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         for c in correlations {
             self.stats.correlations.fetch_add(1, Ordering::Relaxed);
             self.sequence += 1;
@@ -465,6 +492,12 @@ impl WorkerState {
         }
 
         for a in brute {
+            self.stats.anomalies.fetch_add(1, Ordering::Relaxed);
+            self.sequence += 1;
+            events.push(a.to_event(&self.enrichment.host_id, self.sequence));
+        }
+
+        for a in exfils {
             self.stats.anomalies.fetch_add(1, Ordering::Relaxed);
             self.sequence += 1;
             events.push(a.to_event(&self.enrichment.host_id, self.sequence));
@@ -508,11 +541,27 @@ fn worker_loop(mut state: WorkerState, rx: Receiver<LogMessage>, running: Arc<At
             Ok(LogMessage::Stop) => break,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 state.flush();
+                let now = ufw_shared::now_us();
                 if let Some(engine) = &mut state.correlation {
-                    engine.expire(ufw_shared::now_us());
+                    engine.expire(now);
                 }
                 if let Some(base) = &mut state.anomaly {
-                    base.expire(ufw_shared::now_us());
+                    base.expire(now);
+                }
+                // The behavioral detectors reclaim their per-source state on the
+                // same idle tick; without this a one-shot scan/flood pins its
+                // (now bounded) window for the life of the process.
+                if let Some(ps) = &mut state.portscan {
+                    ps.expire(now);
+                }
+                if let Some(b) = &mut state.beacon {
+                    b.expire(now);
+                }
+                if let Some(bf) = &mut state.bruteforce {
+                    bf.expire(now);
+                }
+                if let Some(de) = &mut state.dns_exfil {
+                    de.expire(now);
                 }
                 if !running.load(Ordering::Relaxed) {
                     break;
@@ -700,6 +749,51 @@ mod tests {
             .unwrap()
             .contains("correlated pattern"));
         assert!(alert.tags.contains(&"correlation".to_string()));
+    }
+
+    #[test]
+    fn dns_exfil_alerts_join_the_normal_stream() {
+        // The DNS-exfil detector is wired into the pipeline: a chunked tunnel
+        // (many distinct high-entropy sub-domains under one parent, carried on
+        // dpi.dns_qname) must surface as an alert. Regression: it used to be
+        // declared but never fed — dead code.
+        fn hi_entropy_label(seed: u64) -> String {
+            const A: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
+            // 36 base32 chars via splitmix64: high entropy (a tunnelling chunk),
+            // but under the single-blob length so it exercises the chunked path.
+            let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            (0..36)
+                .map(|_| {
+                    z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                    let mut x = z;
+                    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                    x ^= x >> 31;
+                    A[(x % 32) as usize] as char
+                })
+                .collect()
+        }
+        let mut c = config();
+        c.anomaly = true;
+        let mut events = Vec::new();
+        for i in 0..30u64 {
+            let mut e = event(Decision::Allow, "8.8.8.8");
+            e.dpi = Some(ufw_shared::log_types::DpiHit {
+                signature_id: 0,
+                signature_name: "dns".into(),
+                l7: ufw_shared::policy_types::L7Protocol::Dns,
+                stream_offset: 0,
+                excerpt_hex: String::new(),
+                dns_qname: Some(format!("{}.evil.example", hi_entropy_label(i))),
+            });
+            events.push(e);
+        }
+        let out = run(&c, events);
+        assert!(
+            out.iter()
+                .any(|e| e.tags.contains(&"dns-tunnel".to_string())),
+            "the wired DNS-exfil detector must emit an alert through the pipeline"
+        );
     }
 
     #[test]
