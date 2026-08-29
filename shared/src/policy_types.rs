@@ -798,8 +798,8 @@ impl AddressMatch {
         for c in &self.cidrs {
             c.encode(w);
         }
-        w.u8(self.zones.len() as u8);
-        for z in &self.zones {
+        let zk = w.len_u8(self.zones.len());
+        for z in self.zones.iter().take(zk) {
             w.u8(*z as u8);
         }
         w.bool(self.negate);
@@ -1254,8 +1254,8 @@ impl DpiMatch {
         for s in &self.signatures {
             w.u32(*s);
         }
-        w.u8(self.l7.len() as u8);
-        for p in &self.l7 {
+        let lk = w.len_u8(self.l7.len());
+        for p in self.l7.iter().take(lk) {
             w.u8(*p as u8);
         }
         w.u8(self.on_match as u8);
