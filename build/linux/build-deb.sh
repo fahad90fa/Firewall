@@ -23,6 +23,20 @@ VERSION="${VERSION:-0.1.1}"
 RELEASE_DATE="${RELEASE_DATE:-2026-08-29}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
+
+# Reproducible builds: the same source must produce a byte-identical .deb.
+# The metadata dates are already fixed (RELEASE_DATE, changelog, `gzip -9n`),
+# but every file `install`/`cp` stages carries its build-time mtime, and
+# dpkg-deb packs those into data.tar — so two builds a second apart differ. Pin
+# a single timestamp for the whole package: honor an externally-supplied
+# SOURCE_DATE_EPOCH (a CI reproducibility harness sets this from the commit),
+# else derive it from the fixed RELEASE_DATE so a plain `build-deb.sh` is
+# reproducible on its own. Every staged mtime is normalized to it below, and
+# dpkg-deb (>= 1.18.11) additionally clamps to it, so old and new dpkg agree.
+if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
+    SOURCE_DATE_EPOCH="$(date -u -d "$RELEASE_DATE" +%s 2>/dev/null || echo 1756425600)"
+fi
+export SOURCE_DATE_EPOCH
 BIN="$ROOT/target/release"
 STAGE="$ROOT/build/deb/pkgroot"
 OUT_DIR="${OUT_DIR:-$ROOT/dist}"
@@ -37,8 +51,14 @@ if [ "${UFW_DEB_SKIP_BUILD:-0}" != "1" ]; then
     # license signature (not just the HMAC deterrent) and the console supports
     # mTLS. rustls/ring are already pinned in Cargo.lock, so this stays offline.
     echo "==> building release binaries (ufw-cli +tls: Ed25519 verify + console mTLS)"
-    ( cd "$ROOT" && cargo build --release -p ufw-cli --features tls )
-    ( cd "$ROOT" && cargo build --release -p ufw-daemon )
+    # Remap the absolute build path out of the binaries so they do not embed the
+    # checkout location (in a panic message or an assertion) — the same source
+    # built under /home/a and /build/b then yields identical bytes. Combined with
+    # the pinned Cargo.lock and the release profile's `strip`, this is what makes
+    # the packaged binaries reproducible, not just the .deb wrapper around them.
+    REMAP="--remap-path-prefix=$ROOT=/build/unified-firewall"
+    ( cd "$ROOT" && RUSTFLAGS="${RUSTFLAGS:-} $REMAP" cargo build --release -p ufw-cli --features tls )
+    ( cd "$ROOT" && RUSTFLAGS="${RUSTFLAGS:-} $REMAP" cargo build --release -p ufw-daemon )
 fi
 if [ ! -x "$BIN/ufw-nft" ] || [ ! -x "$BIN/ufwd" ]; then
     echo "error: release binaries missing under $BIN (build failed or was skipped)" >&2
@@ -402,7 +422,14 @@ chmod 0755 "$STAGE/DEBIAN/postrm"
 
 # 4. Build -------------------------------------------------------------------
 install -d "$OUT_DIR"
-echo "==> building $DEB"
+
+# Normalize every staged file's mtime (and symlinks, with -h) to the pinned
+# epoch so data.tar is byte-identical across builds. Done last, after the
+# changelog gzip and every generated file, so nothing re-stamps them afterward.
+find "$STAGE" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} + 2>/dev/null \
+    || find "$STAGE" -exec touch -h -t "$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y%m%d%H%M.%S)" {} +
+
+echo "==> building $DEB (reproducible; SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH)"
 dpkg-deb --root-owner-group --build "$STAGE" "$DEB" >/dev/null
 echo "==> done"
 dpkg-deb --info "$DEB" | sed 's/^/    /'
