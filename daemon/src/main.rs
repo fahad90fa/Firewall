@@ -34,9 +34,10 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc::RecvTimeoutError;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ufw_daemon::audit::{AuditCategory, AuditLog};
 use ufw_daemon::config::Config;
 use ufw_daemon::failsafe::{self, EnforcementPosture, PathHealth};
 use ufw_daemon::identity::TrustDatabase;
@@ -78,6 +79,8 @@ OPTIONS:
         --mode <MODE>       Override daemon.mode (enforce|monitor|emergency-allow)
         --load-ebpf         Pin the eBPF programs and maps, then exit
         --unload-ebpf       Remove those pins, then exit
+        --verify-audit <PATH>
+                            Verify a tamper-evident audit log, then exit
     -V, --version           Print the version and exit
     -h, --help              Print this help and exit
 
@@ -97,6 +100,9 @@ struct Args {
     /// Pin the eBPF programs and maps, then exit. Run by a `oneshot` unit
     /// before the daemon proper, so the maps outlive every later restart.
     ebpf: Option<EbpfAction>,
+    /// Verify a tamper-evident audit log and exit. Reads the file, checks the
+    /// hash chain, and reports the first break (or that it is intact).
+    verify_audit: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +118,7 @@ fn parse_args() -> Result<Option<Args>, String> {
         foreground: false,
         mode: None,
         ebpf: None,
+        verify_audit: None,
     };
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {
@@ -143,6 +150,12 @@ fn parse_args() -> Result<Option<Args>, String> {
             }
             "--load-ebpf" => args.ebpf = Some(EbpfAction::Load),
             "--unload-ebpf" => args.ebpf = Some(EbpfAction::Unload),
+            "--verify-audit" => {
+                args.verify_audit = Some(PathBuf::from(
+                    argv.next()
+                        .ok_or_else(|| "--verify-audit needs a path".to_string())?,
+                ));
+            }
             other => return Err(format!("unknown argument `{other}` (try --help)")),
         }
     }
@@ -169,6 +182,10 @@ fn run() -> Result<(), String> {
     }
     if let Some(mode) = args.mode {
         config.daemon.mode = mode;
+    }
+
+    if let Some(path) = args.verify_audit {
+        return verify_audit(&path);
     }
 
     if args.check_only {
@@ -209,6 +226,10 @@ fn run() -> Result<(), String> {
             ufw_shared::BUILD_TARGET
         ),
     );
+
+    // The tamper-evident audit log, opened before anything that would write to
+    // it. Verified on open, so a start onto a tampered log is a loud failure.
+    let audit = open_audit(&config, &logs);
 
     // --- identity --------------------------------------------------------
     // Platform anchors first, so a configured anchor for the same subject
@@ -343,15 +364,26 @@ fn run() -> Result<(), String> {
             match failsafe::posture(config.daemon.fail_mode, PathHealth::Unavailable) {
                 EnforcementPosture::FailClosedBarrier => {
                     match failsafe::install_fail_closed_barrier(&failsafe_mgmt_ports(&config)) {
-                        Ok(()) => logs.note(
-                            &config.daemon.host_id,
-                            Severity::Critical,
-                            EventKind::SystemFault,
-                            "enforcement unavailable; fail_mode=closed — installed the emergency \
-                             default-deny barrier (loopback, established flows and management \
-                             ports kept reachable). Restore the kernel module and remove \
-                             `table inet ufw_failsafe`.",
-                        ),
+                        Ok(()) => {
+                            audit_note(
+                                &audit,
+                                &logs,
+                                &config.daemon.host_id,
+                                AuditCategory::FailSafe,
+                                "system",
+                                "installed the emergency fail-closed barrier \
+                                 (enforcement unavailable, fail_mode=closed)",
+                            );
+                            logs.note(
+                                &config.daemon.host_id,
+                                Severity::Critical,
+                                EventKind::SystemFault,
+                                "enforcement unavailable; fail_mode=closed — installed the emergency \
+                                 default-deny barrier (loopback, established flows and management \
+                                 ports kept reachable). Restore the kernel module and remove \
+                                 `table inet ufw_failsafe`.",
+                            )
+                        }
                         Err(why) => logs.note(
                             &config.daemon.host_id,
                             Severity::Critical,
@@ -457,6 +489,7 @@ fn run() -> Result<(), String> {
     let control = Arc::new(Supervisor {
         state: Arc::clone(&daemon),
         config: config.clone(),
+        audit: audit.clone(),
     });
 
     match control.reload_policy() {
@@ -906,6 +939,68 @@ fn ebpf(action: EbpfAction) -> Result<(), String> {
     Ok(())
 }
 
+/// The tamper-evident audit log, shared across the daemon's threads (the API
+/// plane appends from its own thread; startup appends from the main one).
+type SharedAudit = Option<Arc<Mutex<AuditLog>>>;
+
+/// Open the audit log under the state directory. A failure to open it is loud
+/// but not fatal: an audit trail that cannot be written is a serious problem to
+/// surface, not a reason to stop filtering traffic.
+fn open_audit(config: &Config, logs: &ufw_daemon::logging::LogHandle) -> SharedAudit {
+    let _ = std::fs::create_dir_all(&config.daemon.state_dir);
+    let path = config.daemon.state_dir.join("audit.jsonl");
+    match AuditLog::open(&path, None) {
+        Ok(log) => Some(Arc::new(Mutex::new(log))),
+        Err(e) => {
+            logs.note(
+                &config.daemon.host_id,
+                Severity::Error,
+                EventKind::SystemFault,
+                format!("tamper-evident audit log unavailable ({e}); continuing without it"),
+            );
+            None
+        }
+    }
+}
+
+/// Append a security-relevant change to the audit log, best-effort, and emit its
+/// new chain head to the event log so a remote sink anchors it — which is what
+/// makes tail truncation of the local file detectable. Never fails the caller.
+fn audit_note(
+    audit: &SharedAudit,
+    logs: &ufw_daemon::logging::LogHandle,
+    host_id: &str,
+    category: AuditCategory,
+    actor: &str,
+    detail: impl Into<String>,
+) {
+    let Some(audit) = audit else { return };
+    let detail = detail.into();
+    // A poisoned lock still holds a valid log; recover it rather than losing the
+    // audit trail because an unrelated thread panicked.
+    let mut guard = audit.lock().unwrap_or_else(|p| p.into_inner());
+    match guard.append(category, actor, detail.clone(), ufw_shared::now_us()) {
+        Ok(rec) => logs.note(
+            host_id,
+            Severity::Notice,
+            EventKind::PolicyChange,
+            format!(
+                "audit[{}] {} — {} (chain head sha256:{})",
+                rec.seq,
+                category.as_str(),
+                detail,
+                ufw_shared::hash::hex(&rec.hash)
+            ),
+        ),
+        Err(e) => logs.note(
+            host_id,
+            Severity::Error,
+            EventKind::SystemFault,
+            format!("could not write the audit record: {e}"),
+        ),
+    }
+}
+
 /// Management ports the fail-closed barrier must keep reachable, beyond the SSH
 /// port it always keeps and the loopback the barrier accepts unconditionally.
 ///
@@ -926,6 +1021,24 @@ fn failsafe_mgmt_ports(config: &Config) -> Vec<u16> {
         }
     }
     ports
+}
+
+/// Verify a tamper-evident audit log from the command line and report.
+fn verify_audit(path: &Path) -> Result<(), String> {
+    let records = ufw_daemon::audit::read_records(path)?;
+    match ufw_daemon::audit::verify_chain(&records, None) {
+        Ok(()) => {
+            println!("audit log: intact");
+            println!("  {}", ufw_daemon::audit::summarize(&records));
+            println!(
+                "  note: this proves internal consistency. Tail truncation is only\n\
+                 \x20       detectable against a head captured off-box — compare the head above\n\
+                 \x20       with the `audit[...] chain head` values your SIEM recorded."
+            );
+            Ok(())
+        }
+        Err(brk) => Err(format!("audit log: TAMPERED — {}", brk.describe())),
+    }
 }
 
 fn check(config: &Config) -> Result<(), String> {
@@ -1022,6 +1135,21 @@ fn drain_kernel_events(
 struct Supervisor {
     state: Arc<DaemonState>,
     config: Config,
+    audit: SharedAudit,
+}
+
+impl Supervisor {
+    /// Record a security-relevant change to the tamper-evident audit log.
+    fn record_audit(&self, category: AuditCategory, actor: &str, detail: impl Into<String>) {
+        audit_note(
+            &self.audit,
+            &self.state.logs,
+            &self.state.host_id,
+            category,
+            actor,
+            detail,
+        );
+    }
 }
 
 impl Supervisor {
@@ -1251,11 +1379,26 @@ impl Supervisor {
 
 impl ControlPlane for Supervisor {
     fn reload_policy(&self) -> Result<String, ApiError> {
-        self.install("policy directory")
+        let result = self.install("policy directory");
+        if let Ok(summary) = &result {
+            // "unchanged" is a no-op reload, not a policy change worth a record.
+            if !summary.contains("unchanged") {
+                self.record_audit(AuditCategory::PolicyChange, "api", summary.clone());
+            }
+        }
+        result
     }
 
     fn install_bundle(&self, bundle: &ufw_daemon::fleet::Bundle) -> Result<String, ApiError> {
-        self.install_signed_bundle(bundle)
+        let result = self.install_signed_bundle(bundle);
+        if let Ok(summary) = &result {
+            self.record_audit(
+                AuditCategory::Fleet,
+                "fleet",
+                format!("installed signed bundle rev {}: {summary}", bundle.revision),
+            );
+        }
+        result
     }
 
     fn distribute_bundle(
@@ -1419,6 +1562,11 @@ impl ControlPlane for Supervisor {
             severity,
             EventKind::PolicyChange,
             format!("enforcement mode is now {}", mode.as_str()),
+        );
+        self.record_audit(
+            AuditCategory::ModeChange,
+            "api",
+            format!("enforcement mode set to {}", mode.as_str()),
         );
         Ok(ufw_daemon::management_api::simple(&format!(
             "enforcement mode is now {}",

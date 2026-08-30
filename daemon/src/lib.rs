@@ -1,3 +1,4 @@
+pub mod audit;
 pub mod automaton;
 pub mod config;
 pub mod failsafe;
