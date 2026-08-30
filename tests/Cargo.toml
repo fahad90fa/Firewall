@@ -63,5 +63,9 @@ name = "every_layer_runs"
 path = "scenarios/every_layer_runs.rs"
 
 [[test]]
+name = "systemd_hardening"
+path = "scenarios/systemd_hardening.rs"
+
+[[test]]
 name = "performance_under_load"
 path = "scenarios/performance_under_load.rs"
