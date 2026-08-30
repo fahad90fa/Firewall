@@ -338,6 +338,7 @@ fn bundle(revision: u64, source: &str) -> Bundle {
         canary_percent: 10,
         canary_seconds: 300,
         mac: [0u8; 32],
+        sig_ed25519: Vec::new(),
     }
 }
 
