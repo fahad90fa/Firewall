@@ -83,6 +83,27 @@ JSON over the local control socket — no HTTP, no token, just Unix-socket
 permissions. The dashboard, `/metrics`, and `ufwctl` all read one source, so
 they cannot disagree.
 
+## Self-check alerts, the audit log, and fail-safe
+
+Three things the daemon now surfaces without you having to go looking:
+
+- **Self-monitoring.** The daemon watches its own vital signs and emits a
+  `self-check [...]` event (at Critical or Warning) when a detector worker
+  stops, the event sink starts failing, telemetry is dropped on a full queue, or
+  the enforced policy drifts from the one on disk — the failures that leave it
+  *looking* healthy. These reach the same event stream the dashboard and SIEM
+  export read, so a silent partial failure becomes a visible alert.
+- **Tamper-evident audit log.** Enforcement changes are written to an
+  append-only, hash-chained log under the state directory. Verify it any time
+  with `ufwd --verify-audit /var/lib/unified-firewall/audit.jsonl`; it reports
+  `intact` or names the first break. Ship the periodic `audit[...] chain head`
+  events to a remote sink so tail truncation of the local file is detectable
+  against a head you kept elsewhere.
+- **Fail-safe posture.** If the kernel enforcement path is unavailable and you
+  run without it, `daemon.fail_mode = closed` (the default) installs an emergency
+  default-deny barrier that keeps management access; `open` leaves the host
+  reachable and unfiltered. Either way the daemon says which, at Critical.
+
 ## An honest caveat
 
 The dashboard shows the daemon's own account of itself. It is an excellent way to

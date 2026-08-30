@@ -65,9 +65,14 @@ bytes **in the kernel**.
 - **Goals:** push a malicious policy to hosts.
 - **Mitigations:** fleet messages are HMAC-authenticated with a per-deployment
   secret (`fleet_secret`, ≥32 chars) that the installer forces you to change;
-  policy integrity is checked before apply.
-- **Residual risk:** the shared secret is symmetric — protect it like a key.
-  Asymmetric signing of fleet policy is a documented upgrade.
+  policy integrity is checked before apply. On a `--features tls` build,
+  configuring the fleet signer's public key (`api.fleet_ed25519_pubkey`) makes a
+  detached **Ed25519 signature** required in addition to the MAC — the private
+  key lives only with the signer, so a compromised host can verify a bundle but
+  cannot mint one (`daemon/src/fleet.rs`).
+- **Residual risk:** on the default (non-tls) build the shared HMAC secret is
+  symmetric — protect it like a key; the asymmetric upgrade requires the `tls`
+  build and a configured public key.
 
 ### A4 — Malicious license holder (the customer's own root)
 - **Goal:** run past expiry / on more machines than licensed.
@@ -108,3 +113,25 @@ bytes **in the kernel**.
   loading unverified ring-0 code.
 - A lapsed license reverts enforcement to unprotected + warns, rather than
   silently keeping stale rules.
+- **When enforcement is unavailable**, `daemon.fail_mode` decides the posture as
+  an explicit operator choice (`daemon/src/failsafe.rs`): `closed` (default)
+  installs an emergency default-deny nftables barrier that keeps the operator in
+  (loopback, established flows, management/SSH ports); `open` leaves the host
+  reachable and unfiltered, loudly. The prior silent fail-open on a missing
+  module is gone.
+- A data-path fault that occurs *after* the module was working is held by the
+  `watchdog` (last policy stays resident, crash-loop → loud safe mode), never a
+  flush to allow-all.
+
+## Tamper-evidence and self-monitoring
+
+- Enforcement changes (policy install, mode switch, the fail-closed barrier,
+  fleet bundles) are written to an append-only, **hash-chained audit log**
+  (`daemon/src/audit.rs`); `ufwd --verify-audit` detects any edit, reorder or
+  truncation, so an attacker who lands cannot silently erase how they got in.
+  This is tamper-*evidence*, not tamper-proofing — the honest limit and its two
+  defences (an optional HMAC key, an external head anchor) are documented in the
+  module.
+- A **self-check** engine (`daemon/src/selfcheck.rs`) alerts when a detector
+  worker stops, a sink fails, telemetry is dropped, or the enforced policy drifts
+  from disk — the failures that leave the daemon looking healthy.

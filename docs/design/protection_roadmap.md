@@ -38,18 +38,28 @@ substitutes.
 
 None of the host-layer work below matters until the engine is deployable, and
 today it is not. This is tracked in full in
-[`production_readiness.md`](production_readiness.md); the short form is four
-gaps, all of them time-and-process rather than unsolved problems:
+[`production_readiness.md`](production_readiness.md), and the eleven-item
+hardening roadmap that sat under it is now built and tested — the completion
+record is [`production-hardening.md`](production-hardening.md). The short form of
+what remains is four gaps, most of them time-and-process rather than unsolved
+problems:
 
 1. **Zero runtime hours.** Nothing here has run on a live kernel under real
    traffic for a sustained period. The instrument to measure it exists (the
    soak harness, the `/metrics` leak detector); the 30+ day run does not. This
-   gap is closed by *running it*, and no commit can contain that.
+   gap is closed by *running it*, and no commit can contain that. It is the one
+   that dominates the score.
 2. **No independent audit.** Every proof was written by the code's own author.
-   The ring-0 parsers are the first thing a third party should be paid to break.
-3. **Operational scaffolding.** Signing/notarization with real keys, a
-   kernel-side watchdog on Windows and macOS, a staged rollout proven on hosts
-   outside the lab, a security-response process.
+   The ring-0 parsers are the first thing a third party should be paid to break —
+   and Tier 1 of the hardening roadmap (packet-checked artifacts, fuzzed parsers,
+   every-layer-runs) has shrunk what that review will find.
+3. **Operational scaffolding — largely closed on Linux.** Now built and tested:
+   an explicit fail-safe posture (`daemon.fail_mode`), privilege-reduced and
+   boot-ordered systemd units, a tamper-evident audit log, self-monitoring, and
+   Ed25519-signed fleet bundles. Still open: signing/notarization with real
+   keys, the kernel-side watchdog wiring on Windows and macOS, a staged rollout
+   proven on hosts outside the lab, and the staffed side of the
+   security-response process.
 4. **macOS parity.** Connectionless (ICMP) enforcement via a
    `NEFilterPacketProvider`, and real Network Extension runtime hours.
 
