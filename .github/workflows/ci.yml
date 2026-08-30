@@ -142,3 +142,25 @@ jobs:
       - run: make generate
       - run: make -C kernel/linux
       - run: sudo make -C kernel/linux check
+
+  # The emitted Linux artifact, loaded into a real kernel and hit with real
+  # packets. Every other test compares policy *models*; this one is the only
+  # place the nftables the compiler actually emits is loaded into netfilter and
+  # a loopback connection is fired at it — allow must pass, deny must drop. It is
+  # what makes the `allow-inspect` regression test (a provisional permit must not
+  # lower to a terminal accept) a claim a packet can falsify, not just a string
+  # match. UFW_NFT_REQUIRE / UFW_NETNS_REQUIRE make a missing tool a hard failure
+  # here, so a green check means the enforcement was proven, never skipped.
+  enforcement-conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nftables (the emitted artifact's runtime)
+        run: sudo apt-get update && sudo apt-get install -y nftables
+      - name: Real-packet enforcement in a throwaway netns
+        env:
+          UFW_NFT_REQUIRE: "1"
+          UFW_NETNS_REQUIRE: "1"
+        # Root for the network namespace and CAP_NET_ADMIN; -E env "PATH=$PATH"
+        # carries the runner's rustup toolchain into the root shell.
+        run: sudo -E env "PATH=$PATH" cargo test -p ufw-e2e --test enforcement_conformance -- --test-threads=1

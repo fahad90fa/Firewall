@@ -30,6 +30,7 @@
 //! having it.
 
 pub mod connection_tracker;
+pub mod enforcement;
 pub mod log_verifier;
 pub mod packet_generator;
 
