@@ -67,5 +67,9 @@ name = "systemd_hardening"
 path = "scenarios/systemd_hardening.rs"
 
 [[test]]
+name = "ipv6_parity"
+path = "scenarios/ipv6_parity.rs"
+
+[[test]]
 name = "performance_under_load"
 path = "scenarios/performance_under_load.rs"
