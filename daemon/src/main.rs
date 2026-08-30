@@ -46,6 +46,7 @@ use ufw_daemon::logging::{Enrichment, Logger};
 use ufw_daemon::management_api::{cli, rest, ApiError, ControlPlane, Router};
 use ufw_daemon::policy_loader;
 use ufw_daemon::policy_store::describe;
+use ufw_daemon::selfcheck::{SelfMonitor, Snapshot};
 use ufw_daemon::signatures;
 use ufw_daemon::state::{self, DaemonState, Health};
 use ufw_daemon::watchdog::Watchdog;
@@ -637,6 +638,14 @@ fn run() -> Result<(), String> {
         ),
     );
 
+    // Self-monitoring: the daemon watching its own vital signs. Re-alerts a
+    // persistent fault every 5 minutes, checks every 30s, and recomputes the
+    // (more expensive) on-disk policy hash for the drift check only occasionally.
+    let mut selfmon = SelfMonitor::new(300);
+    let selfcheck_period = Duration::from_secs(30);
+    let mut last_selfcheck = std::time::Instant::now() - selfcheck_period;
+    let mut drift_tick: u32 = 0;
+
     while !daemon.is_shutting_down() {
         if daemon.kernel().connected {
             // A stable connection lets the watchdog forget old faults, so a
@@ -694,6 +703,42 @@ fn run() -> Result<(), String> {
                         e.message
                     ),
                 ),
+            }
+        }
+
+        // Self-monitoring tick. The daemon can be "up" while a detector thread
+        // has died, the sink is failing, or the enforced policy has drifted from
+        // disk — none of which crash the process. Surface them as alerts.
+        if last_selfcheck.elapsed() >= selfcheck_period {
+            last_selfcheck = std::time::Instant::now();
+            let stats = logs.stats();
+            drift_tick = drift_tick.wrapping_add(1);
+            // Recompiling the on-disk policy is not free, so the drift check runs
+            // on a slower sub-cadence (~5 min); other checks are per-tick.
+            let policy_on_disk_hash = if drift_tick % 10 == 1 {
+                policy_loader::load(&config.policy)
+                    .ok()
+                    .map(|l| l.policy.ruleset_hash)
+            } else {
+                None
+            };
+            let snap = Snapshot {
+                now_us: ufw_shared::now_us(),
+                log_worker_running: logs.is_running(),
+                sink_errors_total: stats.sink_errors,
+                dropped_total: stats.dropped_queue_full,
+                kernel_connected: daemon.kernel().connected,
+                supervised: had_kernel,
+                policy_installed_hash: daemon.active_policy().map(|p| p.ruleset_hash),
+                policy_on_disk_hash,
+            };
+            for a in selfmon.check(&snap) {
+                logs.note(
+                    &config.daemon.host_id,
+                    a.severity,
+                    EventKind::SystemFault,
+                    format!("self-check [{}]: {}", a.kind.as_str(), a.detail),
+                );
             }
         }
     }

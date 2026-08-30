@@ -12,6 +12,7 @@ pub mod management_api;
 pub mod metrics;
 pub mod policy_loader;
 pub mod policy_store;
+pub mod selfcheck;
 pub mod signatures;
 pub mod state;
 pub mod telemetry;
