@@ -374,6 +374,13 @@ pub struct DaemonConfig {
     /// with no enforcement. Default true, because a firewall that silently
     /// isn't one is worse than a firewall that failed loudly.
     pub require_kernel_module: bool,
+    /// What to do about enforcement when the kernel path is *unavailable* and
+    /// the daemon runs anyway (`require_kernel_module = false`). `closed`
+    /// installs an emergency default-deny barrier that keeps management access;
+    /// `open` leaves the host reachable and unfiltered, loudly. Default
+    /// `closed`: an unprotected host must never be the silent outcome. See
+    /// [`crate::failsafe`].
+    pub fail_mode: crate::failsafe::FailMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -584,6 +591,7 @@ impl Default for Config {
                 state_dir: PathBuf::from(constants::DEFAULT_STATE_DIR_UNIX),
                 mode: ufw_shared::protocol::EnforcementMode::Enforce,
                 require_kernel_module: true,
+                fail_mode: crate::failsafe::FailMode::Closed,
             },
             policy: PolicyConfig {
                 dir: PathBuf::from(constants::DEFAULT_POLICY_DIR_UNIX),
@@ -658,6 +666,7 @@ const KNOWN_KEYS: &[&str] = &[
     "daemon.state_dir",
     "daemon.mode",
     "daemon.require_kernel_module",
+    "daemon.fail_mode",
     "policy.dir",
     "policy.files",
     "policy.signature_dir",
@@ -752,6 +761,12 @@ impl Config {
         }
         if let Some(v) = doc.bool("daemon.require_kernel_module")? {
             c.daemon.require_kernel_module = v;
+        }
+        if let Some(v) = doc.string("daemon.fail_mode")? {
+            c.daemon.fail_mode = crate::failsafe::FailMode::parse(&v).ok_or(ConfigError {
+                line: 0,
+                message: format!("`{v}` is not a fail mode (closed, open)"),
+            })?;
         }
 
         // --- policy -------------------------------------------------------
@@ -1110,6 +1125,7 @@ host_id = "web-01"
 state_dir = "/var/lib/ufw"
 mode = "monitor"
 require_kernel_module = false
+fail_mode = "open"
 
 [policy]
 dir = "/etc/ufw/policies"
@@ -1147,6 +1163,7 @@ cli_socket = "/run/ufw.sock"
             ufw_shared::protocol::EnforcementMode::Monitor
         );
         assert!(!c.daemon.require_kernel_module);
+        assert_eq!(c.daemon.fail_mode, crate::failsafe::FailMode::Open);
         assert_eq!(c.policy.files, vec!["base.yaml", "app.yaml"]);
         assert_eq!(c.policy.watch_interval_ms, 250);
         assert_eq!(c.identity.cache_ttl_secs, 60);

@@ -173,6 +173,16 @@ fn a_wide_mixed_family_policy_loads_into_the_kernel_parser() {
     }
 }
 
+#[test]
+fn the_emergency_fail_closed_barrier_loads_into_the_kernel() {
+    // The barrier the daemon installs when enforcement is unavailable and
+    // fail_mode = closed. It uses conntrack state and a negative hook priority,
+    // both of which the running kernel must actually support — a string test
+    // cannot confirm that, `nft --check` against the live kernel can.
+    let barrier = ufw_daemon::failsafe::fail_closed_ruleset(&[9443]);
+    resolve(nft_check(&barrier), "UFW_NFT_REQUIRE");
+}
+
 /// Not an assertion — a diagnostic. Run with `--ignored --nocapture` to see the
 /// exact ruleset the compiler emits for the probe fixtures, which is the first
 /// thing to look at when a conformance case fails.

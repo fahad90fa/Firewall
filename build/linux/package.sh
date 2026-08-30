@@ -163,6 +163,12 @@ cat > "$STAGE/etc/unified-firewall/ufwd.toml" <<'CONF'
 # host_id is omitted, so it defaults to the system hostname.
 mode = "enforce"
 require_kernel_module = true
+# If the daemon runs without the kernel module (require_kernel_module = false),
+# `fail_mode` decides the posture: "closed" installs an emergency default-deny
+# barrier that keeps loopback, established flows and the management/SSH ports
+# reachable; "open" leaves the host reachable and unfiltered, loudly. Default is
+# closed — an unprotected host must never be the silent outcome.
+fail_mode = "closed"
 
 [policy]
 # Every *.yaml in this directory is loaded; drop your active policy here.

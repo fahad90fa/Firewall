@@ -38,6 +38,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ufw_daemon::config::Config;
+use ufw_daemon::failsafe::{self, EnforcementPosture, PathHealth};
 use ufw_daemon::identity::TrustDatabase;
 use ufw_daemon::ipc::{self, KernelEvent};
 use ufw_daemon::logging::{Enrichment, Logger};
@@ -335,7 +336,47 @@ fn run() -> Result<(), String> {
                      (policy will compile and the APIs will answer, but nothing will be filtered)."
                 ));
             }
-            eprintln!("ufwd: {message} — continuing without enforcement");
+            // Running on with no kernel path: nothing is resident to enforce, so
+            // `fail_mode` decides the posture. `closed` (the default) must not
+            // leave the host silently open — it installs the emergency barrier;
+            // `open` keeps the host reachable and unfiltered, and says so.
+            match failsafe::posture(config.daemon.fail_mode, PathHealth::Unavailable) {
+                EnforcementPosture::FailClosedBarrier => {
+                    match failsafe::install_fail_closed_barrier(&failsafe_mgmt_ports(&config)) {
+                        Ok(()) => logs.note(
+                            &config.daemon.host_id,
+                            Severity::Critical,
+                            EventKind::SystemFault,
+                            "enforcement unavailable; fail_mode=closed — installed the emergency \
+                             default-deny barrier (loopback, established flows and management \
+                             ports kept reachable). Restore the kernel module and remove \
+                             `table inet ufw_failsafe`.",
+                        ),
+                        Err(why) => logs.note(
+                            &config.daemon.host_id,
+                            Severity::Critical,
+                            EventKind::SystemFault,
+                            format!(
+                                "enforcement unavailable and the fail-closed barrier could NOT be \
+                                 installed ({why}) — the host may be unprotected; install nft or \
+                                 fix privileges"
+                            ),
+                        ),
+                    }
+                }
+                EnforcementPosture::FailOpenUnprotected => {
+                    logs.note(
+                        &config.daemon.host_id,
+                        Severity::Critical,
+                        EventKind::SystemFault,
+                        "enforcement unavailable; fail_mode=open — the host is reachable and \
+                         UNFILTERED until the kernel module is restored",
+                    );
+                    eprintln!("ufwd: {message} — continuing without enforcement (fail_mode=open)");
+                }
+                // The other postures presume a resident path; not reachable here.
+                other => eprintln!("ufwd: {message} — posture {}", other.as_str()),
+            }
             None
         }
     };
@@ -865,10 +906,33 @@ fn ebpf(action: EbpfAction) -> Result<(), String> {
     Ok(())
 }
 
+/// Management ports the fail-closed barrier must keep reachable, beyond the SSH
+/// port it always keeps and the loopback the barrier accepts unconditionally.
+///
+/// Only a *routable* management bind needs a rule — a loopback-bound console is
+/// already reached through the barrier's `iif "lo"` accept, so it is not added.
+/// This keeps a remote operator who manages over the web console (bound to a
+/// real address, with a token and TLS) from being locked out by the barrier.
+fn failsafe_mgmt_ports(config: &Config) -> Vec<u16> {
+    let mut ports = Vec::new();
+    for addr in [&config.api.rest_bind, &config.api.grpc_bind]
+        .into_iter()
+        .flatten()
+    {
+        if let Ok(sa) = addr.parse::<std::net::SocketAddr>() {
+            if !sa.ip().is_loopback() {
+                ports.push(sa.port());
+            }
+        }
+    }
+    ports
+}
+
 fn check(config: &Config) -> Result<(), String> {
     println!("configuration: ok");
     println!("  host id        : {}", config.daemon.host_id);
     println!("  mode           : {}", config.daemon.mode.as_str());
+    println!("  fail mode      : {}", config.daemon.fail_mode.as_str());
     println!("  policy dir     : {}", config.policy.dir.display());
     println!(
         "  kernel endpoint: {}",
