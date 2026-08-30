@@ -82,6 +82,7 @@ pub enum Request {
         canary_percent: u8,
         canary_seconds: u64,
         mac: [u8; 32],
+        sig_ed25519: Vec<u8>,
     },
     /// Authenticate a signed policy bundle and install it if this host is in
     /// the rollout — the fleet push.
@@ -91,6 +92,7 @@ pub enum Request {
         canary_percent: u8,
         canary_seconds: u64,
         mac: [u8; 32],
+        sig_ed25519: Vec<u8>,
     },
     /// Act as a distribution point: sign this bundle and push it to `members`.
     FleetDistribute {
@@ -221,6 +223,14 @@ impl Request {
                     arg("source").ok_or_else(|| ApiError::bad_request("missing `source`"))?;
                 let canary_percent = num("canary_percent").unwrap_or(100).min(255) as u8;
                 let canary_seconds = num("canary_seconds").unwrap_or(0);
+                // Optional detached Ed25519 signature (hex). Absent on an
+                // HMAC-only fleet; a `tls` build with a configured key requires
+                // it at verification time.
+                let sig_ed25519 = match arg("sig_ed25519") {
+                    Some(hexsig) => ufw_shared::hash::unhex(&hexsig)
+                        .ok_or_else(|| ApiError::bad_request("`sig_ed25519` must be hex"))?,
+                    None => Vec::new(),
+                };
                 if op == "fleet-push" {
                     Request::FleetPush {
                         revision,
@@ -228,6 +238,7 @@ impl Request {
                         canary_percent,
                         canary_seconds,
                         mac,
+                        sig_ed25519,
                     }
                 } else {
                     Request::FleetVerify {
@@ -236,6 +247,7 @@ impl Request {
                         canary_percent,
                         canary_seconds,
                         mac,
+                        sig_ed25519,
                     }
                 }
             }
@@ -431,6 +443,7 @@ impl Router {
                 canary_percent,
                 canary_seconds,
                 mac,
+                sig_ed25519,
             } => self
                 .fleet_verify(crate::fleet::Bundle {
                     revision,
@@ -438,6 +451,7 @@ impl Router {
                     canary_percent,
                     canary_seconds,
                     mac,
+                    sig_ed25519,
                 })
                 .map(Response::ok),
             Request::FleetPush {
@@ -446,6 +460,7 @@ impl Router {
                 canary_percent,
                 canary_seconds,
                 mac,
+                sig_ed25519,
             } => self
                 .control
                 .install_bundle(&crate::fleet::Bundle {
@@ -454,6 +469,7 @@ impl Router {
                     canary_percent,
                     canary_seconds,
                     mac,
+                    sig_ed25519,
                 })
                 .map(Response::ok),
             Request::FleetDistribute {
@@ -471,8 +487,11 @@ impl Router {
                         source,
                         canary_percent,
                         canary_seconds,
-                        // Signed by the distribution point, not the caller.
+                        // Signed by the distribution point, not the caller. The
+                        // Ed25519 signature, when used, is produced out of band
+                        // by the fleet signer and is not minted here.
                         mac: [0u8; 32],
+                        sig_ed25519: Vec::new(),
                     },
                 )
                 .map(Response::ok),
@@ -1048,6 +1067,7 @@ mod tests {
             canary_percent: 100,
             canary_seconds: 0,
             mac: [0u8; 32],
+            sig_ed25519: Vec::new(),
         };
         verifier.sign(&mut bundle);
 
@@ -1060,6 +1080,7 @@ mod tests {
                     canary_percent: bundle.canary_percent,
                     canary_seconds: bundle.canary_seconds,
                     mac: bundle.mac,
+                    sig_ed25519: bundle.sig_ed25519.clone(),
                 },
                 Authority::Admin,
             )
@@ -1084,6 +1105,7 @@ mod tests {
                     canary_percent: bundle.canary_percent,
                     canary_seconds: bundle.canary_seconds,
                     mac: tampered,
+                    sig_ed25519: Vec::new(),
                 },
                 Authority::Admin,
             )
@@ -1100,6 +1122,7 @@ mod tests {
             canary_percent: 100,
             canary_seconds: 0,
             mac: [0u8; 32],
+            sig_ed25519: Vec::new(),
         };
         // Read-only cannot push a policy to the host.
         assert_eq!(
@@ -1156,6 +1179,7 @@ mod tests {
                     canary_percent: 100,
                     canary_seconds: 0,
                     mac: [0u8; 32],
+                    sig_ed25519: Vec::new(),
                 },
                 Authority::Admin,
             )

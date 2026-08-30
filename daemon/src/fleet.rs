@@ -15,13 +15,17 @@
 //! terminates TLS legitimately. So the bundle carries its own authentication,
 //! verified against a key configured out of band.
 //!
-//! HMAC-SHA256 rather than a public-key signature, and that is a real
-//! limitation stated plainly: a shared secret means every host can forge a
-//! bundle every other host would accept. It is chosen because this workspace
-//! takes no dependencies and hand-rolled Ed25519 in a security product is
-//! worse than a keyed hash whose weakness is documented. `--features tls`
-//! already pulls a vetted crypto library; when that is on, [`Verifier`] is the
-//! place to add a real signature, and the bundle format has a field for it.
+//! Two layers, and which one this build has. The default build authenticates a
+//! bundle with **HMAC-SHA256**, and its limitation is stated plainly: a shared
+//! secret means every host holds the key, so any host could forge a bundle every
+//! other host would accept. It is the zero-dependency floor — hand-rolled
+//! Ed25519 in a security product would be worse than a keyed hash whose weakness
+//! is documented. A **`--features tls`** build, which already pulls a vetted
+//! crypto library, adds the layer that closes that gap: a configured Ed25519
+//! public key ([`Verifier::with_ed25519_pubkey`], from `api.fleet_ed25519_pubkey`)
+//! makes a detached signature *required*, verified with `ring`. The private key
+//! lives only with the fleet signer, so a host can verify a bundle without being
+//! able to mint one — the property a shared secret cannot give.
 //!
 //! # A policy reaches a canary before it reaches the fleet
 //!
@@ -68,6 +72,13 @@ pub struct Bundle {
     pub canary_seconds: u64,
     /// HMAC-SHA256 over the fields above, keyed by the fleet secret.
     pub mac: [u8; 32],
+    /// Optional detached Ed25519 signature (raw 64 bytes) over the same signed
+    /// input the MAC covers. Empty on the default build; on a `--features tls`
+    /// build a configured public key makes it required and verified. Unlike the
+    /// shared HMAC secret — which every host holds, so every host could forge a
+    /// bundle — the Ed25519 private key lives only with the fleet signer, so a
+    /// host can verify a bundle without being able to mint one.
+    pub sig_ed25519: Vec<u8>,
 }
 
 /// What went wrong with a bundle. Every variant names something the operator
@@ -122,10 +133,14 @@ fn signing_input(revision: u64, source: &str, canary_percent: u8, canary_seconds
     out
 }
 
-/// Authenticates bundles against the fleet key.
+/// Authenticates bundles against the fleet key, and — on a `tls` build with a
+/// public key configured — against a detached Ed25519 signature.
 #[derive(Clone)]
 pub struct Verifier {
     key: Vec<u8>,
+    /// The fleet signer's Ed25519 public key (raw 32 bytes). `None` means the
+    /// host verifies the HMAC only, the zero-dependency default.
+    ed25519_pubkey: Option<Vec<u8>>,
 }
 
 impl std::fmt::Debug for Verifier {
@@ -137,7 +152,26 @@ impl std::fmt::Debug for Verifier {
 
 impl Verifier {
     pub fn new(key: impl Into<Vec<u8>>) -> Self {
-        Verifier { key: key.into() }
+        Verifier {
+            key: key.into(),
+            ed25519_pubkey: None,
+        }
+    }
+
+    /// Require, in addition to the HMAC, a valid Ed25519 signature against this
+    /// public key. Only enforced on a `--features tls` build; on the default
+    /// build the key is stored but there is no verifier to check it, and the
+    /// daemon refuses to advertise a guarantee it cannot keep (it logs that the
+    /// public key was configured on a non-tls binary).
+    pub fn with_ed25519_pubkey(mut self, pubkey: impl Into<Vec<u8>>) -> Self {
+        self.ed25519_pubkey = Some(pubkey.into());
+        self
+    }
+
+    /// Whether a public key is configured (whether or not this binary can check
+    /// it) — so the daemon can warn when one is set on a non-tls build.
+    pub fn has_ed25519_pubkey(&self) -> bool {
+        self.ed25519_pubkey.is_some()
     }
 
     pub fn sign(&self, bundle: &mut Bundle) {
@@ -173,6 +207,23 @@ impl Verifier {
         if !constant_time_eq(&expected, &bundle.mac) {
             return Err(BundleError::NotAuthentic);
         }
+        // The public-key layer, when this binary can check it and a key is set.
+        // A shared HMAC secret proves the bundle came from *someone in the
+        // fleet*; the Ed25519 signature proves it came from *the signer*, which
+        // no host — however compromised — can impersonate without the private
+        // key. On a non-tls build the field is ignored (see with_ed25519_pubkey).
+        #[cfg(feature = "tls")]
+        if let Some(pubkey) = &self.ed25519_pubkey {
+            let msg = signing_input(
+                bundle.revision,
+                &bundle.source,
+                bundle.canary_percent,
+                bundle.canary_seconds,
+            );
+            if bundle.sig_ed25519.is_empty() || !verify_ed25519(pubkey, &msg, &bundle.sig_ed25519) {
+                return Err(BundleError::NotAuthentic);
+            }
+        }
         if bundle.revision <= installed && installed != 0 {
             return Err(BundleError::Stale {
                 offered: bundle.revision,
@@ -181,6 +232,30 @@ impl Verifier {
         }
         Ok(())
     }
+}
+
+/// Verify a detached Ed25519 signature over `msg` with a raw 32-byte public key.
+#[cfg(feature = "tls")]
+pub fn verify_ed25519(pubkey: &[u8], msg: &[u8], sig: &[u8]) -> bool {
+    let pk = ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, pubkey);
+    pk.verify(msg, sig).is_ok()
+}
+
+/// Sign a bundle with an Ed25519 private key (PKCS#8), filling in `sig_ed25519`.
+/// For a fleet signing tool — the daemon only ever verifies — so it lives behind
+/// the same `tls` flag and is not part of the default trusted computing base.
+#[cfg(feature = "tls")]
+pub fn sign_ed25519(pkcs8: &[u8], bundle: &mut Bundle) -> Result<(), String> {
+    let key = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8)
+        .map_err(|_| "not a valid Ed25519 PKCS#8 key".to_string())?;
+    let msg = signing_input(
+        bundle.revision,
+        &bundle.source,
+        bundle.canary_percent,
+        bundle.canary_seconds,
+    );
+    bundle.sig_ed25519 = key.sign(&msg).as_ref().to_vec();
+    Ok(())
 }
 
 fn constant_time_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
@@ -456,6 +531,7 @@ mod tests {
             canary_percent: 10,
             canary_seconds: 300,
             mac: [0; 32],
+            sig_ed25519: Vec::new(),
         }
     }
 
@@ -491,6 +567,55 @@ mod tests {
         assert_eq!(
             Verifier::new(b"ours".to_vec()).accept(&b, 1),
             Err(BundleError::NotAuthentic)
+        );
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    fn an_ed25519_signed_bundle_verifies_and_forgery_without_the_key_fails() {
+        use ring::rand::SystemRandom;
+        use ring::signature::{Ed25519KeyPair, KeyPair};
+
+        // The fleet signer's keypair. The private key never leaves the signer;
+        // the host is configured with only the public half.
+        let rng = SystemRandom::new();
+        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+        let keypair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+        let pubkey = keypair.public_key().as_ref().to_vec();
+
+        // HMAC key is shared across the fleet; the verifier also requires the
+        // public-key signature.
+        let hmac = b"a-32-byte-fleet-secret-key-000000".to_vec();
+        let verifier = Verifier::new(hmac.clone()).with_ed25519_pubkey(pubkey.clone());
+
+        let mut b = bundle(2, "version: 1\nrules: []\n");
+        Verifier::new(hmac.clone()).sign(&mut b); // HMAC
+        sign_ed25519(pkcs8.as_ref(), &mut b).unwrap(); // Ed25519
+        assert_eq!(
+            verifier.accept(&b, 1),
+            Ok(()),
+            "a fully-signed bundle verifies"
+        );
+
+        // A host with the HMAC secret but not the private key can produce a
+        // valid MAC — but cannot produce a valid signature, so the bundle is
+        // rejected. This is the whole point over a shared secret.
+        let mut forged = bundle(3, "version: 1\nrules: []\n  # attacker's policy");
+        Verifier::new(hmac.clone()).sign(&mut forged); // valid MAC, no signature
+        assert_eq!(
+            verifier.accept(&forged, 1),
+            Err(BundleError::NotAuthentic),
+            "a bundle with a valid MAC but no signature must be refused when a key is required"
+        );
+
+        // Tampering after signing breaks the signature.
+        let mut tampered = b.clone();
+        tampered.source.push(' ');
+        Verifier::new(hmac).sign(&mut tampered); // re-MAC the tampered bytes
+        assert_eq!(
+            verifier.accept(&tampered, 1),
+            Err(BundleError::NotAuthentic),
+            "the Ed25519 signature no longer covers the tampered source"
         );
     }
 

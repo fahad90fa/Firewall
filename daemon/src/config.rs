@@ -561,6 +561,12 @@ pub struct ApiConfig {
     /// `auth_token`: that gates *reaching* the API, this gates *trusting a
     /// bundle*, and they belong to different parties.
     pub fleet_secret: Option<String>,
+    /// The fleet signer's Ed25519 public key (raw 32 bytes, hex). When set on a
+    /// `--features tls` build, a bundle must also carry a valid Ed25519
+    /// signature from the matching private key — a public-key upgrade to the
+    /// shared-secret HMAC, so no host can forge a bundle another would accept.
+    /// Ignored (with a warning) on a non-tls build, which has no verifier.
+    pub fleet_ed25519_pubkey: Option<String>,
     pub max_body_bytes: usize,
     /// Serve the network-facing APIs without TLS.
     ///
@@ -640,6 +646,7 @@ impl Default for Config {
                 allow_from: Vec::new(),
                 auth_token: None,
                 fleet_secret: None,
+                fleet_ed25519_pubkey: None,
                 max_body_bytes: constants::MAX_API_BODY,
                 allow_plaintext: false,
                 tls: crate::tls::TlsConfig::default(),
@@ -712,6 +719,7 @@ const KNOWN_KEYS: &[&str] = &[
     "api.allow_from",
     "api.auth_token",
     "api.fleet_secret",
+    "api.fleet_ed25519_pubkey",
     "api.max_body_bytes",
     "api.tls_cert",
     "api.tls_key",
@@ -938,6 +946,7 @@ impl Config {
         }
         c.api.auth_token = doc.string("api.auth_token")?;
         c.api.fleet_secret = doc.string("api.fleet_secret")?;
+        c.api.fleet_ed25519_pubkey = doc.string("api.fleet_ed25519_pubkey")?;
         c.api.tls.cert_path = doc.string("api.tls_cert")?.map(PathBuf::from);
         c.api.tls.key_path = doc.string("api.tls_key")?.map(PathBuf::from);
         c.api.tls.client_ca_path = doc.string("api.tls_client_ca")?.map(PathBuf::from);

@@ -294,12 +294,43 @@ fn run() -> Result<(), String> {
     // fleet endpoints report themselves disabled rather than trusting an
     // unauthenticated bundle.
     if let Some(secret) = &config.api.fleet_secret {
-        daemon.set_fleet_verifier(ufw_daemon::fleet::Verifier::new(secret.clone()));
+        let mut verifier = ufw_daemon::fleet::Verifier::new(secret.clone());
+        let mut how = "HMAC-SHA256";
+        if let Some(hexkey) = &config.api.fleet_ed25519_pubkey {
+            match ufw_shared::hash::unhex(hexkey) {
+                Some(pk) => {
+                    verifier = verifier.with_ed25519_pubkey(pk);
+                    // A configured public key on a non-tls binary cannot be
+                    // checked — say so rather than implying a guarantee the
+                    // build cannot keep.
+                    if cfg!(feature = "tls") {
+                        how = "HMAC-SHA256 + Ed25519 public-key signature";
+                    } else {
+                        logs.note(
+                            &config.daemon.host_id,
+                            Severity::Warning,
+                            EventKind::SystemFault,
+                            "api.fleet_ed25519_pubkey is set but this build lacks `--features tls`; \
+                             the Ed25519 signature will NOT be checked — bundles are HMAC-only",
+                        );
+                    }
+                }
+                None => logs.note(
+                    &config.daemon.host_id,
+                    Severity::Error,
+                    EventKind::SystemFault,
+                    "api.fleet_ed25519_pubkey is not valid hex; ignoring it (HMAC only)",
+                ),
+            }
+        }
+        daemon.set_fleet_verifier(verifier);
         logs.note(
             &config.daemon.host_id,
             Severity::Notice,
             EventKind::PolicyChange,
-            "fleet control enabled: policy bundles are authenticated before install",
+            format!(
+                "fleet control enabled: policy bundles are authenticated before install ({how})"
+            ),
         );
     }
 
