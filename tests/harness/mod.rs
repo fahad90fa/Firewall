@@ -31,6 +31,7 @@
 
 pub mod connection_tracker;
 pub mod enforcement;
+pub mod fuzz;
 pub mod log_verifier;
 pub mod packet_generator;
 

@@ -55,5 +55,9 @@ name = "enforcement_conformance"
 path = "scenarios/enforcement_conformance.rs"
 
 [[test]]
+name = "parser_fuzz"
+path = "scenarios/parser_fuzz.rs"
+
+[[test]]
 name = "performance_under_load"
 path = "scenarios/performance_under_load.rs"

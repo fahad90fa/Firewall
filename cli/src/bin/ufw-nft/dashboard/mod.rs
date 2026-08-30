@@ -209,18 +209,12 @@ fn handle(mut stream: tls::Stream) -> std::io::Result<()> {
     // Either resolves to a role via console-auth.json; otherwise loopback decides.
     let cert_fp = stream.client_fingerprint();
     let token = rbac::bearer(&request);
-    let mut line0 = request.lines().next().unwrap_or("").split_whitespace();
-    let method = line0.next().unwrap_or("GET");
-    let target = line0.next().unwrap_or("/");
-    let (route, query) = target.split_once('?').unwrap_or((target, ""));
-    let user_agent = request
-        .lines()
-        .find_map(|l| {
-            l.strip_prefix("User-Agent:")
-                .or_else(|| l.strip_prefix("user-agent:"))
-        })
-        .map(str::trim)
-        .unwrap_or("");
+    let RequestHead {
+        method,
+        route,
+        query,
+        user_agent,
+    } = parse_request_head(&request);
 
     // Canary honeytoken replay: this token only ever lived in a FAKE decoy page,
     // so its arrival as a real bearer credential proves the decoy was scraped and
@@ -470,6 +464,43 @@ fn handle(mut stream: tls::Stream) -> std::io::Result<()> {
             respond(&mut stream, 200, ctype, &body)
         }
         _ => respond(&mut stream, 404, "text/plain", "not found\n"),
+    }
+}
+
+/// The parts of an HTTP request head the router acts on.
+struct RequestHead<'a> {
+    method: &'a str,
+    route: &'a str,
+    query: &'a str,
+    user_agent: &'a str,
+}
+
+/// Parse the request head into the fields the router needs.
+///
+/// Extracted from `handle` as a pure function so it can be fuzzed directly: the
+/// dashboard runs under `panic = "abort"`, so a parse that panics on a crafted
+/// request is a remote crash, and the only way to be sure this cannot is to feed
+/// it hostile bytes (see `router_tests::request_head_parsing_never_panics`).
+/// Every operation here is total on any `&str` — `lines`, `split_whitespace`,
+/// `split_once`, `strip_prefix` — which is the property the fuzz test pins.
+fn parse_request_head(request: &str) -> RequestHead<'_> {
+    let mut line0 = request.lines().next().unwrap_or("").split_whitespace();
+    let method = line0.next().unwrap_or("GET");
+    let target = line0.next().unwrap_or("/");
+    let (route, query) = target.split_once('?').unwrap_or((target, ""));
+    let user_agent = request
+        .lines()
+        .find_map(|l| {
+            l.strip_prefix("User-Agent:")
+                .or_else(|| l.strip_prefix("user-agent:"))
+        })
+        .map(str::trim)
+        .unwrap_or("");
+    RequestHead {
+        method,
+        route,
+        query,
+        user_agent,
     }
 }
 
@@ -1039,5 +1070,87 @@ mod router_tests {
         assert!(canonical_ip(mapped).is_loopback());
         let v6: IpAddr = "2001:db8::1".parse().unwrap();
         assert_eq!(canonical_ip(v6), v6);
+    }
+
+    // A deterministic byte fuzzer for the console's request-head parsing.
+    //
+    // The dashboard runs under `panic = "abort"`: a parse that panics on a
+    // crafted request is a remote crash of the whole process, not a handled
+    // 400. The percent-decode UTF-8 panic (fixed above) was exactly this class
+    // of bug and a unit test with three hand-picked strings is not proof the
+    // next one is absent. So we drive thousands of random and mutation-derived
+    // byte strings — decoded lossily to `&str` the way a real request is —
+    // through every head parser and assert none unwinds. Fixed seed: a crash is
+    // a stable, replayable red, printed in hex.
+
+    struct FuzzRng(u64);
+    impl FuzzRng {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            if n == 0 {
+                0
+            } else {
+                (self.next() % n as u64) as usize
+            }
+        }
+    }
+
+    /// One random byte string biased toward the bytes that matter to an HTTP
+    /// head — `% + & : / space \r \n =` and the printable range — so mutation
+    /// lands on the parser's decision points, not just uniform noise.
+    fn fuzz_input(rng: &mut FuzzRng, max_len: usize) -> Vec<u8> {
+        const INTERESTING: &[u8] = b"%+&:/= \r\nGETPOSTUser-Agent:Authorization:Bearer?.";
+        let len = rng.below(max_len + 1);
+        (0..len)
+            .map(|_| {
+                if rng.below(2) == 0 {
+                    INTERESTING[rng.below(INTERESTING.len())]
+                } else {
+                    (rng.below(256)) as u8
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn request_head_parsing_never_panics() {
+        let seeds: [&[u8]; 3] = [
+            b"GET /api/state?ip=1.2.3.4&on=1 HTTP/1.1\r\nUser-Agent: x\r\n\r\n",
+            b"POST /api/contain?ip=%3A%3A1 HTTP/1.1\r\nAuthorization: Bearer abc\r\n\r\n",
+            b"GET /.env HTTP/1.1\r\n\r\n",
+        ];
+        let mut rng = FuzzRng(0xD00D_1234);
+        for _ in 0..40_000 {
+            // Half random, half a light mutation of a seed.
+            let bytes = if rng.below(2) == 0 {
+                fuzz_input(&mut rng, 128)
+            } else {
+                let mut v = seeds[rng.below(seeds.len())].to_vec();
+                for _ in 0..1 + rng.below(4) {
+                    if v.is_empty() {
+                        break;
+                    }
+                    let i = rng.below(v.len());
+                    v[i] = fuzz_input(&mut rng, 1).first().copied().unwrap_or(b'%');
+                }
+                v
+            };
+            // The real path: request bytes reach the parser as a lossy &str.
+            let request = String::from_utf8_lossy(&bytes);
+            let head = parse_request_head(&request);
+            // Exercise the helpers the router feeds from the parsed head, too —
+            // they are the pieces with real decoding logic.
+            let _ = rbac::bearer(&request);
+            let _ = qget(head.query, "ip");
+            let _ = qget(head.query, "on");
+            let _ = percent_decode(head.route);
+            let _ = is_truthy(head.query);
+        }
     }
 }
