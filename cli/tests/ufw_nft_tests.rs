@@ -95,6 +95,7 @@ fn every_shipped_policy_renders_and_stays_family_pure() {
     for rel in [
         "policies/base/default_deny.yaml",
         "policies/base/default_allow.yaml",
+        "policies/base/laptop.yaml",
         "policies/hardening/zero_trust.yaml",
         "policies/hardening/airgapped.yaml",
         "policies/applications/browser_rules.yaml",
@@ -112,6 +113,51 @@ fn every_shipped_policy_renders_and_stays_family_pure() {
             }
         }
     }
+}
+
+#[test]
+fn laptop_policy_denies_dangerous_egress_and_unsolicited_inbound() {
+    // The workstation posture: allow ordinary outbound, drop the never-legitimate
+    // egress ports, and refuse every unsolicited inbound connection. If any of
+    // these regress, a laptop is either broken (no browsing) or exposed.
+    let out = run(&["render", &policy("policies/base/laptop.yaml")]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let nft = stdout(&out);
+
+    // Both hooks default-drop; the input chain admits only returns + discovery.
+    assert_eq!(
+        nft.matches("policy drop;").count(),
+        2,
+        "both input and output must default-drop:\n{nft}"
+    );
+    // Dangerous egress is dropped (SMB/RPC, RDP/VNC, cleartext logins).
+    for ports in [
+        "135, 137-139, 445",
+        "3389, 5900-5910",
+        "21, 23, 69, 79, 512-514",
+    ] {
+        assert!(
+            nft.lines().any(|l| l.contains(ports) && l.contains("drop")),
+            "dangerous egress {ports:?} must be dropped:\n{nft}"
+        );
+    }
+    // Ordinary outbound still leaves (the broad egress allow).
+    assert!(
+        nft.contains("comment \"allow-outbound\""),
+        "ordinary egress must be permitted:\n{nft}"
+    );
+    // Browsing survives the stateless path: HTTP/HTTPS replies are admitted.
+    assert!(
+        nft.lines().any(|l| l.contains("tcp sport { 80, 443 }")
+            && l.contains("accept")
+            && l.contains("allow-web-reply")),
+        "web replies must be admitted so browsing works:\n{nft}"
+    );
+    // No unsolicited inbound: the explicit inbound deny is present.
+    assert!(
+        nft.contains("ufw#deny#deny-inbound"),
+        "unsolicited inbound must be refused:\n{nft}"
+    );
 }
 
 #[test]

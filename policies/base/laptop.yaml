@@ -1,0 +1,249 @@
+# Laptop / workstation baseline.
+#
+# The posture a personal machine actually wants: refuse every *unsolicited
+# inbound* connection (a laptop runs no public services), but let normal
+# *outbound* traffic out so the web, DNS and time keep working — while still
+# denying the egress that is never legitimate from a workstation (cleartext
+# logins, SMB/RPC, database and remote-desktop ports).
+#
+# Why this exists separately from default_deny.yaml: that baseline is a
+# *server/corporate* policy. It only permits DNS to three fixed resolver IPs
+# and has no general web egress, so enforcing it on a laptop — whose resolver
+# is whatever DHCP hands it, and which browses the open web — takes the machine
+# off the internet. This policy is the laptop-shaped version.
+#
+# Enforcement path and the kernel module:
+#   * WITH the DKMS kernel module (recommended) the policy is enforced
+#     statefully via conntrack: every one of your outbound connections has its
+#     replies admitted automatically, and nothing else gets in. All outbound
+#     protocols work — web, SSH, email, VPNs — and the return rules below are
+#     simply redundant.
+#   * WITHOUT the module, the netfilter artifact is stateless. Outbound is still
+#     wide open (minus the dangerous ports), but replies only return for the
+#     protocols named in the return rules below — web, DNS, NTP, QUIC, DHCP.
+#     That covers browsing, which is the point; other outbound protocols
+#     (e.g. SSH) will send but not receive until you install the module. The
+#     return rules match on *source* port, which is broader than true conntrack
+#     (a packet forged from source port 443 is admitted) — harmless on a laptop
+#     with no listener, and tightened to real state once the module is loaded.
+#
+# Install the module for the full, tight posture:
+#   sudo apt install dkms linux-headers-$(uname -r) && sudo dkms autoinstall
+
+version: 1
+
+metadata:
+  name: laptop
+  description: "Workstation posture: deny unsolicited inbound, allow normal outbound, block dangerous egress"
+  revision: 1
+  author: security-engineering
+
+defaults:
+  action: deny
+  log: true
+  priority: 1000
+  # With the kernel module this makes each allowed flow conntrack-tracked, so
+  # replies return on state alone. Without it, see the return rules below.
+  stateful: true
+
+address_groups:
+  loopback: [127.0.0.0/8, ::1/128]
+  link_local: [169.254.0.0/16, fe80::/10]
+  multicast: [224.0.0.0/4, ff00::/8]
+  # The whole internet, both families. A laptop's resolver, web servers and
+  # NTP peers are wherever it happens to be — this is deliberately unscoped,
+  # and the port rules are what keep it safe.
+  anywhere: [0.0.0.0/0, ::/0]
+
+port_groups:
+  dns: [53]
+  dhcp: [67, 68]
+  ntp: [123]
+  # Plain HTTP and HTTPS. QUIC/HTTP-3 rides UDP 443 and is handled by its own
+  # rule so the transport is explicit.
+  web: [80, 443]
+  quic: [443]
+  # Egress that is never legitimate from a workstation. Denied before the broad
+  # allows so a rule list reads top-down as "these are refused, the rest of the
+  # web is fine".
+  cleartext: [21, 23, 69, 79, 512-514]   # ftp, telnet, tftp, finger, rsh/rlogin
+  smb_rpc: [135, 137-139, 445]           # Windows file sharing / RPC
+  database: [1433, 1521, 3306, 5432, 6379, 9200, 27017]
+  remote_desktop: [3389, 5900-5910]      # RDP, VNC
+
+rules:
+  # ---- host-local and network discovery (both directions) ----
+  - id: allow-loopback
+    description: "Host-local traffic never leaves the machine"
+    priority: 10
+    layer: packet
+    action: allow
+    destination:
+      addresses: [loopback]
+    tags: [baseline]
+
+  - id: allow-link-local
+    description: "ARP/NDP, router discovery, mDNS and the DHCP broadcast target"
+    priority: 20
+    layer: packet
+    action: allow
+    destination:
+      addresses: [link_local, multicast]
+    tags: [baseline]
+
+  - id: allow-icmp
+    description: "Path-MTU discovery and diagnostics; blocking it hangs large transfers"
+    priority: 30
+    layer: packet
+    action: allow
+    protocol: icmp
+    tags: [baseline]
+
+  - id: allow-icmpv6
+    description: "Neighbour discovery; IPv6 does not work without it"
+    priority: 31
+    layer: packet
+    action: allow
+    protocol: icmpv6
+    tags: [baseline]
+
+  - id: allow-dhcp
+    description: "Address acquisition (both directions): the DISCOVER out and the OFFER back"
+    priority: 32
+    layer: packet
+    action: allow
+    protocol: udp
+    destination:
+      addresses: [anywhere]
+      ports: dhcp
+    tags: [baseline]
+
+  # ---- deny the egress that is never legitimate (before the broad allows) ----
+  - id: deny-cleartext-egress
+    description: "Telnet, FTP, TFTP, finger, rsh: credentials in the clear"
+    priority: 100
+    layer: packet
+    direction: outbound
+    action: deny
+    destination:
+      addresses: [anywhere]
+      ports: cleartext
+    tags: [hardening]
+
+  - id: deny-smb-egress
+    description: "SMB/NetBIOS/RPC should never leave the machine"
+    priority: 101
+    layer: packet
+    direction: outbound
+    action: deny
+    destination:
+      addresses: [anywhere]
+      ports: smb_rpc
+    tags: [hardening]
+
+  - id: deny-database-egress
+    description: "Direct database ports outbound are either misconfig or exfil"
+    priority: 102
+    layer: packet
+    direction: outbound
+    action: deny
+    destination:
+      addresses: [anywhere]
+      ports: database
+    tags: [hardening]
+
+  - id: deny-remote-desktop-egress
+    description: "RDP/VNC outbound from a laptop is not a thing you do on purpose"
+    priority: 103
+    layer: packet
+    direction: outbound
+    action: deny
+    destination:
+      addresses: [anywhere]
+      ports: remote_desktop
+    tags: [hardening]
+
+  # ---- allow the rest of outbound ----
+  # Everything not denied above is permitted to leave: web, DNS, NTP, email,
+  # SSH, VPNs, app traffic. The dangerous ports are already dropped by the
+  # rules above, which sit at a higher priority, so this does not re-open them.
+  - id: allow-outbound
+    description: "Ordinary egress — anything except the dangerous ports denied above"
+    priority: 500
+    layer: packet
+    direction: outbound
+    action: allow
+    destination:
+      addresses: [anywhere]
+    tags: [baseline]
+
+  # ---- return traffic (needed on the stateless netfilter path; harmless with
+  #      the kernel module, which already admits replies on conntrack state) ----
+  - id: allow-dns-reply-udp
+    description: "Replies to our DNS queries (source port 53)"
+    priority: 300
+    layer: packet
+    direction: inbound
+    action: allow
+    protocol: udp
+    source:
+      ports: dns
+    tags: [baseline]
+
+  - id: allow-dns-reply-tcp
+    priority: 301
+    layer: packet
+    direction: inbound
+    action: allow
+    protocol: tcp
+    source:
+      ports: dns
+    tags: [baseline]
+
+  - id: allow-ntp-reply
+    priority: 302
+    layer: packet
+    direction: inbound
+    action: allow
+    protocol: udp
+    source:
+      ports: ntp
+    tags: [baseline]
+
+  - id: allow-web-reply
+    description: "Replies to our HTTP/HTTPS connections (source port 80/443)"
+    priority: 303
+    layer: packet
+    direction: inbound
+    action: allow
+    protocol: tcp
+    source:
+      ports: web
+    tags: [baseline]
+
+  - id: allow-quic-reply
+    priority: 304
+    layer: packet
+    direction: inbound
+    action: allow
+    protocol: udp
+    source:
+      ports: quic
+    tags: [baseline]
+
+  # ---- refuse everything else inbound (a laptop runs no public services) ----
+  - id: deny-inbound
+    description: "No unsolicited listeners. Add a scoped rule if you truly serve something."
+    priority: 900
+    layer: packet
+    direction: inbound
+    action: deny
+    tags: [baseline, hardening]
+
+  # ---- explicit terminal deny, so the rule list ends where the policy does ----
+  - id: deny-all
+    description: "Everything not named above is denied"
+    priority: 9999
+    layer: packet
+    action: deny
+    tags: [baseline]
