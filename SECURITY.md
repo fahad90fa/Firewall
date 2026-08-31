@@ -2,8 +2,14 @@
 
 ## Reporting a vulnerability
 
-**Do not open a public issue for a security bug.** Email
-**security@unifiedfirewall.dev** with:
+**Do not open a public issue for a security bug.** Report it privately through
+one of:
+
+- a **GitHub security advisory** — <https://github.com/fahad90fa/Firewall/security/advisories/new>
+  (gives us a private fork to fix in), or
+- **email** to **security@unifiedfirewall.dev**.
+
+Include:
 
 - the component (packet compiler, kernel module, daemon, dashboard, licensing),
 - affected version (`ufw-nft --version` / package version),
@@ -13,6 +19,14 @@
 We aim to acknowledge within **72 hours** and to ship a fix or mitigation for a
 confirmed high-severity issue within **14 days**. We will credit reporters who
 want it. Please give us a reasonable disclosure window before going public.
+
+The full internal process — triage SLA, the severity rubric (a policy bypass or
+a ring-0 memory-safety bug is graded a notch higher than CVSS alone), fixing
+under embargo, and the CVE/disclosure flow — is in
+[`docs/security/vulnerability-response.md`](docs/security/vulnerability-response.md).
+The machine-readable contact is published at
+[`/.well-known/security.txt`](https://unifiedfirewall.dev/.well-known/security.txt)
+(RFC 9116).
 
 ## Supported versions
 
@@ -84,6 +98,12 @@ shortlist of real firms, a ready-to-send request, a readiness checklist, and the
 
 See [`docs/security/threat-model.md`](docs/security/threat-model.md) and
 [`docs/security/attack-surface.md`](docs/security/attack-surface.md).
+
+## Acknowledgements
+
+We credit everyone who reports a valid security issue in good faith and wants
+the credit; ask to stay anonymous and we honor that. No external reports have
+been received yet — this section is where reporters will be listed as they are.
 
 ## Hardening notes for operators
 
