@@ -3,7 +3,7 @@
 //! The DPI layer inspects HTTP on the wire, which means plaintext — an HTTPS
 //! payload is opaque to it. This engine closes that gap by running the *same
 //! signatures* against a request that has already been decrypted, so the
-//! TLS-terminating reverse proxy in [`bin/ufw-waf`](../bin/ufw-waf/main.rs) can
+//! TLS-terminating reverse proxy in [`bin/ufw-waf`](bin/ufw-waf.rs) can
 //! inspect HTTPS the DPI layer never could.
 //!
 //! It is deliberately built on [`SignatureSet`](crate::signatures::SignatureSet)

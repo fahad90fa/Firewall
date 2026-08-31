@@ -1,6 +1,7 @@
 pub mod audit;
 pub mod automaton;
 pub mod config;
+pub mod edge_hardening;
 pub mod failsafe;
 pub mod fleet;
 pub mod fleet_client;

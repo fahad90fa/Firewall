@@ -170,6 +170,27 @@ require_kernel_module = true
 # closed — an unprotected host must never be the silent outcome.
 fail_mode = "closed"
 
+[edge]
+# Opt-in on-host flood layer. When true, the daemon installs an nftables table
+# (inet ufw_edge) ahead of the policy table that drops connection-rate floods
+# in the kernel's conntrack path: a SYN-flood cap, a per-source concurrent
+# connection cap, and an ICMP echo cap. It never changes what the policy
+# permits — within-rate traffic falls straight through to the policy.
+#
+# What it does NOT do: absorb a volumetric DDoS. Packets that saturate the link
+# have already spent the bandwidth by the time they reach this host; dropping
+# them here does not un-send them. That needs capacity upstream (a scrubbing
+# service, a CDN, the provider's edge). This layer buys resistance to
+# state/connection-rate floods, not immunity to a bandwidth flood.
+flood_protection = false
+# Defaults are deliberately generous — survive a flood without throttling
+# legitimate bursts. Every value has a floor of 1 (a 0 would self-DoS).
+# syn_rate_per_sec = 200
+# syn_burst = 50
+# conns_per_source = 100
+# icmp_rate_per_sec = 20
+# icmp_burst = 10
+
 [policy]
 # Every *.yaml in this directory is loaded; drop your active policy here.
 dir = "/etc/unified-firewall/policies"

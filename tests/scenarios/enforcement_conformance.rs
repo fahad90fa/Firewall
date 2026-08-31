@@ -183,6 +183,19 @@ fn the_emergency_fail_closed_barrier_loads_into_the_kernel() {
     resolve(nft_check(&barrier), "UFW_NFT_REQUIRE");
 }
 
+#[test]
+fn the_edge_flood_hardening_layer_loads_into_the_kernel() {
+    // The opt-in flood layer the daemon installs when edge.flood_protection is
+    // set. It leans on kernel features a string test cannot confirm: a negative
+    // hook priority (-150), `ct state` matching, per-source `ct count` meters,
+    // TCP-flag masks and ICMP/ICMPv6 echo matching. `nft --check` against the
+    // live kernel is what proves the ruleset the daemon would feed to `nft -f -`
+    // is actually loadable, not merely well-formed text.
+    let ruleset =
+        ufw_daemon::edge_hardening::flood_hardening_ruleset(&ufw_daemon::edge_hardening::FloodOpts::default());
+    resolve(nft_check(&ruleset), "UFW_NFT_REQUIRE");
+}
+
 /// Not an assertion — a diagnostic. Run with `--ignored --nocapture` to see the
 /// exact ruleset the compiler emits for the probe fixtures, which is the first
 /// thing to look at when a conformance case fails.

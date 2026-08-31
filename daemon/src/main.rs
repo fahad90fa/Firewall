@@ -232,6 +232,40 @@ fn run() -> Result<(), String> {
     // it. Verified on open, so a start onto a tampered log is a loud failure.
     let audit = open_audit(&config, &logs);
 
+    // Optional on-host flood / DoS-resistance layer (opt-in). A raw nftables
+    // table ahead of the policy table that drops connection-rate floods and
+    // invalid packets; it never changes what the policy permits. It mitigates
+    // SYN/ICMP/connection-rate floods — it does not absorb a volumetric DDoS,
+    // which is an upstream job.
+    if config.edge.flood_protection {
+        match ufw_daemon::edge_hardening::install_flood_hardening(&config.edge.flood_opts()) {
+            Ok(()) => {
+                audit_note(
+                    &audit,
+                    &logs,
+                    &config.daemon.host_id,
+                    AuditCategory::ConfigChange,
+                    "system",
+                    "installed the edge flood-hardening layer (table inet ufw_edge)",
+                );
+                logs.note(
+                    &config.daemon.host_id,
+                    Severity::Notice,
+                    EventKind::PolicyChange,
+                    "edge flood-hardening installed: SYN/ICMP rate caps and per-source \
+                     connection limits mitigate connection-rate floods; a volumetric DDoS \
+                     still needs upstream scrubbing",
+                );
+            }
+            Err(e) => logs.note(
+                &config.daemon.host_id,
+                Severity::Error,
+                EventKind::SystemFault,
+                format!("edge flood-hardening could not be installed: {e}"),
+            ),
+        }
+    }
+
     // --- identity --------------------------------------------------------
     // Platform anchors first, so a configured anchor for the same subject
     // overrides rather than duplicates it.

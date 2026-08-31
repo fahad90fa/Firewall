@@ -359,6 +359,39 @@ pub struct Config {
     pub logging: LoggingConfig,
     pub api: ApiConfig,
     pub watchdog: WatchdogConfig,
+    pub edge: EdgeConfig,
+}
+
+/// On-host flood / DoS-resistance layer. Opt-in, because its rate caps could
+/// clip a legitimately bursty workload — a public server turns it on, a quiet
+/// internal host does not need it. See [`crate::edge_hardening`], which is also
+/// explicit that this mitigates connection-rate floods but cannot absorb a
+/// volumetric DDoS (that is an upstream job).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EdgeConfig {
+    /// Install the `ufw_edge` flood-mitigation table at startup.
+    pub flood_protection: bool,
+    /// New TCP connections/second before the SYN-flood dampener drops, + burst.
+    pub syn_rate_per_sec: u32,
+    pub syn_burst: u32,
+    /// Concurrent connections a single source may hold.
+    pub conns_per_source: u32,
+    /// ICMP echo-requests/second before the ping-flood dampener drops, + burst.
+    pub icmp_rate_per_sec: u32,
+    pub icmp_burst: u32,
+}
+
+impl EdgeConfig {
+    /// The tunables as the edge module wants them.
+    pub fn flood_opts(&self) -> crate::edge_hardening::FloodOpts {
+        crate::edge_hardening::FloodOpts {
+            syn_rate_per_sec: self.syn_rate_per_sec,
+            syn_burst: self.syn_burst,
+            conns_per_source: self.conns_per_source,
+            icmp_rate_per_sec: self.icmp_rate_per_sec,
+            icmp_burst: self.icmp_burst,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -662,6 +695,14 @@ impl Default for Config {
                 recovery_stable_secs: 10,
                 safe_stable_secs: 300,
             },
+            edge: EdgeConfig {
+                flood_protection: false,
+                syn_rate_per_sec: 200,
+                syn_burst: 50,
+                conns_per_source: 100,
+                icmp_rate_per_sec: 20,
+                icmp_burst: 10,
+            },
         }
     }
 }
@@ -734,6 +775,12 @@ const KNOWN_KEYS: &[&str] = &[
     "watchdog.safe_retry_secs",
     "watchdog.recovery_stable_secs",
     "watchdog.safe_stable_secs",
+    "edge.flood_protection",
+    "edge.syn_rate_per_sec",
+    "edge.syn_burst",
+    "edge.conns_per_source",
+    "edge.icmp_rate_per_sec",
+    "edge.icmp_burst",
 ];
 
 impl Config {
@@ -982,6 +1029,26 @@ impl Config {
         }
         if let Some(v) = doc.u64("watchdog.safe_stable_secs")? {
             c.watchdog.safe_stable_secs = v;
+        }
+
+        // --- edge (flood/DoS resistance) ----------------------------------
+        if let Some(v) = doc.bool("edge.flood_protection")? {
+            c.edge.flood_protection = v;
+        }
+        if let Some(v) = doc.u64("edge.syn_rate_per_sec")? {
+            c.edge.syn_rate_per_sec = v.clamp(1, u32::MAX as u64) as u32;
+        }
+        if let Some(v) = doc.u64("edge.syn_burst")? {
+            c.edge.syn_burst = v.clamp(1, u32::MAX as u64) as u32;
+        }
+        if let Some(v) = doc.u64("edge.conns_per_source")? {
+            c.edge.conns_per_source = v.clamp(1, u32::MAX as u64) as u32;
+        }
+        if let Some(v) = doc.u64("edge.icmp_rate_per_sec")? {
+            c.edge.icmp_rate_per_sec = v.clamp(1, u32::MAX as u64) as u32;
+        }
+        if let Some(v) = doc.u64("edge.icmp_burst")? {
+            c.edge.icmp_burst = v.clamp(1, u32::MAX as u64) as u32;
         }
 
         c.validate()?;
