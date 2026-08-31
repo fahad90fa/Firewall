@@ -18,5 +18,32 @@ ExecStart=/usr/local/bin/ufw-nft dashboard 127.0.0.1:8787
 Restart=on-failure
 RestartSec=3
 
+# --- sandbox ---------------------------------------------------------------
+# The console reads the kernel's tables and, on a loopback-gated request, writes
+# the contain table (CAP_NET_ADMIN); it also surfaces kernel and journal logs by
+# shelling out to dmesg (CAP_SYSLOG) and journalctl. The capability set is
+# bounded to exactly those two. Because it spawns those diagnostic subprocesses,
+# the process-hiding, kernel-log-blocking and syscall-filter directives that
+# would break them are deliberately omitted; what remains still strips every
+# escalation path a console request never needs.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYSLOG
+AmbientCapabilities=CAP_NET_ADMIN CAP_SYSLOG
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/run/unified-firewall /var/log/unified-firewall
+ProtectHome=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+UMask=0077
+
 [Install]
 WantedBy=multi-user.target

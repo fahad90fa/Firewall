@@ -13,5 +13,31 @@ RestartSec=3
 # kernel's tables where available without running fully privileged.
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 
+# --- sandbox ---------------------------------------------------------------
+# Bounded to the two capabilities it actually uses (reading the kernel's tables;
+# raw sockets for packet observation), so it can never acquire more. Kept
+# deliberately moderate: this daemon reads /proc for process identity and may
+# shell out to diagnostic tools, so the process-hiding and syscall-filtering
+# directives that would break those are left off on purpose — the ones below are
+# the escalation paths it never needs.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/log/unified-firewall /var/lib/unified-firewall /run/unified-firewall
+ProtectHome=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6 AF_PACKET
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+UMask=0077
+
 [Install]
 WantedBy=multi-user.target

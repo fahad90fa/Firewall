@@ -1,0 +1,21 @@
+# Unified Firewall — machine-readable security contact (RFC 9116).
+# Served at https://unifiedfirewall.dev/.well-known/security.txt
+#
+# The prose policy — what to include, our acknowledgement/fix SLA, and the
+# disclosure window we ask for — lives in SECURITY.md in the source repository.
+
+Contact: mailto:security@unifiedfirewall.dev
+Contact: https://github.com/fahad90fa/Firewall/security/advisories/new
+Expires: 2027-08-31T00:00:00.000Z
+Preferred-Languages: en
+Canonical: https://unifiedfirewall.dev/.well-known/security.txt
+Policy: https://github.com/fahad90fa/Firewall/blob/main/SECURITY.md
+Acknowledgments: https://github.com/fahad90fa/Firewall/blob/main/SECURITY.md#acknowledgements
+
+# Please give us a reasonable disclosure window before going public. We aim to
+# acknowledge within 72 hours and to ship a fix or mitigation for a confirmed
+# high-severity issue within 14 days (see the Policy link above).
+#
+# This file is intentionally unsigned: no PGP key is published yet. When one is,
+# add an `Encryption:` line pointing to the public key and sign this file with
+# it (a detached signature at .well-known/security.txt.sig).

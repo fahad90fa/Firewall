@@ -21,7 +21,7 @@
 set -eu
 
 FORMAT="${1:-}"
-VERSION="${VERSION:-0.1.1}"
+VERSION="${VERSION:-0.1.2}"
 ARCH="$(uname -m)"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 STAGE="${ROOT}/build/stage"
@@ -163,6 +163,33 @@ cat > "$STAGE/etc/unified-firewall/ufwd.toml" <<'CONF'
 # host_id is omitted, so it defaults to the system hostname.
 mode = "enforce"
 require_kernel_module = true
+# If the daemon runs without the kernel module (require_kernel_module = false),
+# `fail_mode` decides the posture: "closed" installs an emergency default-deny
+# barrier that keeps loopback, established flows and the management/SSH ports
+# reachable; "open" leaves the host reachable and unfiltered, loudly. Default is
+# closed — an unprotected host must never be the silent outcome.
+fail_mode = "closed"
+
+[edge]
+# Opt-in on-host flood layer. When true, the daemon installs an nftables table
+# (inet ufw_edge) ahead of the policy table that drops connection-rate floods
+# in the kernel's conntrack path: a SYN-flood cap, a per-source concurrent
+# connection cap, and an ICMP echo cap. It never changes what the policy
+# permits — within-rate traffic falls straight through to the policy.
+#
+# What it does NOT do: absorb a volumetric DDoS. Packets that saturate the link
+# have already spent the bandwidth by the time they reach this host; dropping
+# them here does not un-send them. That needs capacity upstream (a scrubbing
+# service, a CDN, the provider's edge). This layer buys resistance to
+# state/connection-rate floods, not immunity to a bandwidth flood.
+flood_protection = false
+# Defaults are deliberately generous — survive a flood without throttling
+# legitimate bursts. Every value has a floor of 1 (a 0 would self-DoS).
+# syn_rate_per_sec = 200
+# syn_burst = 50
+# conns_per_source = 100
+# icmp_rate_per_sec = 20
+# icmp_burst = 10
 
 [policy]
 # Every *.yaml in this directory is loaded; drop your active policy here.

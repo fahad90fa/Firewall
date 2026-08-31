@@ -556,6 +556,7 @@ mod tests {
             allow_from: Vec::new(),
             auth_token: None,
             fleet_secret: None,
+            fleet_ed25519_pubkey: None,
             max_body_bytes: 64 * 1024,
             cors_origins: Vec::new(),
         }

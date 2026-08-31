@@ -62,6 +62,12 @@ pub fn push_body(b: &Bundle) -> String {
     w.u64_field("canary_percent", b.canary_percent as u64);
     w.u64_field("canary_seconds", b.canary_seconds);
     w.str_field("mac", &hash::hex(&b.mac));
+    // Carry the Ed25519 signature when the bundle was signed with one, so the
+    // public-key check survives the hop to each member. Omitted when empty, so
+    // an HMAC-only fleet's wire format is unchanged.
+    if !b.sig_ed25519.is_empty() {
+        w.str_field("sig_ed25519", &hash::hex(&b.sig_ed25519));
+    }
     w.end_object();
     w.finish()
 }
@@ -192,6 +198,7 @@ mod tests {
             canary_percent: 100,
             canary_seconds: 0,
             mac: [0u8; 32],
+            sig_ed25519: Vec::new(),
         }
     }
 

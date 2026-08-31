@@ -15,3 +15,28 @@ Type=oneshot
 # failure by the timer.
 ExecStart=/usr/local/bin/ufw-nft license check
 SuccessExitStatus=0 1
+
+# --- sandbox ---------------------------------------------------------------
+# Reaches the license server (via curl) and, on a lapse, reverts the nftables
+# policy (CAP_NET_ADMIN). Bounded to that one capability; it shells out to curl,
+# so the process-hiding and syscall-filter directives are left off.
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/unified-firewall /run/unified-firewall
+ProtectHome=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+UMask=0077

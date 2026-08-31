@@ -359,6 +359,39 @@ pub struct Config {
     pub logging: LoggingConfig,
     pub api: ApiConfig,
     pub watchdog: WatchdogConfig,
+    pub edge: EdgeConfig,
+}
+
+/// On-host flood / DoS-resistance layer. Opt-in, because its rate caps could
+/// clip a legitimately bursty workload — a public server turns it on, a quiet
+/// internal host does not need it. See [`crate::edge_hardening`], which is also
+/// explicit that this mitigates connection-rate floods but cannot absorb a
+/// volumetric DDoS (that is an upstream job).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EdgeConfig {
+    /// Install the `ufw_edge` flood-mitigation table at startup.
+    pub flood_protection: bool,
+    /// New TCP connections/second before the SYN-flood dampener drops, + burst.
+    pub syn_rate_per_sec: u32,
+    pub syn_burst: u32,
+    /// Concurrent connections a single source may hold.
+    pub conns_per_source: u32,
+    /// ICMP echo-requests/second before the ping-flood dampener drops, + burst.
+    pub icmp_rate_per_sec: u32,
+    pub icmp_burst: u32,
+}
+
+impl EdgeConfig {
+    /// The tunables as the edge module wants them.
+    pub fn flood_opts(&self) -> crate::edge_hardening::FloodOpts {
+        crate::edge_hardening::FloodOpts {
+            syn_rate_per_sec: self.syn_rate_per_sec,
+            syn_burst: self.syn_burst,
+            conns_per_source: self.conns_per_source,
+            icmp_rate_per_sec: self.icmp_rate_per_sec,
+            icmp_burst: self.icmp_burst,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -374,6 +407,13 @@ pub struct DaemonConfig {
     /// with no enforcement. Default true, because a firewall that silently
     /// isn't one is worse than a firewall that failed loudly.
     pub require_kernel_module: bool,
+    /// What to do about enforcement when the kernel path is *unavailable* and
+    /// the daemon runs anyway (`require_kernel_module = false`). `closed`
+    /// installs an emergency default-deny barrier that keeps management access;
+    /// `open` leaves the host reachable and unfiltered, loudly. Default
+    /// `closed`: an unprotected host must never be the silent outcome. See
+    /// [`crate::failsafe`].
+    pub fail_mode: crate::failsafe::FailMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -554,6 +594,12 @@ pub struct ApiConfig {
     /// `auth_token`: that gates *reaching* the API, this gates *trusting a
     /// bundle*, and they belong to different parties.
     pub fleet_secret: Option<String>,
+    /// The fleet signer's Ed25519 public key (raw 32 bytes, hex). When set on a
+    /// `--features tls` build, a bundle must also carry a valid Ed25519
+    /// signature from the matching private key — a public-key upgrade to the
+    /// shared-secret HMAC, so no host can forge a bundle another would accept.
+    /// Ignored (with a warning) on a non-tls build, which has no verifier.
+    pub fleet_ed25519_pubkey: Option<String>,
     pub max_body_bytes: usize,
     /// Serve the network-facing APIs without TLS.
     ///
@@ -584,6 +630,7 @@ impl Default for Config {
                 state_dir: PathBuf::from(constants::DEFAULT_STATE_DIR_UNIX),
                 mode: ufw_shared::protocol::EnforcementMode::Enforce,
                 require_kernel_module: true,
+                fail_mode: crate::failsafe::FailMode::Closed,
             },
             policy: PolicyConfig {
                 dir: PathBuf::from(constants::DEFAULT_POLICY_DIR_UNIX),
@@ -632,6 +679,7 @@ impl Default for Config {
                 allow_from: Vec::new(),
                 auth_token: None,
                 fleet_secret: None,
+                fleet_ed25519_pubkey: None,
                 max_body_bytes: constants::MAX_API_BODY,
                 allow_plaintext: false,
                 tls: crate::tls::TlsConfig::default(),
@@ -647,6 +695,14 @@ impl Default for Config {
                 recovery_stable_secs: 10,
                 safe_stable_secs: 300,
             },
+            edge: EdgeConfig {
+                flood_protection: false,
+                syn_rate_per_sec: 200,
+                syn_burst: 50,
+                conns_per_source: 100,
+                icmp_rate_per_sec: 20,
+                icmp_burst: 10,
+            },
         }
     }
 }
@@ -658,6 +714,7 @@ const KNOWN_KEYS: &[&str] = &[
     "daemon.state_dir",
     "daemon.mode",
     "daemon.require_kernel_module",
+    "daemon.fail_mode",
     "policy.dir",
     "policy.files",
     "policy.signature_dir",
@@ -703,6 +760,7 @@ const KNOWN_KEYS: &[&str] = &[
     "api.allow_from",
     "api.auth_token",
     "api.fleet_secret",
+    "api.fleet_ed25519_pubkey",
     "api.max_body_bytes",
     "api.tls_cert",
     "api.tls_key",
@@ -717,6 +775,12 @@ const KNOWN_KEYS: &[&str] = &[
     "watchdog.safe_retry_secs",
     "watchdog.recovery_stable_secs",
     "watchdog.safe_stable_secs",
+    "edge.flood_protection",
+    "edge.syn_rate_per_sec",
+    "edge.syn_burst",
+    "edge.conns_per_source",
+    "edge.icmp_rate_per_sec",
+    "edge.icmp_burst",
 ];
 
 impl Config {
@@ -752,6 +816,12 @@ impl Config {
         }
         if let Some(v) = doc.bool("daemon.require_kernel_module")? {
             c.daemon.require_kernel_module = v;
+        }
+        if let Some(v) = doc.string("daemon.fail_mode")? {
+            c.daemon.fail_mode = crate::failsafe::FailMode::parse(&v).ok_or(ConfigError {
+                line: 0,
+                message: format!("`{v}` is not a fail mode (closed, open)"),
+            })?;
         }
 
         // --- policy -------------------------------------------------------
@@ -923,6 +993,7 @@ impl Config {
         }
         c.api.auth_token = doc.string("api.auth_token")?;
         c.api.fleet_secret = doc.string("api.fleet_secret")?;
+        c.api.fleet_ed25519_pubkey = doc.string("api.fleet_ed25519_pubkey")?;
         c.api.tls.cert_path = doc.string("api.tls_cert")?.map(PathBuf::from);
         c.api.tls.key_path = doc.string("api.tls_key")?.map(PathBuf::from);
         c.api.tls.client_ca_path = doc.string("api.tls_client_ca")?.map(PathBuf::from);
@@ -958,6 +1029,26 @@ impl Config {
         }
         if let Some(v) = doc.u64("watchdog.safe_stable_secs")? {
             c.watchdog.safe_stable_secs = v;
+        }
+
+        // --- edge (flood/DoS resistance) ----------------------------------
+        if let Some(v) = doc.bool("edge.flood_protection")? {
+            c.edge.flood_protection = v;
+        }
+        if let Some(v) = doc.u64("edge.syn_rate_per_sec")? {
+            c.edge.syn_rate_per_sec = v.clamp(1, u32::MAX as u64) as u32;
+        }
+        if let Some(v) = doc.u64("edge.syn_burst")? {
+            c.edge.syn_burst = v.clamp(1, u32::MAX as u64) as u32;
+        }
+        if let Some(v) = doc.u64("edge.conns_per_source")? {
+            c.edge.conns_per_source = v.clamp(1, u32::MAX as u64) as u32;
+        }
+        if let Some(v) = doc.u64("edge.icmp_rate_per_sec")? {
+            c.edge.icmp_rate_per_sec = v.clamp(1, u32::MAX as u64) as u32;
+        }
+        if let Some(v) = doc.u64("edge.icmp_burst")? {
+            c.edge.icmp_burst = v.clamp(1, u32::MAX as u64) as u32;
         }
 
         c.validate()?;
@@ -1110,6 +1201,7 @@ host_id = "web-01"
 state_dir = "/var/lib/ufw"
 mode = "monitor"
 require_kernel_module = false
+fail_mode = "open"
 
 [policy]
 dir = "/etc/ufw/policies"
@@ -1147,6 +1239,7 @@ cli_socket = "/run/ufw.sock"
             ufw_shared::protocol::EnforcementMode::Monitor
         );
         assert!(!c.daemon.require_kernel_module);
+        assert_eq!(c.daemon.fail_mode, crate::failsafe::FailMode::Open);
         assert_eq!(c.policy.files, vec!["base.yaml", "app.yaml"]);
         assert_eq!(c.policy.watch_interval_ms, 250);
         assert_eq!(c.identity.cache_ttl_secs, 60);

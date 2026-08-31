@@ -26,5 +26,32 @@ ExecStart=/usr/local/bin/ufw-nft boot-apply monitor_baseline
 # would silently fall back to the baseline. `--keep-state` is exactly that.
 ExecStop=/usr/local/bin/ufw-nft revert --keep-state
 
+# --- sandbox ---------------------------------------------------------------
+# Installs the nftables policy at boot: it needs CAP_NET_ADMIN (and netlink) and
+# nothing else, so the capability set is bounded to exactly that — a bug in the
+# boot-apply path cannot reach mount, ptrace or module loading. It reads the
+# recorded/installed policy under /etc and /var and writes its state back, so
+# ProtectSystem=strict leaves /var writable via ReadWritePaths.
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/unified-firewall /run/unified-firewall
+ProtectHome=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+UMask=0077
+
 [Install]
 WantedBy=multi-user.target

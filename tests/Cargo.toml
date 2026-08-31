@@ -51,5 +51,25 @@ name = "cross_platform_equivalence"
 path = "scenarios/cross_platform_equivalence.rs"
 
 [[test]]
+name = "enforcement_conformance"
+path = "scenarios/enforcement_conformance.rs"
+
+[[test]]
+name = "parser_fuzz"
+path = "scenarios/parser_fuzz.rs"
+
+[[test]]
+name = "every_layer_runs"
+path = "scenarios/every_layer_runs.rs"
+
+[[test]]
+name = "systemd_hardening"
+path = "scenarios/systemd_hardening.rs"
+
+[[test]]
+name = "ipv6_parity"
+path = "scenarios/ipv6_parity.rs"
+
+[[test]]
 name = "performance_under_load"
 path = "scenarios/performance_under_load.rs"

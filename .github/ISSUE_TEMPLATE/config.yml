@@ -1,0 +1,14 @@
+# Route security reports to private channels, never a public issue. GitHub shows
+# these links above the "New issue" chooser.
+blank_issues_enabled: true
+contact_links:
+  - name: 🔒 Report a security vulnerability (private)
+    url: https://github.com/fahad90fa/Firewall/security/advisories/new
+    about: >-
+      Do NOT open a public issue for a security bug. Report it privately via a
+      GitHub security advisory (this link) or by email to
+      security@unifiedfirewall.dev. See SECURITY.md for what to include and our
+      response SLA.
+  - name: 📖 Security policy & disclosure process
+    url: https://github.com/fahad90fa/Firewall/blob/main/SECURITY.md
+    about: How we handle reports, the acknowledgement/fix SLA, and the disclosure window we ask for.

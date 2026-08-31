@@ -49,6 +49,16 @@ Two builds of the same commit, with the same toolchain and these flags, produce
 bit-identical artifacts. Compare with `sha256sum target/release/*` across
 machines to verify.
 
+The Linux **`.deb`** wrapping those binaries is reproducible too, and the build
+script bakes the flags in rather than leaving them to the operator:
+`build/linux/build-deb.sh` pins `SOURCE_DATE_EPOCH` (honoring an external one, or
+derived from the fixed release date), normalizes every staged file's mtime, and
+builds the release binaries under `--remap-path-prefix`. To prove it,
+`build/linux/verify-reproducible.sh` builds the package twice and asserts an
+identical SHA-256 (falling back to `diffoscope` to show any difference if it ever
+fails). This is the property that lets a third party rebuild the shipped `.deb`
+from source and confirm, byte for byte, that it matches.
+
 ## Verifying an install
 
 - The installed binaries live under `PREFIX/bin` (default `/usr/local/bin`);

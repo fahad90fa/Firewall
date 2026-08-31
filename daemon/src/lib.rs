@@ -1,5 +1,8 @@
+pub mod audit;
 pub mod automaton;
 pub mod config;
+pub mod edge_hardening;
+pub mod failsafe;
 pub mod fleet;
 pub mod fleet_client;
 pub mod fleet_rollout;
@@ -10,6 +13,7 @@ pub mod management_api;
 pub mod metrics;
 pub mod policy_loader;
 pub mod policy_store;
+pub mod selfcheck;
 pub mod signatures;
 pub mod state;
 pub mod telemetry;

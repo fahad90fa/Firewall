@@ -5,7 +5,7 @@
 # Debian-family host with dpkg.
 #
 #   sh build/linux/build-deb.sh            # -> dist/unified-firewall_<ver>_<arch>.deb
-#   VERSION=0.1.1 sh build/linux/build-deb.sh
+#   VERSION=0.1.2 sh build/linux/build-deb.sh
 #
 # What it installs on the target (mirrors install.sh, adapted to /usr):
 #   /usr/bin/{ufw-nft,ufwctl,ufw-daemon,ufw-waf,firewall}
@@ -19,10 +19,24 @@
 # block) and starts them. Nothing here can lock you out of your own machine.
 set -eu
 
-VERSION="${VERSION:-0.1.1}"
-RELEASE_DATE="${RELEASE_DATE:-2026-08-29}"
+VERSION="${VERSION:-0.1.2}"
+RELEASE_DATE="${RELEASE_DATE:-2026-08-31}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
+
+# Reproducible builds: the same source must produce a byte-identical .deb.
+# The metadata dates are already fixed (RELEASE_DATE, changelog, `gzip -9n`),
+# but every file `install`/`cp` stages carries its build-time mtime, and
+# dpkg-deb packs those into data.tar — so two builds a second apart differ. Pin
+# a single timestamp for the whole package: honor an externally-supplied
+# SOURCE_DATE_EPOCH (a CI reproducibility harness sets this from the commit),
+# else derive it from the fixed RELEASE_DATE so a plain `build-deb.sh` is
+# reproducible on its own. Every staged mtime is normalized to it below, and
+# dpkg-deb (>= 1.18.11) additionally clamps to it, so old and new dpkg agree.
+if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
+    SOURCE_DATE_EPOCH="$(date -u -d "$RELEASE_DATE" +%s 2>/dev/null || echo 1756425600)"
+fi
+export SOURCE_DATE_EPOCH
 BIN="$ROOT/target/release"
 STAGE="$ROOT/build/deb/pkgroot"
 OUT_DIR="${OUT_DIR:-$ROOT/dist}"
@@ -33,12 +47,23 @@ DEB="$OUT_DIR/unified-firewall_${VERSION}_${ARCH}.deb"
 # this avoids silently packaging a stale binary that predates a source change.
 # Set UFW_DEB_SKIP_BUILD=1 to reuse whatever is already in target/release.
 if [ "${UFW_DEB_SKIP_BUILD:-0}" != "1" ]; then
-    # ufw-cli ships with `tls`: the packaged firewall verifies the Ed25519
-    # license signature (not just the HMAC deterrent) and the console supports
-    # mTLS. rustls/ring are already pinned in Cargo.lock, so this stays offline.
-    echo "==> building release binaries (ufw-cli +tls: Ed25519 verify + console mTLS)"
-    ( cd "$ROOT" && cargo build --release -p ufw-cli --features tls )
-    ( cd "$ROOT" && cargo build --release -p ufw-daemon )
+    # Both ufw-cli AND ufw-daemon ship with `tls`. This is the production
+    # package, not the zero-dependency source build (`cargo build`, which stays
+    # dep-free). With tls the daemon actually enforces the Ed25519 signature on
+    # fleet bundles (api.fleet_ed25519_pubkey) and can terminate TLS on the
+    # management API — otherwise those controls ship dormant, and a public key an
+    # operator configures would be stored but never checked. The cli's tls buys
+    # the Ed25519 license verify and console mTLS. rustls/ring are already pinned
+    # in Cargo.lock, so this stays offline.
+    echo "==> building release binaries (ufw-cli + ufw-daemon, +tls: Ed25519 fleet/license verify, mTLS)"
+    # Remap the absolute build path out of the binaries so they do not embed the
+    # checkout location (in a panic message or an assertion) — the same source
+    # built under /home/a and /build/b then yields identical bytes. Combined with
+    # the pinned Cargo.lock and the release profile's `strip`, this is what makes
+    # the packaged binaries reproducible, not just the .deb wrapper around them.
+    REMAP="--remap-path-prefix=$ROOT=/build/unified-firewall"
+    ( cd "$ROOT" && RUSTFLAGS="${RUSTFLAGS:-} $REMAP" cargo build --release -p ufw-cli --features tls )
+    ( cd "$ROOT" && RUSTFLAGS="${RUSTFLAGS:-} $REMAP" cargo build --release -p ufw-daemon --features tls )
 fi
 if [ ! -x "$BIN/ufw-nft" ] || [ ! -x "$BIN/ufwd" ]; then
     echo "error: release binaries missing under $BIN (build failed or was skipped)" >&2
@@ -105,6 +130,24 @@ mode = "monitor"
 # space. The packet-layer policy still enforces through nftables (ufw-nft);
 # identity/DPI blocking needs the module (a separate DKMS step).
 require_kernel_module = false
+
+[edge]
+# Opt-in on-host flood layer. When true, the daemon installs an nftables table
+# (inet ufw_edge) ahead of the policy table that drops connection-rate floods in
+# the kernel conntrack path: a SYN-flood cap, a per-source concurrent-connection
+# cap, and an ICMP echo cap. It never changes what the policy permits.
+#
+# It does NOT absorb a volumetric DDoS — packets that saturate the link have
+# already spent the bandwidth before they reach this host. That needs capacity
+# upstream (a scrubbing service, a CDN, the provider's edge). This buys
+# resistance to state/connection-rate floods, not immunity to a bandwidth flood.
+flood_protection = false
+# Defaults (shown commented) are generous; each has a floor of 1 so 0 can't self-DoS.
+# syn_rate_per_sec = 200
+# syn_burst = 50
+# conns_per_source = 100
+# icmp_rate_per_sec = 20
+# icmp_burst = 10
 
 [policy]
 dir = "/etc/unified-firewall/daemon-policy"
@@ -402,7 +445,14 @@ chmod 0755 "$STAGE/DEBIAN/postrm"
 
 # 4. Build -------------------------------------------------------------------
 install -d "$OUT_DIR"
-echo "==> building $DEB"
+
+# Normalize every staged file's mtime (and symlinks, with -h) to the pinned
+# epoch so data.tar is byte-identical across builds. Done last, after the
+# changelog gzip and every generated file, so nothing re-stamps them afterward.
+find "$STAGE" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} + 2>/dev/null \
+    || find "$STAGE" -exec touch -h -t "$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y%m%d%H%M.%S)" {} +
+
+echo "==> building $DEB (reproducible; SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH)"
 dpkg-deb --root-owner-group --build "$STAGE" "$DEB" >/dev/null
 echo "==> done"
 dpkg-deb --info "$DEB" | sed 's/^/    /'

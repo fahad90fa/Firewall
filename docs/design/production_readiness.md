@@ -6,9 +6,21 @@ and what separates the two.
 This is the companion to [`threat_model.md`](threat_model.md). The threat model
 asks *what can an adversary do to it*. This document asks a blunter question:
 *if you installed it on a real machine tomorrow, would it be safe, and would it
-even start?* The answer today is no on both counts, and the honest version of
-why is worth writing down — because the codebase is strong enough that it is
-easy to mistake for a product, and it is not one yet.
+even start?* The answer today is still no — but for a shorter list of reasons
+than before, and the honest version of why is worth writing down, because the
+codebase is strong enough that it is easy to mistake for a product, and it is not
+one yet.
+
+> **Update.** The eleven-item production-hardening roadmap this document
+> originally scoped — real-packet conformance, hostile-byte fuzzing, "every
+> layer runs", an explicit fail-safe posture, the boot-time gap, privilege
+> reduction, a tamper-evident audit log, self-monitoring, Ed25519 fleet
+> signatures, IPv6 parity, and reproducible builds — is **built, wired and
+> tested**. The completion record, item by item with the proving test, is
+> [`production-hardening.md`](production-hardening.md). What that leaves open is
+> narrower and is called out below: **sustained runtime hours**, **an
+> independent audit**, and **the macOS packet-layer path**. The score is now
+> bounded by time, people and hardware, not by unwritten code.
 
 ## The two scores
 
@@ -23,13 +35,19 @@ them is how infrastructure hurts people.
   legitimate look-alike. The hard part that most projects never finish is
   finished, and every guarantee is backed by a test that runs the real code.
 
-- **As a deployable product — low.** Roughly a 3 out of 10. Not because the
-  code is weak, but because none of the four things below are optional for
-  real deployment, and all four are open. The score is bounded by *time and
-  process*, not by unsolved research — there is no open problem here, only
-  work that has not been done.
+- **As a deployable product — low, but less low than it was.** The score was a
+  3 out of 10 when all four things below were open. The correctness, fail-safe
+  and observability blockers among them are now closed and tested
+  ([`production-hardening.md`](production-hardening.md)), which is real movement;
+  what holds the number down is that the *dominant* gap — thing 1, sustained
+  runtime hours — is wall-clock bound and cannot be closed by a commit, and the
+  independent audit (thing 2) is external by definition. The score is bounded by
+  *time, process and hardware*, not by unsolved research: there is no open
+  problem here, only work — some of it now done, some of it that only the clock
+  can do.
 
-The rest of this document is the four things.
+The rest of this document is the four things, each updated to say what closed
+and what did not.
 
 ## 1. Zero runtime hours — the dominant gap
 
@@ -95,6 +113,16 @@ volume of tests makes it look.
 result, with the parsing in ring 0 (`dpi_decoders.h`, the reassembler) as the
 first target.
 
+**What is built toward it:** the review is now cheaper and its likely findings
+fewer, which is the most a commit can do. Every emitted artifact is packet-checked
+against a real kernel, every hostile-byte parser (including the console HTTP path
+where the unauth crash lived) is fuzzed, and every advertised layer is proven
+live — the three classes an auditor would otherwise spend the first week finding.
+The scope, trust boundaries and first targets are written down for a reviewer in
+[`../security/audit-brief.md`](../security/audit-brief.md),
+[`../security/audit-rfp.md`](../security/audit-rfp.md) and
+[`../security/attack-surface.md`](../security/attack-surface.md).
+
 ## 3. None of the operational scaffolding a product needs
 
 This is where "codebase" and "product" diverge hardest. A correct engine is not
@@ -158,9 +186,26 @@ a thing a person can install, run, or recover from. Shipping means:
   already control. "Converges in a thousand-host simulation" and "survives a
   botched rollout to a thousand real hosts" are different maturities — the
   controller closes the first; only runtime closes the second.
-- **Docs, support, and a threat-response process.** When someone finds a bypass
-  in the wild, there has to be a path from their report to a signed fix on
-  every deployed host. None of that process exists.
+- **An explicit fail-safe posture.** *Now built.* Beyond the watchdog (which
+  supervises a path that *was* working), the daemon now makes a deliberate choice
+  about what happens when it cannot enforce at all: `daemon.fail_mode`
+  (`daemon/src/failsafe.rs`) is `closed` by default and installs an emergency
+  default-deny nftables barrier that keeps the operator in (loopback, established
+  flows, management/SSH ports), or `open` to leave the host reachable and
+  unfiltered, loudly. The old silent fail-open on a missing module is gone. The
+  posture is a pure, fault-injection-tested decision and the barrier loads into a
+  real kernel.
+- **A tamper-evident record and self-monitoring.** *Now built.* An append-only,
+  hash-chained audit log (`daemon/src/audit.rs`, `ufwd --verify-audit`) means an
+  attacker who lands cannot quietly erase how they got in, and a self-check
+  engine (`daemon/src/selfcheck.rs`) alerts when a detector stops firing, a sink
+  fails, or the enforced policy drifts from disk — the failures that leave the
+  daemon *looking* healthy.
+- **Docs, support, and a threat-response process.** *Partly built.* The repo now
+  carries a coordinated-disclosure policy ([`../../SECURITY.md`](../../SECURITY.md)),
+  so there is a documented path from a report to a fix. What is **still open** is
+  the human side of it — a staffed inbox, an on-call, and a track record — which
+  is operation, not code.
 
 **What closes it:** productionization work — a signing and notarization
 pipeline, the Windows/macOS *kernel-side* boot-watchdog wiring (the daemon-side

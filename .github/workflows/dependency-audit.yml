@@ -1,0 +1,31 @@
+# Continuous dependency-advisory scan of the ONLY external crates in the tree.
+#
+# The default build is zero-dependency, so on it this is a near-no-op. It earns
+# its place on the `--features tls` tree (ring, rustls and their transitive
+# crates), where a newly-disclosed RustSec advisory against a pinned version is
+# exactly the kind of thing that goes unnoticed until it is exploited. Scheduled
+# weekly and on any change to the lockfile, so "is a dependency now known-bad?"
+# has a standing answer instead of a manual check.
+name: dependency-audit
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays, 06:00 UTC
+  push:
+    paths:
+      - "Cargo.lock"
+      - "**/Cargo.toml"
+      - ".github/workflows/dependency-audit.yml"
+  workflow_dispatch:
+
+jobs:
+  cargo-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Audit the committed lockfile (covers the tls dependency tree)
+        # The RustSec advisory DB is fetched fresh each run. `--deny warnings`
+        # makes an unmaintained-crate warning fail too, not just a vuln.
+        run: cargo audit --deny warnings
