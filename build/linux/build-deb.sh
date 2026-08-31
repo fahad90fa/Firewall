@@ -5,7 +5,7 @@
 # Debian-family host with dpkg.
 #
 #   sh build/linux/build-deb.sh            # -> dist/unified-firewall_<ver>_<arch>.deb
-#   VERSION=0.1.1 sh build/linux/build-deb.sh
+#   VERSION=0.1.2 sh build/linux/build-deb.sh
 #
 # What it installs on the target (mirrors install.sh, adapted to /usr):
 #   /usr/bin/{ufw-nft,ufwctl,ufw-daemon,ufw-waf,firewall}
@@ -19,8 +19,8 @@
 # block) and starts them. Nothing here can lock you out of your own machine.
 set -eu
 
-VERSION="${VERSION:-0.1.1}"
-RELEASE_DATE="${RELEASE_DATE:-2026-08-29}"
+VERSION="${VERSION:-0.1.2}"
+RELEASE_DATE="${RELEASE_DATE:-2026-08-31}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
 
@@ -130,6 +130,24 @@ mode = "monitor"
 # space. The packet-layer policy still enforces through nftables (ufw-nft);
 # identity/DPI blocking needs the module (a separate DKMS step).
 require_kernel_module = false
+
+[edge]
+# Opt-in on-host flood layer. When true, the daemon installs an nftables table
+# (inet ufw_edge) ahead of the policy table that drops connection-rate floods in
+# the kernel conntrack path: a SYN-flood cap, a per-source concurrent-connection
+# cap, and an ICMP echo cap. It never changes what the policy permits.
+#
+# It does NOT absorb a volumetric DDoS — packets that saturate the link have
+# already spent the bandwidth before they reach this host. That needs capacity
+# upstream (a scrubbing service, a CDN, the provider's edge). This buys
+# resistance to state/connection-rate floods, not immunity to a bandwidth flood.
+flood_protection = false
+# Defaults (shown commented) are generous; each has a floor of 1 so 0 can't self-DoS.
+# syn_rate_per_sec = 200
+# syn_burst = 50
+# conns_per_source = 100
+# icmp_rate_per_sec = 20
+# icmp_burst = 10
 
 [policy]
 dir = "/etc/unified-firewall/daemon-policy"

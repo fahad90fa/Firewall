@@ -40,7 +40,7 @@
 
 set -eu
 
-VERSION="${VERSION:-0.1.1}"
+VERSION="${VERSION:-0.1.2}"
 PREFIX="${PREFIX:-/usr/local}"
 BIN="$PREFIX/bin"
 ETC="/etc/unified-firewall"
