@@ -165,7 +165,10 @@ pub fn remove_flood_hardening() -> Result<(), String> {
             if err.contains("No such file") || err.contains("does not exist") {
                 Ok(())
             } else {
-                Err(format!("nft could not delete the flood layer: {}", err.trim()))
+                Err(format!(
+                    "nft could not delete the flood layer: {}",
+                    err.trim()
+                ))
             }
         }
         Err(e) => Err(format!("could not run nft to remove the flood layer: {e}")),
@@ -184,7 +187,10 @@ mod tests {
         assert_eq!(r.matches(" accept\n").count(), 1, "unexpected accept:\n{r}");
         assert!(r.contains("iifname \"lo\" accept"));
         assert!(r.contains("ct state invalid drop"));
-        assert!(r.contains("policy accept;"), "the chain must fall through, not default-drop");
+        assert!(
+            r.contains("policy accept;"),
+            "the chain must fall through, not default-drop"
+        );
     }
 
     #[test]

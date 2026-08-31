@@ -389,29 +389,30 @@ mod imp {
     }
 
     fn load_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>, String> {
+        use rustls::pki_types::pem::PemObject;
         let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let mut reader = std::io::BufReader::new(&data[..]);
-        rustls_pemfile::certs(&mut reader)
+        CertificateDer::pem_slice_iter(&data)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("{}: {e}", path.display()))
     }
 
     fn load_key(path: &Path) -> Result<PrivateKeyDer<'static>, String> {
+        use rustls::pki_types::pem::{Error as PemError, PemObject};
         let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let mut reader = std::io::BufReader::new(&data[..]);
 
-        // PKCS#8, PKCS#1 and SEC1, in that order. Accepting all three because
-        // which one an operator has depends on the tool that generated it, and
-        // "your key is in the wrong ASN.1 wrapper" is not a useful error.
-        rustls_pemfile::private_key(&mut reader)
-            .map_err(|e| format!("{}: {e}", path.display()))?
-            .ok_or_else(|| {
-                format!(
-                    "{}: no private key found. Expected a PEM PRIVATE KEY, \
-                     RSA PRIVATE KEY or EC PRIVATE KEY block.",
-                    path.display()
-                )
-            })
+        // PKCS#8, PKCS#1 and SEC1 are all accepted: which one an operator has
+        // depends on the tool that generated it, and "your key is in the wrong
+        // ASN.1 wrapper" is not a useful error. `from_pem_slice` skips any
+        // non-key sections (a certificate ahead of the key) and returns the
+        // first private key of any of the three kinds.
+        PrivateKeyDer::from_pem_slice(&data).map_err(|e| match e {
+            PemError::NoItemsFound => format!(
+                "{}: no private key found. Expected a PEM PRIVATE KEY, \
+                 RSA PRIVATE KEY or EC PRIVATE KEY block.",
+                path.display()
+            ),
+            other => format!("{}: {other}", path.display()),
+        })
     }
 }
 
@@ -522,6 +523,57 @@ mod tests {
         };
         let err = config.validate().unwrap_err();
         assert!(err.contains("/nonexistent/cert.pem"), "{err}");
+    }
+
+    #[cfg(feature = "tls")]
+    #[test]
+    fn a_real_cert_and_key_pair_loads_through_the_acceptor() {
+        // The happy-path proof for the PEM loaders (load_certs + load_key), which
+        // moved off the unmaintained rustls-pemfile onto rustls-pki-types'
+        // `pem_slice_iter` / `from_pem_slice`. Mints a throwaway self-signed EC
+        // pair with openssl and loads it through the real acceptor path; skips
+        // cleanly where openssl is not on PATH so a toolchain-only stage does not
+        // fail. No key is committed to the tree.
+        use std::process::Command;
+        let dir = std::env::temp_dir().join(format!("ufw-tls-load-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let cert = dir.join("cert.pem");
+        let key = dir.join("key.pem");
+        let minted = Command::new("openssl")
+            .args([
+                "req",
+                "-x509",
+                "-newkey",
+                "ec",
+                "-pkeyopt",
+                "ec_paramgen_curve:prime256v1",
+                "-keyout",
+            ])
+            .arg(&key)
+            .arg("-out")
+            .arg(&cert)
+            .args(["-days", "3650", "-nodes", "-subj", "/CN=ufw-test"])
+            .output();
+        match minted {
+            Ok(o) if o.status.success() => {}
+            _ => {
+                eprintln!("skipping: openssl unavailable to mint a test cert+key");
+                let _ = std::fs::remove_dir_all(&dir);
+                return;
+            }
+        }
+        let config = TlsConfig {
+            cert_path: Some(cert),
+            key_path: Some(key),
+            client_ca_path: None,
+        };
+        let result = TlsAcceptor::from_config(&config);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            result.is_ok(),
+            "a valid cert+key pair must load: {:?}",
+            result.err()
+        );
     }
 
     #[test]

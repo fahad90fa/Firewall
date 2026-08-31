@@ -191,8 +191,9 @@ fn the_edge_flood_hardening_layer_loads_into_the_kernel() {
     // TCP-flag masks and ICMP/ICMPv6 echo matching. `nft --check` against the
     // live kernel is what proves the ruleset the daemon would feed to `nft -f -`
     // is actually loadable, not merely well-formed text.
-    let ruleset =
-        ufw_daemon::edge_hardening::flood_hardening_ruleset(&ufw_daemon::edge_hardening::FloodOpts::default());
+    let ruleset = ufw_daemon::edge_hardening::flood_hardening_ruleset(
+        &ufw_daemon::edge_hardening::FloodOpts::default(),
+    );
     resolve(nft_check(&ruleset), "UFW_NFT_REQUIRE");
 }
 
