@@ -175,7 +175,7 @@ export const LINUX_DEB = {
   arch: "amd64",
   file: "unified-firewall_0.1.2_amd64.deb",
   size: "2.1 MB",
-  sha256: "845b1a96d61d6b759f038ce7996a6bbc5c81ed847742af642da641bc86a1929b",
+  sha256: "7bf4d7ecfb7881f7eb8e8513fbeeb7da08d00d04817b02e89a24b90fc256e3e9",
 };
 
 export const LINUX_DOWNLOAD_URL =

@@ -280,24 +280,25 @@ mod imp {
     }
 
     fn load_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>, String> {
+        use rustls::pki_types::pem::PemObject;
         let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let mut reader = std::io::BufReader::new(&data[..]);
-        rustls_pemfile::certs(&mut reader)
+        CertificateDer::pem_slice_iter(&data)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| format!("{}: {e}", path.display()))
     }
 
     fn load_key(path: &Path) -> Result<PrivateKeyDer<'static>, String> {
+        use rustls::pki_types::pem::{Error as PemError, PemObject};
         let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let mut reader = std::io::BufReader::new(&data[..]);
-        rustls_pemfile::private_key(&mut reader)
-            .map_err(|e| format!("{}: {e}", path.display()))?
-            .ok_or_else(|| {
-                format!(
-                    "{}: no private key found (expected PKCS#8, PKCS#1 or SEC1 PEM)",
-                    path.display()
-                )
-            })
+        // Skips any non-key section and returns the first PKCS#8, PKCS#1 or SEC1
+        // private key found.
+        PrivateKeyDer::from_pem_slice(&data).map_err(|e| match e {
+            PemError::NoItemsFound => format!(
+                "{}: no private key found (expected PKCS#8, PKCS#1 or SEC1 PEM)",
+                path.display()
+            ),
+            other => format!("{}: {other}", path.display()),
+        })
     }
 }
 

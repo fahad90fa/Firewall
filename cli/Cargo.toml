@@ -26,7 +26,6 @@ path = "src/lib.rs"
 ufw-shared = { path = "../shared" }
 ufw-policy-lang = { path = "../policy-lang" }
 rustls = { version = "0.23", optional = true, default-features = false, features = ["std", "ring", "tls12"] }
-rustls-pemfile = { version = "2", optional = true }
 # ring is already in the tree via rustls; used here (behind `tls`) to VERIFY the
 # Ed25519 signature on a license token — the client holds only the public key
 # and cannot forge, unlike the symmetric HMAC deterrent in the default build.
@@ -49,4 +48,4 @@ ring = { version = "0.17", optional = true }
 # built without this feature, rather than silently serving plaintext.
 [features]
 default = []
-tls = ["dep:rustls", "dep:rustls-pemfile", "dep:ring"]
+tls = ["dep:rustls", "dep:ring"]
