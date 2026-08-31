@@ -1,0 +1,44 @@
+# Scheduled memory-leak soak.
+#
+# The dominant open risk in the deployment story is runtime hours: a leak of a
+# few bytes per operation is invisible to correctness checking and OOMs the box
+# on day nine (docs/design/production_readiness.md, gap 1). No single CI run can
+# be the 30-day production soak — that needs real hardware and real traffic — but
+# a nightly 30-minute run turns "does the data path leak" from an unmeasured
+# question into a standing, accumulating check that catches a *regression* the
+# day it lands, long before a fleet does.
+#
+# The leak detector's maths is unit-tested in daemon/src/metrics.rs; this job
+# runs the real data-path churn (daemon/tests/soak.rs) under it and fails if the
+# resident-memory trend exceeds the threshold.
+name: soak
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # nightly, 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: "Soak duration in seconds"
+        default: "1800"
+        required: false
+
+jobs:
+  leak-soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the data-path leak soak
+        env:
+          # 30 minutes by default; overridable on a manual dispatch.
+          UFW_SOAK_SECS: ${{ github.event.inputs.seconds || '1800' }}
+        run: |
+          cargo test --release -p ufw-daemon --test soak -- --ignored --nocapture \
+            | tee soak-run.log
+      - name: Publish the soak log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-log
+          path: soak-run.log
