@@ -212,24 +212,37 @@ pub fn fail_closed_ruleset(mgmt_ports: &[u16]) -> String {
 /// caller can log exactly why the host could not be sealed.
 pub fn install_fail_closed_barrier(mgmt_ports: &[u16]) -> Result<(), String> {
     let ruleset = fail_closed_ruleset(mgmt_ports);
-    let path = std::env::temp_dir().join(format!(
-        "ufw-failsafe-{}-{}.nft",
-        std::process::id(),
-        ufw_shared::now_us()
-    ));
-    std::fs::write(&path, &ruleset).map_err(|e| format!("writing the barrier ruleset: {e}"))?;
-    let out = std::process::Command::new("nft")
+    // Feed the ruleset to `nft -f -` over stdin rather than a temp file. A
+    // predictable temp path in a shared /tmp is a symlink-clobber / TOCTOU
+    // surface — feeding root an attacker's ruleset — and there is no reason to
+    // touch the filesystem for a string we already hold in memory. stdin closes
+    // that surface entirely.
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("nft")
         .arg("-f")
-        .arg(&path)
-        .output();
-    let _ = std::fs::remove_file(&path);
-    match out {
-        Ok(o) if o.status.success() => Ok(()),
-        Ok(o) => Err(format!(
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("could not run nft to install the barrier: {e}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| "nft stdin was not available".to_string())?
+        .write_all(ruleset.as_bytes())
+        .map_err(|e| format!("could not write the barrier ruleset to nft: {e}"))?;
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("nft did not complete: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
             "nft rejected the barrier: {}",
-            String::from_utf8_lossy(&o.stderr).trim()
-        )),
-        Err(e) => Err(format!("could not run nft to install the barrier: {e}")),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
     }
 }
 

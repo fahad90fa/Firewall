@@ -89,7 +89,11 @@ module."
 
 Start with the [**audit brief**](docs/security/audit-brief.md): what to review and
 in what order, every claim we make with its evidence and honest scope, and what
-we explicitly do **not** claim. To **commission** an audit, see the
+we explicitly do **not** claim. Then the
+[**pre-audit self-assessment**](docs/security/pre-audit-assessment.md): the
+findings we already found and fixed, our own adversarial review of the latest
+hardening, and the dependency posture — the baseline so your engagement is spent
+on the unknowns, not re-finding the knowns. To **commission** an audit, see the
 [**audit RFP / outreach packet**](docs/security/audit-rfp.md) — scope of work, a
 shortlist of real firms, a ready-to-send request, a readiness checklist, and the
 (grant-funded) engagement model.

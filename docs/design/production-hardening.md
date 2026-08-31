@@ -150,7 +150,10 @@ fail-open.
   verifies without being able to mint. HMAC stays the zero-dependency default; a
   public key configured on a non-tls binary is stored but *not checked*, and the
   daemon logs a warning saying so. A tls-gated test proves the round trip and
-  that a valid MAC without a signature is refused when a key is required.
+  that a valid MAC without a signature is refused when a key is required. The
+  shipped `.deb` builds `ufwd` **with** `--features tls` (the source build stays
+  zero-dependency), so this control is active in the packaged artifact rather
+  than dormant — a gap the pre-audit review caught and this branch closed.
 
 ### 11. IPv6 enforcement parity
 

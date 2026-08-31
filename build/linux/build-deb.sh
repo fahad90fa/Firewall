@@ -47,10 +47,15 @@ DEB="$OUT_DIR/unified-firewall_${VERSION}_${ARCH}.deb"
 # this avoids silently packaging a stale binary that predates a source change.
 # Set UFW_DEB_SKIP_BUILD=1 to reuse whatever is already in target/release.
 if [ "${UFW_DEB_SKIP_BUILD:-0}" != "1" ]; then
-    # ufw-cli ships with `tls`: the packaged firewall verifies the Ed25519
-    # license signature (not just the HMAC deterrent) and the console supports
-    # mTLS. rustls/ring are already pinned in Cargo.lock, so this stays offline.
-    echo "==> building release binaries (ufw-cli +tls: Ed25519 verify + console mTLS)"
+    # Both ufw-cli AND ufw-daemon ship with `tls`. This is the production
+    # package, not the zero-dependency source build (`cargo build`, which stays
+    # dep-free). With tls the daemon actually enforces the Ed25519 signature on
+    # fleet bundles (api.fleet_ed25519_pubkey) and can terminate TLS on the
+    # management API — otherwise those controls ship dormant, and a public key an
+    # operator configures would be stored but never checked. The cli's tls buys
+    # the Ed25519 license verify and console mTLS. rustls/ring are already pinned
+    # in Cargo.lock, so this stays offline.
+    echo "==> building release binaries (ufw-cli + ufw-daemon, +tls: Ed25519 fleet/license verify, mTLS)"
     # Remap the absolute build path out of the binaries so they do not embed the
     # checkout location (in a panic message or an assertion) — the same source
     # built under /home/a and /build/b then yields identical bytes. Combined with
@@ -58,7 +63,7 @@ if [ "${UFW_DEB_SKIP_BUILD:-0}" != "1" ]; then
     # the packaged binaries reproducible, not just the .deb wrapper around them.
     REMAP="--remap-path-prefix=$ROOT=/build/unified-firewall"
     ( cd "$ROOT" && RUSTFLAGS="${RUSTFLAGS:-} $REMAP" cargo build --release -p ufw-cli --features tls )
-    ( cd "$ROOT" && RUSTFLAGS="${RUSTFLAGS:-} $REMAP" cargo build --release -p ufw-daemon )
+    ( cd "$ROOT" && RUSTFLAGS="${RUSTFLAGS:-} $REMAP" cargo build --release -p ufw-daemon --features tls )
 fi
 if [ ! -x "$BIN/ufw-nft" ] || [ ! -x "$BIN/ufwd" ]; then
     echo "error: release binaries missing under $BIN (build failed or was skipped)" >&2
