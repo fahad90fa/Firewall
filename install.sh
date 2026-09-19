@@ -17,10 +17,13 @@
 #      DNS-tunnel — all alert-only) and installs systemd units for the firewall
 #      policy, the daemon, the WAF and the dashboard, then enables and starts
 #      them — so everything comes back automatically on every boot
-#   5. loads a safe activation policy (default-ALLOW with a rate cap), so the
-#      packet-filter, rate-limiting and attack-surface layers are live too. The
-#      policy is reloaded at boot by firewall-policy.service (nftables rules do
-#      not survive a reboot on their own), and it tracks whatever you last apply.
+#   5. asks whether this is a laptop or a server, and loads the matching packet
+#      policy: LAPTOP denies unsolicited inbound while allowing all ordinary
+#      outbound (so browsing keeps working); SERVER loads the permissive monitor
+#      baseline (nothing blocked yet). Either is reloaded at boot by
+#      firewall-policy.service (nftables rules do not survive a reboot on their
+#      own) and tracks whatever you last apply. Pick non-interactively with
+#      UFW_PROFILE=laptop|server.
 #   6. best-effort builds the DKMS kernel module (identity-aware + DPI ENFORCEMENT)
 #      when dkms + kernel headers are present — the packet layer works without it.
 #   7. licensing is OFF by default (frictionless from-source install). Turn it on
@@ -31,10 +34,11 @@
 # that lists every one of these capabilities and its LIVE status on this host.
 #
 # Safety: the daemon starts in MONITOR mode (it observes and logs, it does not
-# block), the WAF binds LOOPBACK only, and the loaded policy permits by default
-# — denying only the never-legitimate protocols (telnet/FTP, SMB egress, bogons,
-# inbound RDP). Nothing here can lock you out of your own machine. Going to real
-# enforcement is one deliberate step, printed at the end.
+# block) and the WAF binds LOOPBACK only. The laptop packet policy denies
+# unsolicited INBOUND but allows all outbound and loopback, so it cannot stop you
+# browsing or cut off local access; the server policy blocks nothing until you
+# choose to. A non-interactive install (no TTY) defaults to the server profile,
+# so an unattended run can never silently lock a remote host's inbound.
 #
 # Remove everything with:  sudo ./install.sh --uninstall
 
@@ -89,6 +93,52 @@ command -v cargo >/dev/null 2>&1 || {
 command -v nft >/dev/null 2>&1 || {
     echo "note: nft not found; the packet-filter layers need it (apt install nftables)"
 }
+
+# --- deployment profile ----------------------------------------------------
+# A laptop and a server want opposite inbound defaults, so ask which this is and
+# set the packet policy accordingly. The choice only changes which policy the
+# packet filter enforces; the daemon still starts in monitor mode either way.
+#
+#   laptop : DENY unsolicited inbound (a workstation serves nothing), ALLOW
+#            ordinary outbound (browsing, DNS, updates, apps keep working) and
+#            drop the ports that are never legitimate (SMB, RDP, telnet, …).
+#            Enforced right away — and, because it allows all outbound, it
+#            cannot stop you browsing.
+#   server : the permissive monitor baseline — nothing blocked yet, because a
+#            server DOES have inbound listeners. Inventory the traffic, write the
+#            allow-rules, then graduate to default-deny.
+#
+# Pick non-interactively with UFW_PROFILE=laptop|server.
+PROFILE="${UFW_PROFILE:-}"
+case "$PROFILE" in
+    laptop|server) ;;
+    "")
+        if [ -t 0 ]; then
+            echo
+            echo "What kind of machine is this?"
+            echo "  [1] Laptop / workstation — deny inbound, allow outbound (browsing keeps working)"
+            echo "  [2] Server               — permissive baseline; add allow-rules, then default-deny"
+            printf "Choose 1 or 2 [default 1]: "
+            read -r _ans || _ans=""
+            case "$_ans" in
+                2 | server | Server | SERVER | s | S) PROFILE=server ;;
+                *) PROFILE=laptop ;;
+            esac
+        else
+            # Non-interactive (curl | sh, CI): default to the posture that can
+            # never lock out a remote host — the server/monitor baseline. A
+            # laptop lockdown (which denies inbound) must be an explicit choice.
+            PROFILE=server
+            echo "==> non-interactive install: defaulting to the server (monitor) profile"
+            echo "    (re-run with  UFW_PROFILE=laptop  for the laptop lockdown)"
+        fi
+        ;;
+    *)
+        echo "UFW_PROFILE must be 'laptop' or 'server' (got: '$PROFILE')" >&2
+        exit 2
+        ;;
+esac
+echo "==> deployment profile: $PROFILE"
 
 echo "==> building CLI and daemon (cargo build --release; first build takes a minute)"
 # The CLI ships with the `tls` feature so the installed firewall VERIFIES the
@@ -149,7 +199,7 @@ hot_reload = true
 [logging]
 stdout = false
 level = "info"
-# `anomaly = true` turns on the whole behavioral-detection suite that reads the
+# anomaly=true turns on the whole behavioral-detection suite that reads the
 # flow stream: the egress baseline (novel-destination / exfil shape), the
 # port-scan & network-sweep detector, the C2-beaconing (periodic-callback)
 # detector, and the credential brute-force detector. Each emits alert events
@@ -255,8 +305,41 @@ else
     echo "   note: without systemd these do NOT survive a reboot — re-run this after booting, or add your own init hook"
 fi
 
-# Give the services a moment to publish their first telemetry, then report.
-sleep 4
+# --- apply the chosen profile's packet policy ------------------------------
+# The packet filter (nftables, table inet ufw) is what actually protects the
+# host, and it is independent of the daemon and the kernel module — so it works
+# even if either is unavailable. `apply` also RECORDS the choice, so the boot
+# restore unit brings the same policy back on every reboot.
+if [ "$PROFILE" = laptop ]; then
+    echo "==> applying the laptop packet policy (deny inbound, allow outbound — browsing keeps working)"
+    if "$BIN/ufw-nft" apply "$POLICY_DST/base/laptop.yaml" >/dev/null 2>&1; then
+        echo "   laptop firewall active: unsolicited inbound is dropped; DNS/web/apps still reach out"
+    else
+        echo "   (could not apply laptop.yaml — is nftables installed? try: sudo firewall apply laptop)"
+    fi
+else
+    echo "==> server profile: the permissive monitor baseline is loaded (nothing blocked yet)"
+    echo "   tighten when ready:  sudo firewall apply default_allow   # then, after writing allow-rules: sudo firewall apply default_deny"
+fi
+
+# Poll for readiness instead of a fixed sleep: a slower machine can take longer
+# than a few seconds to write its first status, and printing [down] on a service
+# that is merely still starting is misleading. Wait up to ~20s for every layer
+# to report in, then show the real state.
+printf "waiting for services to come up"
+_left=20
+while [ "$_left" -gt 0 ]; do
+    _ready=1
+    nft list table inet ufw >/dev/null 2>&1 || _ready=0
+    [ -f "$STATE_DIR/ufw-daemon-status.json" ] || _ready=0
+    [ -f "$STATE_DIR/ufw-waf-status.json" ] || _ready=0
+    if have_systemd; then systemctl is-active --quiet ufw-nft.service || _ready=0; fi
+    [ "$_ready" = 1 ] && break
+    printf "."
+    sleep 1
+    _left=$((_left - 1))
+done
+printf "\n"
 echo
 echo "installed and running. Layer status:"
 if nft list table inet ufw >/dev/null 2>&1; then echo "  [live]  packet filter (nftables table inet ufw)"; else echo "  [down]  packet filter — is nftables installed?"; fi
@@ -289,10 +372,19 @@ if [ -f "$LICENSE_CONF" ]; then
     echo "  (copying the license to other hardware is refused; to run ungated: sudo rm $LICENSE_CONF)"
     echo
 fi
-echo "when you are ready to actually BLOCK (not just observe):"
-echo "  edit $CONFIG  → set  mode = \"enforce\"   then  sudo systemctl restart ufw-daemon"
-echo "  and graduate the policy:  sudo firewall apply default_deny"
-echo "  (whatever you 'apply' becomes what reloads on the next boot)"
+if [ "$PROFILE" = laptop ]; then
+    echo "laptop firewall is ENFORCING at the packet layer right now:"
+    echo "  • unsolicited inbound is dropped   • ordinary outbound (browsing, DNS, apps) is allowed"
+    echo "  • dangerous egress (SMB, RDP, telnet, DB ports) is blocked"
+    echo "  need to accept an inbound service (e.g. a local dev server)? add an allow rule to a"
+    echo "  copy of policies/base/laptop.yaml and:  sudo firewall apply <your-policy>.yaml"
+    echo "  undo entirely:  sudo firewall revert"
+else
+    echo "when you are ready to actually BLOCK (not just observe):"
+    echo "  edit $CONFIG  → set  mode = \"enforce\"   then  sudo systemctl restart ufw-daemon"
+    echo "  and graduate the policy:  sudo firewall apply default_deny"
+    echo "  (whatever you 'apply' becomes what reloads on the next boot)"
+fi
 if [ -d "$KSRC" ]; then
     echo "  for identity/DPI enforcement also set require_kernel_module = true (needs the DKMS module)"
 fi
