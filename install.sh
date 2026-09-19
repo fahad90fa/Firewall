@@ -34,11 +34,13 @@
 # that lists every one of these capabilities and its LIVE status on this host.
 #
 # Safety: the daemon starts in MONITOR mode (it observes and logs, it does not
-# block) and the WAF binds LOOPBACK only. The laptop packet policy denies
-# unsolicited INBOUND but allows all outbound and loopback, so it cannot stop you
-# browsing or cut off local access; the server policy blocks nothing until you
-# choose to. A non-interactive install (no TTY) defaults to the server profile,
-# so an unattended run can never silently lock a remote host's inbound.
+# block) and the WAF binds LOOPBACK only. The server profile blocks nothing until
+# you choose to. The laptop profile allows all outbound and loopback (so it can
+# never stop you browsing or cut off local access) but DROPS unsolicited inbound
+# — including SSH — so do not choose it on a box you administer remotely. Because
+# of that, every ambiguous case (a bare Enter, a closed TTY, or no TTY at all)
+# defaults to the SERVER profile; the laptop lockdown is only ever applied on an
+# explicit choice ([1] at the prompt, or UFW_PROFILE=laptop).
 #
 # Remove everything with:  sudo ./install.sh --uninstall
 
@@ -116,14 +118,33 @@ case "$PROFILE" in
         if [ -t 0 ]; then
             echo
             echo "What kind of machine is this?"
-            echo "  [1] Laptop / workstation — deny inbound, allow outbound (browsing keeps working)"
+            echo "  [1] Laptop / workstation — deny ALL unsolicited inbound (including SSH/RDP),"
+            echo "                             allow outbound so browsing keeps working"
             echo "  [2] Server               — permissive baseline; add allow-rules, then default-deny"
-            printf "Choose 1 or 2 [default 1]: "
-            read -r _ans || _ans=""
-            case "$_ans" in
-                2 | server | Server | SERVER | s | S) PROFILE=server ;;
-                *) PROFILE=laptop ;;
-            esac
+            # A remote (SSH) session is a TTY too, so warn before someone locks
+            # themselves out. SSH_* can be stripped by sudo's env_reset, so this
+            # is only an extra warning — the *default* below is what keeps safety.
+            if [ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ]; then
+                echo
+                echo "  NOTE: this looks like a remote (SSH) session. The laptop profile DROPS all"
+                echo "        unsolicited inbound — it would cut this SSH session and block reconnect,"
+                echo "        and the drop is restored on every reboot (recovery then needs console access)."
+            fi
+            printf "Choose 1 or 2 [default 2 = server]: "
+            if read -r _ans; then
+                case "$_ans" in
+                    1 | laptop | Laptop | LAPTOP | l | L) PROFILE=laptop ;;
+                    # Empty (bare Enter) or anything else falls to the safe
+                    # posture: the laptop inbound-deny must be an explicit choice,
+                    # so a stray Enter over SSH can never lock the operator out.
+                    *) PROFILE=server ;;
+                esac
+            else
+                # TTY closed with no answer (ssh -tt, Ansible raw, expect): treat
+                # as unattended and never auto-select the inbound-deny profile.
+                PROFILE=server
+                echo "==> no answer given: defaulting to the server (monitor) profile"
+            fi
         else
             # Non-interactive (curl | sh, CI): default to the posture that can
             # never lock out a remote host — the server/monitor baseline. A
@@ -330,7 +351,10 @@ printf "waiting for services to come up"
 _left=20
 while [ "$_left" -gt 0 ]; do
     _ready=1
-    nft list table inet ufw >/dev/null 2>&1 || _ready=0
+    # Only wait on the packet filter where nft actually exists — without it the
+    # table can never appear, and blocking the poll on it would just burn the
+    # whole timeout on a host that is otherwise up.
+    command -v nft >/dev/null 2>&1 && { nft list table inet ufw >/dev/null 2>&1 || _ready=0; }
     [ -f "$STATE_DIR/ufw-daemon-status.json" ] || _ready=0
     [ -f "$STATE_DIR/ufw-waf-status.json" ] || _ready=0
     if have_systemd; then systemctl is-active --quiet ufw-nft.service || _ready=0; fi

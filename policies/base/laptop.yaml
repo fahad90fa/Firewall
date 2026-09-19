@@ -57,6 +57,9 @@ address_groups:
 
 port_groups:
   dns: [53]
+  # DNS-over-TLS (systemd-resolved's strict mode, some VPN resolvers). Outbound
+  # is already covered by allow-outbound; this group exists for the reply rule.
+  dot: [853]
   dhcp: [67, 68]
   ntp: [123]
   # Plain HTTP and HTTPS. QUIC/HTTP-3 rides UDP 443 and is handled by its own
@@ -200,8 +203,19 @@ rules:
       ports: dns
     tags: [baseline]
 
-  - id: allow-ntp-reply
+  - id: allow-dot-reply
+    description: "Replies to DNS-over-TLS queries (source port 853)"
     priority: 302
+    layer: packet
+    direction: inbound
+    action: allow
+    protocol: tcp
+    source:
+      ports: dot
+    tags: [baseline]
+
+  - id: allow-ntp-reply
+    priority: 303
     layer: packet
     direction: inbound
     action: allow
@@ -212,7 +226,7 @@ rules:
 
   - id: allow-web-reply
     description: "Replies to our HTTP/HTTPS connections (source port 80/443)"
-    priority: 303
+    priority: 304
     layer: packet
     direction: inbound
     action: allow
@@ -222,7 +236,7 @@ rules:
     tags: [baseline]
 
   - id: allow-quic-reply
-    priority: 304
+    priority: 305
     layer: packet
     direction: inbound
     action: allow
