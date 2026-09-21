@@ -24,6 +24,11 @@ CapabilityBoundingSet=
 AmbientCapabilities=
 NoNewPrivileges=yes
 ProtectSystem=strict
+# It publishes its request/block telemetry to /var/lib/unified-firewall so the
+# console's WAF layer can read it and go ACTIVE; without this write path
+# ProtectSystem=strict silently blocks that file and the layer stays "ready".
+StateDirectory=unified-firewall
+ReadWritePaths=/var/lib/unified-firewall
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes

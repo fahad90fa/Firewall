@@ -62,6 +62,23 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 
 have_systemd() { [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; }
 
+# Print a service's real error INLINE when it fails to come up, so a broken
+# install is self-diagnosing instead of an opaque "did not start". Give the unit
+# a moment to crash-and-restart, then, if it is not active, dump the status and
+# the last journal lines with the actual error.
+diag_unit() {
+    _u="$1"
+    sleep 1
+    if systemctl is-active --quiet "$_u"; then
+        return 0
+    fi
+    echo "   !! $_u is not active — its actual error follows:"
+    systemctl status "$_u" --no-pager -l 2>&1 | sed 's/^/      /' | tail -n 8
+    journalctl -u "$_u" -n 12 --no-pager 2>&1 | grep -viE 'Consider using|-- No entries|-- Boot' | sed 's/^/      /' | tail -n 10
+    echo "   !! (paste the lines above if you need help; the packet filter still protects you)"
+    return 1
+}
+
 if [ "${1:-}" = "--uninstall" ]; then
     if have_systemd; then
         systemctl disable --now ufw-license-check.timer 2>/dev/null || true
@@ -238,9 +255,29 @@ chmod 0600 "$CONFIG"
 
 # --- Kernel module (identity-aware + DPI ENFORCEMENT) via DKMS -------------
 # The packet layer (nftables) works without this; the module only adds the
-# ring-0 identity/DPI enforcement path. Best-effort: it needs dkms and the
-# kernel headers, and a host without them keeps the packet layer and just skips
-# the module. Never fails the install. Set UFW_NO_KMOD=1 to skip staging it.
+# ring-0 identity/DPI enforcement path, which is used ONLY in enforce mode with
+# require_kernel_module = true. Best-effort: it needs dkms and the kernel
+# headers, and a host without them keeps the packet layer and just skips the
+# module. Never fails the install. Set UFW_NO_KMOD=1 to skip staging it.
+#
+# The laptop profile runs the daemon in monitor mode, so the module would be
+# inert there — and a loaded out-of-tree module is the one moving part that has
+# caused the userspace daemon to fail to attach on some hosts. So the laptop
+# profile skips it by default (the daemon then runs pure userspace, which is the
+# configuration we test). Force it back on with UFW_FORCE_KMOD=1. The dashboard's
+# DPI/IPS layer reads "active" from the running daemon, not from the module, so
+# skipping it does not dim any layer for a laptop.
+if [ "$PROFILE" = laptop ] && [ "${UFW_FORCE_KMOD:-0}" != "1" ]; then
+    UFW_NO_KMOD=1
+    echo "==> laptop profile: skipping the ring-0 kernel module (monitor mode does not use it;"
+    echo "    the packet filter + userspace daemon provide the protection). UFW_FORCE_KMOD=1 to build it."
+    # A module left loaded by an earlier run would still present /dev/ufw-control,
+    # which the userspace daemon then tries to attach to — the failure mode this
+    # profile avoids. Unload it best-effort so the daemon starts clean.
+    if lsmod 2>/dev/null | grep -q '^ufw '; then
+        rmmod ufw 2>/dev/null || modprobe -r ufw 2>/dev/null || true
+    fi
+fi
 if [ "${UFW_NO_KMOD:-0}" != "1" ] && [ -d "$HERE/kernel/linux/src" ]; then
     echo "==> staging kernel module source to $KSRC (for DKMS)"
     install -d "$KSRC/src" "$KSRC/inc"
@@ -301,10 +338,10 @@ if have_systemd; then
     # for future boots), then the observers, then the console. `enable --now`
     # arms each for boot AND starts it right now, so nothing needs a reboot.
     echo "==> enabling everything on boot and starting it now"
-    systemctl enable --now firewall-policy.service || echo "   (firewall-policy did not apply — is nftables installed? journalctl -u firewall-policy)"
-    systemctl enable --now ufw-daemon.service      || echo "   (ufw-daemon did not start — check: journalctl -u ufw-daemon)"
-    systemctl enable --now ufw-waf.service         || echo "   (ufw-waf did not start — check: journalctl -u ufw-waf)"
-    systemctl enable --now ufw-nft.service         || echo "   (dashboard did not start — check: journalctl -u ufw-nft)"
+    systemctl enable --now firewall-policy.service 2>/dev/null || true; diag_unit firewall-policy.service || true
+    systemctl enable --now ufw-daemon.service      2>/dev/null || true; diag_unit ufw-daemon.service || true
+    systemctl enable --now ufw-waf.service         2>/dev/null || true; diag_unit ufw-waf.service || true
+    systemctl enable --now ufw-nft.service         2>/dev/null || true; diag_unit ufw-nft.service || true
     # Arm the periodic license re-check only when licensing is enabled. It caches
     # a signed verdict with an offline grace window and reverts enforcement if the
     # key lapses — pointless (and noisy) when there is no license to check.
